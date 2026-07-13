@@ -31,21 +31,14 @@
 #include <unordered_map>
 #include <cwchar>
 #include <optional>
-#include <d3d9.h>                    // For IDirect3DTexture9
+#include <d3d9.h>
 
 // ---------------------------------------------------------------------------
-// Your existing helper classes (AgentNameCache, etc.) - unchanged
+// AgentNameCache and helpers (keep your original implementations here)
 // ---------------------------------------------------------------------------
-class AgentNameCache {
-public:
-    const std::wstring& GetLower(uint32_t agent_id, const wchar_t* enc_name) {
-        // ... your existing implementation ...
-    }
-private:
-    // ... your existing Entry struct ...
-};
+class AgentNameCache { /* your code */ };
 
-// ... keep Utf8ToWide, ParseSemicolonNameList, etc. exactly as you had them ...
+// ... keep Utf8ToWide, ParseSemicolonNameList, etc. ...
 
 struct NameplateSettings {
     bool enabled = true;
@@ -65,7 +58,7 @@ struct NameplateSettings {
 
     bool color_target = true;
     bool highlight_quest = true;
-    bool show_zaishen_coin = true;          // New
+    bool show_zaishen_coin = true;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -78,13 +71,43 @@ public:
 
     void LoadSettings(const wchar_t* folder) override {
         ToolboxPlugin::LoadSettings(folder);
-        // ... your existing LoadSetting calls ...
+        LoadSetting("visible", visible_);
+        LoadSetting("enabled", settings_.enabled);
+        LoadSetting("show_enemies", settings_.show_enemies);
+        LoadSetting("show_allies", settings_.show_allies);
+        LoadSetting("show_neutrals", settings_.show_neutrals);
+        LoadSetting("hide_own_bar", settings_.hide_own_bar);
+        LoadSetting("hide_dead", settings_.hide_dead);
+        LoadSetting("max_range", settings_.max_range);
+        LoadSetting("bar_width", settings_.bar_width);
+        LoadSetting("bar_height", settings_.bar_height);
+        LoadSetting("head_offset_z", settings_.head_offset_z);
+        LoadSetting("priority1_raw", settings_.priority1_raw);
+        LoadSetting("priority2_raw", settings_.priority2_raw);
+        LoadSetting("priority3_raw", settings_.priority3_raw);
+        LoadSetting("color_target", settings_.color_target);
+        LoadSetting("highlight_quest", settings_.highlight_quest);
         LoadSetting("show_zaishen_coin", settings_.show_zaishen_coin);
         RefreshPriorityBuffersAndLists();
     }
 
     void SaveSettings(const wchar_t* folder) override {
-        // ... your existing SaveSetting calls ...
+        SaveSetting("visible", visible_);
+        SaveSetting("enabled", settings_.enabled);
+        SaveSetting("show_enemies", settings_.show_enemies);
+        SaveSetting("show_allies", settings_.show_allies);
+        SaveSetting("show_neutrals", settings_.show_neutrals);
+        SaveSetting("hide_own_bar", settings_.hide_own_bar);
+        SaveSetting("hide_dead", settings_.hide_dead);
+        SaveSetting("max_range", settings_.max_range);
+        SaveSetting("bar_width", settings_.bar_width);
+        SaveSetting("bar_height", settings_.bar_height);
+        SaveSetting("head_offset_z", settings_.head_offset_z);
+        SaveSetting("priority1_raw", settings_.priority1_raw);
+        SaveSetting("priority2_raw", settings_.priority2_raw);
+        SaveSetting("priority3_raw", settings_.priority3_raw);
+        SaveSetting("color_target", settings_.color_target);
+        SaveSetting("highlight_quest", settings_.highlight_quest);
         SaveSetting("show_zaishen_coin", settings_.show_zaishen_coin);
         ToolboxPlugin::SaveSettings(folder);
     }
@@ -93,7 +116,7 @@ public:
         ToolboxPlugin::Initialize(ctx, allocator_fns, toolbox_dll);
 
         // Load Zaishen coin texture
-        if (auto* texModule = GW::GetGwDatTextureModule()) {
+        if (auto* texModule = GW::GwDatTextureModule::Instance()) {
             zaishen_coin_texture = texModule->LoadTextureFromFileId(0x55778);
         }
     }
@@ -115,14 +138,18 @@ private:
     char priority2_buf_[kPriorityBufSize] = {};
     char priority3_buf_[kPriorityBufSize] = {};
 
-    IDirect3DTexture9* zaishen_coin_texture = nullptr;   // Added
+    IDirect3DTexture9* zaishen_coin_texture = nullptr;
 
-    // ... your color constants and other members ...
+    static constexpr ImU32 kPriority1Color = IM_COL32(135, 206, 250, 255);
+    static constexpr ImU32 kPriority2Color = IM_COL32(255, 105, 180, 255);
+    static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255);
+    static constexpr ImU32 kTargetColor    = IM_COL32(0, 0, 139, 255);
+    static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
 
-    void RefreshPriorityBuffersAndLists() { /* your code */ }
-    std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const { /* your code */ }
+    void RefreshPriorityBuffersAndLists() { /* your original code */ }
+    std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const { /* your original code */ }
 
-    void DrawNameplates() { /* your existing loop */ }
+    void DrawNameplates() { /* your original code */ }
 
     void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living,
                  const std::wstring& name_lower, bool is_targeted) {
@@ -137,7 +164,6 @@ private:
         draw_list->AddRectFilled(top_left, fill_br, GetBarColor(living, name_lower, is_targeted));
         draw_list->AddRect(top_left, bottom_right, IM_COL32(0, 0, 0, 180));
 
-        // Zaishen Coin Icon
         if (settings_.show_zaishen_coin && zaishen_coin_texture && living->GetHasQuest()) {
             const float coin_size = settings_.bar_height * 3.0f;
             const ImVec2 coin_pos(top_left.x - coin_size - 6.0f, 
@@ -149,16 +175,16 @@ private:
     }
 
     ImU32 GetBarColor(const GW::AgentLiving* living, const std::wstring& name_lower, bool is_targeted) {
-        if (is_targeted) return IM_COL32(0, 0, 139, 255);
+        if (is_targeted) return kTargetColor;
         if (auto p = GetPriorityColor(name_lower)) return *p;
-        if (settings_.highlight_quest && living->GetHasQuest()) return IM_COL32(255, 179, 71, 255);
-        return ColorFor(living->allegiance);
+        if (settings_.highlight_quest && living->GetHasQuest()) return kQuestColor;
+        return ColorFor(living->allegiance);   // Make sure this function exists in your code
     }
 
-    // ... keep all your other helper functions (WorldToScreen, ColorFor, etc.) unchanged ...
+    // Keep all your other functions (WorldToScreen, ColorFor, ShouldShowAllegiance, etc.)
 
     void DrawSettingsInternal() {
-        // ... your existing UI ...
+        // ... your settings UI ...
         ImGui::Checkbox("Show Zaishen coin next to quest NPCs", &settings_.show_zaishen_coin);
     }
 };
