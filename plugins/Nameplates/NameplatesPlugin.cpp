@@ -35,6 +35,18 @@
 //          interface library (which already provides DllMain, base
 //          classes, and a pre-initialized link to the shared gwca.dll -
 //          no manual GW::Initialize() call needed in the plugin itself).
+//
+// BUILD FIX (from a real CI compile attempt): GWCA's own headers
+// (Array.h, GamePos.h, Agent.h, etc.) use uint32_t/uintptr_t/etc. but never
+// include <cstdint> themselves - they rely on whatever includes them first
+// having already brought those types in. The main GWToolboxdll project gets
+// this for free via its precompiled header; a standalone plugin does not.
+// <cstdint> MUST be included before any GWCA header, or the compiler fails
+// with a confusing cascade of "undeclared identifier"/"syntax error" spam
+// inside Array.h/GamePos.h/Item.h that looks unrelated but really traces
+// back to this one missing include.
+
+#include <cstdint>
 
 #include <GWCA/GWCA.h>
 #include <GWCA/Constants/Constants.h>
