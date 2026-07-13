@@ -82,7 +82,14 @@
 
 #include <DirectXMath.h>
 #include <vector>
-#include <cmath>
+
+// FEATURE UPDATE: bars now anchor to Agent::name_tag_x/y/z (the same point
+// GW's own native name tag uses for that specific agent) instead of
+// pos.x/y/z + a fixed head_offset_z. This makes bar height scale correctly
+// per-creature automatically (a giant vs. a small NPC) rather than every
+// agent using the same arbitrary offset. head_offset_z is kept as a small
+// optional fine-tune layered on top, not the primary height source anymore.
+
 
 // ---------------------------------------------------------------------------
 // Settings - persisted the same way other toolbox widgets do (Settings::...).
@@ -99,7 +106,7 @@ struct NameplateSettings {
     float max_range = 5000.0f;    // in game units; tune to taste
     float bar_width = 40.0f;
     float bar_height = 5.0f;
-    float head_offset_z = 150.0f; // how far above the agent's feet to draw
+    float head_offset_z = 0.0f;   // small additive fine-tune on top of the agent's native name-tag anchor (see WorldToScreen)
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -232,10 +239,17 @@ private:
         return dist_sq <= (settings_.max_range * settings_.max_range);
     }
 
-    // Rebuilds the SAME view/projection matrices GameWorldCompositor.cpp uses
-    // for its GPU vertex shader (see SetWorldTransform in that file), then
-    // does the CPU-side equivalent: transform -> perspective divide -> map
-    // NDC to screen pixels. This is not guessed - it mirrors verified source.
+    // Anchors the bar to the SAME point GW's own native name tag uses for
+    // this specific agent (Agent::name_tag_x/y/z), rather than pos.x/y + an
+    // arbitrary fixed offset. Confirmed real fields (Agent.h comments):
+    //   name_tag_x - "Exactly the same as X above"
+    //   name_tag_y - "Exactly the same as Y above"
+    //   name_tag_z - separate Z coord in float
+    // Using these means the bar sits at a sensible height automatically
+    // across different creature sizes (a giant vs. a small NPC), instead of
+    // everyone getting the same fixed head_offset_z regardless of height.
+    // head_offset_z is kept as a small additive fine-tune on top of the
+    // native anchor, not the sole source of height anymore - default 0.
     bool WorldToScreen(const GW::AgentLiving* living, ImVec2& out) const {
         const auto cam = GW::CameraMgr::GetCamera();
         if (!cam) return false;
@@ -257,7 +271,7 @@ private:
         const XMMATRIX proj = XMMatrixPerspectiveFovLH(fov, aspect, kZNear, kZFar);
 
         const XMVECTOR world_pos = XMVectorSet(
-            living->pos.x, living->pos.y, living->z + settings_.head_offset_z, 0.f); // note: pos.x/y horizontal, z is separate vertical height field
+            living->name_tag_x, living->name_tag_y, living->name_tag_z + settings_.head_offset_z, 0.f);
 
         // Check view-space Z first: if the point is behind the camera,
         // TransformCoord's perspective divide would silently mirror it to a
@@ -322,7 +336,7 @@ private:
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 10000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 100.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
-        ImGui::SliderFloat("Head offset", &settings_.head_offset_z, 0.f, 400.f);
+        ImGui::SliderFloat("Head offset (fine-tune)", &settings_.head_offset_z, -100.f, 100.f);
     }
 };
 
