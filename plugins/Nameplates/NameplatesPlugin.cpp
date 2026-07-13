@@ -46,7 +46,28 @@
 // inside Array.h/GamePos.h/Item.h that looks unrelated but really traces
 // back to this one missing include.
 
+// BUILD FIX #2 (from the clang-cl CI run): the <cstdint> fix above resolved
+// the Array.h/GamePos.h cascade, but exposed a second, smaller batch of the
+// exact same underlying issue - GWCA headers use DWORD/HWND/HMODULE (from
+// <Windows.h>), memcmp (<cstring>), atan2 (<cmath>), _countof (a Windows/CRT
+// macro), and std::function (<functional>), again without including the
+// headers that declare them themselves. All of these are provided for free
+// in the main project via its precompiled header; a standalone plugin needs
+// them included explicitly, before any GWCA header.
+
 #include <cstdint>
+#include <cstring>
+#include <cmath>
+#include <cstdlib>
+#include <functional>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
 
 #include <GWCA/GWCA.h>
 #include <GWCA/Constants/Constants.h>
