@@ -106,11 +106,22 @@ class NameplatesPlugin : public ToolboxPlugin {
 public:
     const char* Name() const override { return "Nameplates"; }
 
+    // CRITICAL: PluginModule::Draw() (GWToolboxdll/Modules/PluginModule.cpp)
+    // only calls a plugin's Draw() if GetVisiblePtr() returns a non-null
+    // pointer to a `true` bool - base ToolboxPlugin::GetVisiblePtr() returns
+    // nullptr by default, which silently means Draw() is NEVER called.
+    // DrawSettings() has no such gate (it's called unconditionally whenever
+    // the panel is expanded), which is why the settings UI worked fine while
+    // the actual nameplate overlay never rendered. This override is what
+    // makes the overlay actually run every frame.
+    bool* GetVisiblePtr() override { return &visible_; }
+
     [[nodiscard]] bool HasSettings() const override { return true; }
     void DrawSettings() override; // declared below, uses the pattern DrawSettingsInternal below expects
 
     void LoadSettings(const wchar_t* folder) override {
         ToolboxPlugin::LoadSettings(folder);
+        LoadSetting("visible", visible_);
         LoadSetting("enabled", settings_.enabled);
         LoadSetting("show_enemies", settings_.show_enemies);
         LoadSetting("show_allies", settings_.show_allies);
@@ -124,6 +135,7 @@ public:
     }
 
     void SaveSettings(const wchar_t* folder) override {
+        SaveSetting("visible", visible_);
         SaveSetting("enabled", settings_.enabled);
         SaveSetting("show_enemies", settings_.show_enemies);
         SaveSetting("show_allies", settings_.show_allies);
@@ -158,6 +170,7 @@ public:
 
 private:
     NameplateSettings settings_;
+    bool visible_ = true; // backs GetVisiblePtr() - also drives the "Visible" checkbox PluginModule draws automatically next to Load/Unload
 
     void DrawNameplates() {
         GW::AgentArray* agents = GW::Agents::GetAgentArray(); // confirmed: AgentMgr.h -> AgentArray* GetAgentArray()
