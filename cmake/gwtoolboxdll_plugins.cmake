@@ -52,5 +52,5 @@ macro(add_tb_plugin PLUGIN)
     target_link_options(${PLUGIN} PRIVATE $<$<CONFIG:RelWithDebInfo>:/OPT:NOICF>)
     set_target_properties(${PLUGIN} PROPERTIES FOLDER "plugins/")
 endmacro()
-
+add_tb_plugin(Nameplates)
 add_tb_plugin(ExamplePlugin)
