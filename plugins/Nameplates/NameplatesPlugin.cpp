@@ -76,12 +76,17 @@
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/CameraMgr.h>
 #include <GWCA/Managers/RenderMgr.h>
+#include <GWCA/Managers/UIMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
 
 #include <DirectXMath.h>
 #include <vector>
+#include <string>
+#include <unordered_map>
+#include <cwchar>
+#include <optional>
 
 // FEATURE UPDATE: bars now anchor to Agent::name_tag_x/y/z (the same point
 // GW's own native name tag uses for that specific agent) instead of
@@ -90,6 +95,114 @@
 // agent using the same arbitrary offset. head_offset_z is kept as a small
 // optional fine-tune layered on top, not the primary height source anymore.
 
+// FEATURE UPDATE #2: priority name-list coloring. The user types
+// semicolon-separated unit names into three text boxes (Priority 1/2/3);
+// any agent whose decoded name matches an entry gets that tier's fixed
+// color instead of its normal allegiance-based color.
+//
+// IMPORTANT: GW does not store agent names as plain text - names are
+// "encoded" (GW::Agents::GetAgentEncName() returns an encoded wchar_t*),
+// and must be asynchronously decoded via GW::UI::AsyncDecodeStr() before
+// they're human-readable. This mirrors the exact pattern used by
+// GWToolboxdll/Windows/SkillListingWindow.cpp's Skill::Name() (call
+// AsyncDecodeStr ONCE into a persistent buffer, cache it, and just re-read
+// the buffer on subsequent frames rather than re-issuing the decode call
+// every frame - the buffer starts empty and gets filled in a later frame
+// once GW's internal decode completes).
+//
+// Deliberately NOT using GWToolboxdll's own GuiUtils::EncString helper
+// (used by GWToolboxdll/Windows/EnemyWindow.cpp) for this, even though it's
+// a cleaner API - the plugin_base CMake target only links GWToolboxdll
+// "for GetFont" per its own comment, meaning only a narrow, deliberately
+// exported symbol set is guaranteed available to plugins. EncString's
+// methods aren't confirmed to be in that exported set, so depending on it
+// risks an unresolved-external-symbol link error. GW::UI::AsyncDecodeStr,
+// by contrast, is GWCA_API - confirmed genuinely exported from gwca.dll,
+// which every plugin already links against - so this plugin implements its
+// own small, self-contained decode cache on top of that safer foundation
+// instead.
+
+
+// ---------------------------------------------------------------------------
+// Decodes and caches agent display names, one entry per agent_id. See the
+// FEATURE UPDATE #2 comment above for why this is hand-rolled on GWCA's
+// exported GW::UI::AsyncDecodeStr rather than depending on GWToolboxdll's
+// internal GuiUtils::EncString helper.
+// ---------------------------------------------------------------------------
+class AgentNameCache {
+public:
+    // Returns the best currently-known decoded name for this agent as a
+    // lowercased std::wstring (ready for case-insensitive comparison). May
+    // be empty for the first frame or two after an agent is first seen,
+    // since decoding happens asynchronously - callers should treat "not
+    // matched yet" as normal, not an error.
+    const std::wstring& GetLower(uint32_t agent_id, const wchar_t* enc_name) {
+        Entry& entry = cache_[agent_id];
+        if (enc_name && wcsncmp(entry.last_enc, enc_name, kMaxEncLen - 1) != 0) {
+            wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
+            entry.buffer[0] = L'\0';
+            GW::UI::AsyncDecodeStr(enc_name, entry.buffer, kBufferLen);
+        }
+        if (entry.buffer[0] != L'\0') {
+            entry.decoded_lower = entry.buffer;
+            for (auto& c : entry.decoded_lower) {
+                c = static_cast<wchar_t>(towlower(c));
+            }
+        }
+        return entry.decoded_lower;
+    }
+
+private:
+    static constexpr size_t kBufferLen = 256;
+    static constexpr size_t kMaxEncLen = 64;
+    struct Entry {
+        wchar_t last_enc[kMaxEncLen] = {};
+        wchar_t buffer[kBufferLen] = {};
+        std::wstring decoded_lower;
+    };
+    std::unordered_map<uint32_t, Entry> cache_;
+};
+
+// Converts UTF-8 (what ImGui::InputText buffers hold) to a wide string,
+// via the real Win32 conversion API rather than a naive per-char cast, so
+// non-ASCII characters in a typed name aren't silently mangled.
+inline std::wstring Utf8ToWide(const std::string& utf8) {
+    if (utf8.empty()) return {};
+    const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring out(static_cast<size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), out.data(), len);
+    return out;
+}
+
+// Splits "Angry Hog; Angry Bat" into ["angry hog", "angry bat"] - trimmed
+// and lowercased, ready for direct comparison against AgentNameCache's
+// already-lowercased decoded names.
+inline std::vector<std::wstring> ParseSemicolonNameList(const std::string& raw) {
+    std::vector<std::wstring> out;
+    std::string current;
+    auto flush = [&]() {
+        // trim whitespace
+        size_t start = current.find_first_not_of(" \t\r\n");
+        size_t end = current.find_last_not_of(" \t\r\n");
+        if (start != std::string::npos && end != std::string::npos) {
+            std::wstring w = Utf8ToWide(current.substr(start, end - start + 1));
+            for (auto& c : w) c = static_cast<wchar_t>(towlower(c));
+            if (!w.empty()) out.push_back(std::move(w));
+        }
+        current.clear();
+    };
+    for (char c : raw) {
+        if (c == ';') {
+            flush();
+        }
+        else {
+            current += c;
+        }
+    }
+    flush();
+    return out;
+}
 
 // ---------------------------------------------------------------------------
 // Settings - persisted the same way other toolbox widgets do (Settings::...).
@@ -107,6 +220,11 @@ struct NameplateSettings {
     float bar_width = 40.0f;
     float bar_height = 5.0f;
     float head_offset_z = 0.0f;   // small additive fine-tune on top of the agent's native name-tag anchor (see WorldToScreen)
+
+    // Priority name-list coloring - raw semicolon-separated text as typed.
+    std::string priority1_raw;
+    std::string priority2_raw;
+    std::string priority3_raw;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -139,6 +257,10 @@ public:
         LoadSetting("bar_width", settings_.bar_width);
         LoadSetting("bar_height", settings_.bar_height);
         LoadSetting("head_offset_z", settings_.head_offset_z);
+        LoadSetting("priority1_raw", settings_.priority1_raw);
+        LoadSetting("priority2_raw", settings_.priority2_raw);
+        LoadSetting("priority3_raw", settings_.priority3_raw);
+        RefreshPriorityBuffersAndLists();
     }
 
     void SaveSettings(const wchar_t* folder) override {
@@ -153,6 +275,9 @@ public:
         SaveSetting("bar_width", settings_.bar_width);
         SaveSetting("bar_height", settings_.bar_height);
         SaveSetting("head_offset_z", settings_.head_offset_z);
+        SaveSetting("priority1_raw", settings_.priority1_raw);
+        SaveSetting("priority2_raw", settings_.priority2_raw);
+        SaveSetting("priority3_raw", settings_.priority3_raw);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -178,6 +303,49 @@ public:
 private:
     NameplateSettings settings_;
     bool visible_ = true; // backs GetVisiblePtr() - also drives the "Visible" checkbox PluginModule draws automatically next to Load/Unload
+
+    AgentNameCache name_cache_;
+    std::vector<std::wstring> priority1_names_, priority2_names_, priority3_names_; // parsed+lowercased, derived from settings_.priorityN_raw
+
+    // Fixed-size buffers for ImGui::InputText. Not using the project's
+    // ImGuiAddons.h InputText(std::string&) overload here since it's an
+    // IMGUI_API-marked symbol from GWToolboxdll itself - same
+    // not-confirmed-exported-to-plugins concern as GuiUtils::EncString
+    // above, so this sticks to core ImGui's classic char-buffer API, which
+    // is safely linked directly against the imgui static library.
+    static constexpr size_t kPriorityBufSize = 512;
+    char priority1_buf_[kPriorityBufSize] = {};
+    char priority2_buf_[kPriorityBufSize] = {};
+    char priority3_buf_[kPriorityBufSize] = {};
+
+    // Colors are fixed per tier by design (not user-configurable), per the
+    // feature request: priority 1 = light blue, 2 = pink, 3 = purple.
+    static constexpr ImU32 kPriority1Color = IM_COL32(135, 206, 250, 255); // light blue
+    static constexpr ImU32 kPriority2Color = IM_COL32(255, 105, 180, 255); // pink
+    static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255); // purple
+
+    // Copies settings_.priorityN_raw into the ImGui text buffers and
+    // reparses the lowercased match lists. Called on load, and whenever the
+    // user edits a box in DrawSettingsInternal().
+    void RefreshPriorityBuffersAndLists() {
+        strncpy_s(priority1_buf_, settings_.priority1_raw.c_str(), kPriorityBufSize - 1);
+        strncpy_s(priority2_buf_, settings_.priority2_raw.c_str(), kPriorityBufSize - 1);
+        strncpy_s(priority3_buf_, settings_.priority3_raw.c_str(), kPriorityBufSize - 1);
+        priority1_names_ = ParseSemicolonNameList(settings_.priority1_raw);
+        priority2_names_ = ParseSemicolonNameList(settings_.priority2_raw);
+        priority3_names_ = ParseSemicolonNameList(settings_.priority3_raw);
+    }
+
+    // Returns the tier color if name_lower matches an entry in any priority
+    // list (priority 1 checked first, so it wins over 2/3 if somehow listed
+    // in more than one box), or std::nullopt if it matches none.
+    std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const {
+        if (name_lower.empty()) return std::nullopt; // not decoded yet - fall back to allegiance color for now
+        for (const auto& n : priority1_names_) if (n == name_lower) return kPriority1Color;
+        for (const auto& n : priority2_names_) if (n == name_lower) return kPriority2Color;
+        for (const auto& n : priority3_names_) if (n == name_lower) return kPriority3Color;
+        return std::nullopt;
+    }
 
     void DrawNameplates() {
         GW::AgentArray* agents = GW::Agents::GetAgentArray(); // confirmed: AgentMgr.h -> AgentArray* GetAgentArray()
@@ -205,7 +373,12 @@ private:
             ImVec2 screen;
             if (!WorldToScreen(living, screen)) continue; // off-screen or behind camera
 
-            DrawBar(draw_list, screen, living);
+            // Look up (and, if needed, kick off async decoding of) this
+            // agent's display name, for priority-list color matching.
+            const std::wstring& name_lower = name_cache_.GetLower(
+                living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
+
+            DrawBar(draw_list, screen, living, name_lower);
         }
     }
 
@@ -297,7 +470,7 @@ private:
         return true;
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower) {
         float hp_pct = living->hp; // confirmed: 0.0-1.0 fraction (Agent.h comment + HealthWidget.cpp usage)
         hp_pct = hp_pct < 0.f ? 0.f : (hp_pct > 1.f ? 1.f : hp_pct);
 
@@ -306,7 +479,11 @@ private:
         const ImVec2 fill_bottom_right(top_left.x + settings_.bar_width * hp_pct, bottom_right.y);
 
         const ImU32 bg_color = IM_COL32(40, 40, 40, 200);
-        const ImU32 fill_color = ColorFor(living->allegiance);
+        // Priority name-list match takes precedence over the normal
+        // allegiance-based color; falls back to ColorFor() if unmatched
+        // (or not yet decoded this frame).
+        const auto priority_color = GetPriorityColor(name_lower);
+        const ImU32 fill_color = priority_color.value_or(ColorFor(living->allegiance));
 
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
@@ -337,6 +514,33 @@ private:
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 100.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Head offset (fine-tune)", &settings_.head_offset_z, -100.f, 100.f);
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kPriority1Color).Value);
+        const bool p1_changed = ImGui::InputText("Priority 1 (light blue)", priority1_buf_, kPriorityBufSize);
+        ImGui::PopStyleColor();
+        if (p1_changed) {
+            settings_.priority1_raw = priority1_buf_;
+            priority1_names_ = ParseSemicolonNameList(settings_.priority1_raw);
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kPriority2Color).Value);
+        const bool p2_changed = ImGui::InputText("Priority 2 (pink)", priority2_buf_, kPriorityBufSize);
+        ImGui::PopStyleColor();
+        if (p2_changed) {
+            settings_.priority2_raw = priority2_buf_;
+            priority2_names_ = ParseSemicolonNameList(settings_.priority2_raw);
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kPriority3Color).Value);
+        const bool p3_changed = ImGui::InputText("Priority 3 (purple)", priority3_buf_, kPriorityBufSize);
+        ImGui::PopStyleColor();
+        if (p3_changed) {
+            settings_.priority3_raw = priority3_buf_;
+            priority3_names_ = ParseSemicolonNameList(settings_.priority3_raw);
+        }
     }
 };
 
