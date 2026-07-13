@@ -228,12 +228,9 @@ struct NameplateSettings {
 
     bool color_target = true; // overrides all other coloring with dark blue for whatever unit is currently targeted
 
-    // Experimental: colors any unit whose primary profession is Monk or
-    // Ritualist (the two profession classes most associated with healing).
-    // Whether this actually does anything meaningful for enemy NPCs is an
-    // open question - some GW1 NPCs carry real profession data, others may
-    // not. This checkbox exists partly to find out.
-    bool highlight_healers = false;
+    // Highlights any unit currently showing a quest marker (Agent::GetHasQuest(),
+    // a real type_map bit - confirmed reliable, unlike profession).
+    bool highlight_quest = true;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -270,7 +267,7 @@ public:
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
         LoadSetting("color_target", settings_.color_target);
-        LoadSetting("highlight_healers", settings_.highlight_healers);
+        LoadSetting("highlight_quest", settings_.highlight_quest);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -290,7 +287,7 @@ public:
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
         SaveSetting("color_target", settings_.color_target);
-        SaveSetting("highlight_healers", settings_.highlight_healers);
+        SaveSetting("highlight_quest", settings_.highlight_quest);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -337,7 +334,7 @@ private:
     static constexpr ImU32 kPriority2Color = IM_COL32(255, 105, 180, 255); // pink
     static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255); // purple
     static constexpr ImU32 kTargetColor    = IM_COL32(0, 0, 139, 255);     // dark blue - overrides everything else
-    static constexpr ImU32 kHealerColor    = IM_COL32(64, 224, 208, 255); // turquoise - Monk/Ritualist highlight (experimental)
+    static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);  // light orange - GetHasQuest() highlight
 
     // Copies settings_.priorityN_raw into the ImGui text buffers and
     // reparses the lowercased match lists. Called on load, and whenever the
@@ -488,18 +485,6 @@ private:
         return true;
     }
 
-    // Confirmed real field/enum (Agent.h / Constants.h): AgentLiving::primary
-    // is a GW::Constants::ProfessionByte, values None/Warrior/Ranger/Monk/
-    // Necromancer/Mesmer/Elementalist/Assassin/Ritualist/Paragon/Dervish.
-    // Checks primary profession only (not secondary) - the more "canonical"
-    // signal for what a unit's class actually is, and simpler to reason
-    // about while testing whether enemy NPCs carry meaningful profession
-    // data at all.
-    bool IsMonkOrRitualist(const GW::AgentLiving* living) const {
-        return living->primary == GW::Constants::ProfessionByte::Monk
-            || living->primary == GW::Constants::ProfessionByte::Ritualist;
-    }
-
     void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, bool is_targeted) {
         float hp_pct = living->hp; // confirmed: 0.0-1.0 fraction (Agent.h comment + HealthWidget.cpp usage)
         hp_pct = hp_pct < 0.f ? 0.f : (hp_pct > 1.f ? 1.f : hp_pct);
@@ -510,7 +495,7 @@ private:
 
         const ImU32 bg_color = IM_COL32(40, 40, 40, 200);
         // Precedence: current target (dark blue) overrides everything,
-        // then priority name-list match, then the Monk/Ritualist highlight,
+        // then priority name-list match, then the quest-marker highlight,
         // then normal allegiance color.
         ImU32 fill_color;
         if (is_targeted) {
@@ -519,8 +504,8 @@ private:
         else if (const auto priority_color = GetPriorityColor(name_lower)) {
             fill_color = *priority_color;
         }
-        else if (settings_.highlight_healers && IsMonkOrRitualist(living)) {
-            fill_color = kHealerColor;
+        else if (settings_.highlight_quest && living->GetHasQuest()) {
+            fill_color = kQuestColor;
         }
         else {
             fill_color = ColorFor(living->allegiance);
@@ -552,7 +537,7 @@ private:
         ImGui::Checkbox("Hide own bar", &settings_.hide_own_bar);
         ImGui::Checkbox("Hide dead", &settings_.hide_dead);
         ImGui::Checkbox("Color target (dark blue, overrides all other colors)", &settings_.color_target);
-        ImGui::Checkbox("Highlight Monks/Ritualists (turquoise, experimental)", &settings_.highlight_healers);
+        ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 10000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 100.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
