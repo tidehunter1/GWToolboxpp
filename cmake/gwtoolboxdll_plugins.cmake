@@ -54,5 +54,3 @@ macro(add_tb_plugin PLUGIN)
 endmacro()
 add_tb_plugin(Nameplates)
 add_tb_plugin(ExamplePlugin)
-set_target_properties(Nameplates PROPERTIES
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
