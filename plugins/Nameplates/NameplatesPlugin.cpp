@@ -225,6 +225,8 @@ struct NameplateSettings {
     std::string priority1_raw;
     std::string priority2_raw;
     std::string priority3_raw;
+
+    bool color_target = true; // overrides all other coloring with dark blue for whatever unit is currently targeted
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -260,6 +262,7 @@ public:
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
+        LoadSetting("color_target", settings_.color_target);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -278,6 +281,7 @@ public:
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
+        SaveSetting("color_target", settings_.color_target);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -323,6 +327,7 @@ private:
     static constexpr ImU32 kPriority1Color = IM_COL32(135, 206, 250, 255); // light blue
     static constexpr ImU32 kPriority2Color = IM_COL32(255, 105, 180, 255); // pink
     static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255); // purple
+    static constexpr ImU32 kTargetColor    = IM_COL32(0, 0, 139, 255);     // dark blue - overrides everything else
 
     // Copies settings_.priorityN_raw into the ImGui text buffers and
     // reparses the lowercased match lists. Called on load, and whenever the
@@ -353,6 +358,7 @@ private:
 
         // GetControlledCharacter() returns AgentLiving* directly - no cast needed.
         GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+        GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving(); // confirmed: AgentMgr.h
 
         ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 
@@ -378,7 +384,9 @@ private:
             const std::wstring& name_lower = name_cache_.GetLower(
                 living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
 
-            DrawBar(draw_list, screen, living, name_lower);
+            const bool is_targeted = settings_.color_target && target && living->agent_id == target->agent_id;
+
+            DrawBar(draw_list, screen, living, name_lower, is_targeted);
         }
     }
 
@@ -470,7 +478,7 @@ private:
         return true;
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, bool is_targeted) {
         float hp_pct = living->hp; // confirmed: 0.0-1.0 fraction (Agent.h comment + HealthWidget.cpp usage)
         hp_pct = hp_pct < 0.f ? 0.f : (hp_pct > 1.f ? 1.f : hp_pct);
 
@@ -479,11 +487,16 @@ private:
         const ImVec2 fill_bottom_right(top_left.x + settings_.bar_width * hp_pct, bottom_right.y);
 
         const ImU32 bg_color = IM_COL32(40, 40, 40, 200);
-        // Priority name-list match takes precedence over the normal
-        // allegiance-based color; falls back to ColorFor() if unmatched
-        // (or not yet decoded this frame).
-        const auto priority_color = GetPriorityColor(name_lower);
-        const ImU32 fill_color = priority_color.value_or(ColorFor(living->allegiance));
+        // Precedence: current target (dark blue) overrides everything,
+        // then priority name-list match, then normal allegiance color.
+        ImU32 fill_color;
+        if (is_targeted) {
+            fill_color = kTargetColor;
+        }
+        else {
+            const auto priority_color = GetPriorityColor(name_lower);
+            fill_color = priority_color.value_or(ColorFor(living->allegiance));
+        }
 
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
@@ -510,6 +523,7 @@ private:
         ImGui::Checkbox("Show neutrals", &settings_.show_neutrals);
         ImGui::Checkbox("Hide own bar", &settings_.hide_own_bar);
         ImGui::Checkbox("Hide dead", &settings_.hide_dead);
+        ImGui::Checkbox("Color target (dark blue, overrides all other colors)", &settings_.color_target);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 10000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 100.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
