@@ -365,8 +365,6 @@ private:
         const ImVec2 bottom_right(top_left.x + settings_.bar_width, top_left.y + settings_.bar_height);
         const ImVec2 fill_bottom_right(top_left.x + settings_.bar_width * hp_pct, bottom_right.y);
 
-        const ImU32 bg_color = IM_COL32(40, 40, 40, 200);
-
         ImU32 fill_color;
         if (is_targeted) {
             fill_color = kTargetColor;
@@ -380,6 +378,10 @@ private:
         else {
             fill_color = ColorFor(living->allegiance);
         }
+
+        ImVec4 bg_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
+        bg_col4.w = 0.3f;
+        const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
 
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
