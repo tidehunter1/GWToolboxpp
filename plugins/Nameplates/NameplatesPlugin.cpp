@@ -128,6 +128,8 @@ struct NameplateSettings {
     float bar_width = 40.0f;
     float bar_height = 5.0f;
     float head_offset_z = 0.0f;
+    float bg_tint_amount = 0.3f;
+    float bg_opacity = 0.85f;
 
     std::string priority1_raw;
     std::string priority2_raw;
@@ -160,6 +162,8 @@ public:
         LoadSetting("bar_width", settings_.bar_width);
         LoadSetting("bar_height", settings_.bar_height);
         LoadSetting("head_offset_z", settings_.head_offset_z);
+        LoadSetting("bg_tint_amount", settings_.bg_tint_amount);
+        LoadSetting("bg_opacity", settings_.bg_opacity);
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
@@ -180,6 +184,8 @@ public:
         SaveSetting("bar_width", settings_.bar_width);
         SaveSetting("bar_height", settings_.bar_height);
         SaveSetting("head_offset_z", settings_.head_offset_z);
+        SaveSetting("bg_tint_amount", settings_.bg_tint_amount);
+        SaveSetting("bg_opacity", settings_.bg_opacity);
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
@@ -379,8 +385,12 @@ private:
             fill_color = ColorFor(living->allegiance);
         }
 
-        ImVec4 bg_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
-        bg_col4.w = 0.3f;
+        ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
+        ImVec4 bg_col4;
+        bg_col4.x = fill_col4.x * settings_.bg_tint_amount;
+        bg_col4.y = fill_col4.y * settings_.bg_tint_amount;
+        bg_col4.z = fill_col4.z * settings_.bg_tint_amount;
+        bg_col4.w = settings_.bg_opacity;
         const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
 
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
@@ -414,6 +424,8 @@ private:
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 100.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Head offset (fine-tune)", &settings_.head_offset_z, -100.f, 100.f);
+        ImGui::SliderFloat("Background tint amount", &settings_.bg_tint_amount, 0.f, 1.f);
+        ImGui::SliderFloat("Background opacity", &settings_.bg_opacity, 0.f, 1.f);
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
