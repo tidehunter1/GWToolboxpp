@@ -23,6 +23,7 @@
 #include <GWCA/Managers/UIMgr.h>
 
 #include <ToolboxPlugin.h>
+#include <Utils/FontLoader.h>
 #include <imgui.h>
 
 #include <DirectXMath.h>
@@ -534,10 +535,10 @@ private:
         draw_list->AddRect(top_left, bottom_right, border_color);
 
         if (!display_name.empty()) {
-            ImFont* font = ImGui::GetFont();
-            const float font_size = ImGui::GetFontSize();
+            ImFont* font = FontLoader::GetFont();
+            const float font_size = static_cast<float>(FontLoader::FontSize::header2);
 
-            constexpr float kPadding = 3.f;
+            constexpr float kPadding = 6.f;
             const float max_text_width = bar_width - kPadding * 2.f;
 
             if (max_text_width > 0.f) {
