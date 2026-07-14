@@ -14,6 +14,7 @@
 
 #include <GWCA/GWCA.h>
 #include <GWCA/Constants/Constants.h>
+#include <GWCA/Constants/AgentIDs.h>
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/Camera.h>
 #include <GWCA/Managers/AgentMgr.h>
@@ -91,6 +92,77 @@ inline std::wstring Utf8ToWide(const std::string& utf8) {
     return out;
 }
 
+inline bool IsMinipet(uint16_t player_number) {
+    static const std::unordered_set<int> ids = {
+        GW::Constants::ModelID::Minipet::Charr, GW::Constants::ModelID::Minipet::Dragon,
+        GW::Constants::ModelID::Minipet::Rurik, GW::Constants::ModelID::Minipet::Shiro,
+        GW::Constants::ModelID::Minipet::Titan, GW::Constants::ModelID::Minipet::Kirin,
+        GW::Constants::ModelID::Minipet::NecridHorseman, GW::Constants::ModelID::Minipet::JadeArmor,
+        GW::Constants::ModelID::Minipet::Hydra, GW::Constants::ModelID::Minipet::FungalWallow,
+        GW::Constants::ModelID::Minipet::SiegeTurtle, GW::Constants::ModelID::Minipet::TempleGuardian,
+        GW::Constants::ModelID::Minipet::JungleTroll, GW::Constants::ModelID::Minipet::WhiptailDevourer,
+        GW::Constants::ModelID::Minipet::Gwen, GW::Constants::ModelID::Minipet::GwenDoll,
+        GW::Constants::ModelID::Minipet::WaterDjinn, GW::Constants::ModelID::Minipet::Lich,
+        GW::Constants::ModelID::Minipet::Elf, GW::Constants::ModelID::Minipet::PalawaJoko,
+        GW::Constants::ModelID::Minipet::Koss, GW::Constants::ModelID::Minipet::MandragorImp,
+        GW::Constants::ModelID::Minipet::HeketWarrior, GW::Constants::ModelID::Minipet::HarpyRanger,
+        GW::Constants::ModelID::Minipet::Juggernaut, GW::Constants::ModelID::Minipet::WindRider,
+        GW::Constants::ModelID::Minipet::FireImp, GW::Constants::ModelID::Minipet::Aatxe,
+        GW::Constants::ModelID::Minipet::ThornWolf, GW::Constants::ModelID::Minipet::Abyssal,
+        GW::Constants::ModelID::Minipet::BlackBeast, GW::Constants::ModelID::Minipet::Freezie,
+        GW::Constants::ModelID::Minipet::Irukandji, GW::Constants::ModelID::Minipet::MadKingThorn,
+        GW::Constants::ModelID::Minipet::ForestMinotaur, GW::Constants::ModelID::Minipet::Mursaat,
+        GW::Constants::ModelID::Minipet::Nornbear, GW::Constants::ModelID::Minipet::Ooze,
+        GW::Constants::ModelID::Minipet::Raptor, GW::Constants::ModelID::Minipet::RoaringEther,
+        GW::Constants::ModelID::Minipet::CloudtouchedSimian, GW::Constants::ModelID::Minipet::CaveSpider,
+        GW::Constants::ModelID::Minipet::WhiteRabbit, GW::Constants::ModelID::Minipet::WordofMadness,
+        GW::Constants::ModelID::Minipet::DredgeBrute, GW::Constants::ModelID::Minipet::TerrorwebDryder,
+        GW::Constants::ModelID::Minipet::Abomination, GW::Constants::ModelID::Minipet::KraitNeoss,
+        GW::Constants::ModelID::Minipet::DesertGriffon, GW::Constants::ModelID::Minipet::Kveldulf,
+        GW::Constants::ModelID::Minipet::QuetzalSly, GW::Constants::ModelID::Minipet::Jora,
+        GW::Constants::ModelID::Minipet::FlowstoneElemental, GW::Constants::ModelID::Minipet::Nian,
+        GW::Constants::ModelID::Minipet::DagnarStonepate, GW::Constants::ModelID::Minipet::FlameDjinn,
+        GW::Constants::ModelID::Minipet::EyeOfJanthir, GW::Constants::ModelID::Minipet::Seer,
+        GW::Constants::ModelID::Minipet::SiegeDevourer, GW::Constants::ModelID::Minipet::ShardWolf,
+        GW::Constants::ModelID::Minipet::FireDrake, GW::Constants::ModelID::Minipet::SummitGiantHerder,
+        GW::Constants::ModelID::Minipet::OphilNahualli, GW::Constants::ModelID::Minipet::CobaltScabara,
+        GW::Constants::ModelID::Minipet::ScourgeManta, GW::Constants::ModelID::Minipet::Ventari,
+        GW::Constants::ModelID::Minipet::Oola, GW::Constants::ModelID::Minipet::CandysmithMarley,
+        GW::Constants::ModelID::Minipet::ZhuHanuku, GW::Constants::ModelID::Minipet::KingAdelbern,
+        GW::Constants::ModelID::Minipet::MOX1, GW::Constants::ModelID::Minipet::MOX2,
+        GW::Constants::ModelID::Minipet::MOX3, GW::Constants::ModelID::Minipet::MOX4,
+        GW::Constants::ModelID::Minipet::MOX5, GW::Constants::ModelID::Minipet::MOX6,
+        GW::Constants::ModelID::Minipet::BrownRabbit, GW::Constants::ModelID::Minipet::Yakkington,
+        GW::Constants::ModelID::Minipet::Unknown308, GW::Constants::ModelID::Minipet::CollectorsEditionKuunavang,
+        GW::Constants::ModelID::Minipet::GrayGiant, GW::Constants::ModelID::Minipet::Asura,
+        GW::Constants::ModelID::Minipet::DestroyerOfFlesh, GW::Constants::ModelID::Minipet::PolarBear,
+        GW::Constants::ModelID::Minipet::CollectorsEditionVaresh, GW::Constants::ModelID::Minipet::Mallyx,
+        GW::Constants::ModelID::Minipet::Ceratadon, GW::Constants::ModelID::Minipet::Kanaxai,
+        GW::Constants::ModelID::Minipet::Panda, GW::Constants::ModelID::Minipet::IslandGuardian,
+        GW::Constants::ModelID::Minipet::NagaRaincaller, GW::Constants::ModelID::Minipet::LonghairYeti,
+        GW::Constants::ModelID::Minipet::Oni, GW::Constants::ModelID::Minipet::ShirokenAssassin,
+        GW::Constants::ModelID::Minipet::Vizu, GW::Constants::ModelID::Minipet::ZhedShadowhoof,
+        GW::Constants::ModelID::Minipet::Grawl, GW::Constants::ModelID::Minipet::GhostlyHero,
+        GW::Constants::ModelID::Minipet::Pig, GW::Constants::ModelID::Minipet::GreasedLightning,
+        GW::Constants::ModelID::Minipet::WorldFamousRacingBeetle, GW::Constants::ModelID::Minipet::CelestialPig,
+        GW::Constants::ModelID::Minipet::CelestialRat, GW::Constants::ModelID::Minipet::CelestialOx,
+        GW::Constants::ModelID::Minipet::CelestialTiger, GW::Constants::ModelID::Minipet::CelestialRabbit,
+        GW::Constants::ModelID::Minipet::CelestialDragon, GW::Constants::ModelID::Minipet::CelestialSnake,
+        GW::Constants::ModelID::Minipet::CelestialHorse, GW::Constants::ModelID::Minipet::CelestialSheep,
+        GW::Constants::ModelID::Minipet::CelestialMonkey, GW::Constants::ModelID::Minipet::CelestialRooster,
+        GW::Constants::ModelID::Minipet::CelestialDog, GW::Constants::ModelID::Minipet::BlackMoaChick,
+        GW::Constants::ModelID::Minipet::Dhuum, GW::Constants::ModelID::Minipet::MadKingsGuard,
+        GW::Constants::ModelID::Minipet::SmiteCrawler, GW::Constants::ModelID::Minipet::GuildLord,
+        GW::Constants::ModelID::Minipet::HighPriestZhang, GW::Constants::ModelID::Minipet::GhostlyPriest,
+        GW::Constants::ModelID::Minipet::RiftWarden, GW::Constants::ModelID::Minipet::MiniatureLegionnaire,
+        GW::Constants::ModelID::Minipet::MiniatureConfessorDorian, GW::Constants::ModelID::Minipet::MiniaturePrincessSalma,
+        GW::Constants::ModelID::Minipet::MiniatureLivia, GW::Constants::ModelID::Minipet::MiniatureEvennia,
+        GW::Constants::ModelID::Minipet::MiniatureConfessorIsaiah, GW::Constants::ModelID::Minipet::MiniaturePeacekeeperEnforcer,
+        GW::Constants::ModelID::Minipet::MiniatureMinisterReiko, GW::Constants::ModelID::Minipet::MiniatureEcclesiateXunRao,
+    };
+    return ids.count(static_cast<int>(player_number)) != 0;
+}
+
 inline std::unordered_set<std::wstring> ParseSemicolonNameList(const std::string& raw) {
     std::unordered_set<std::wstring> out;
     std::string current;
@@ -123,8 +195,10 @@ struct NameplateSettings {
     bool show_allies = true;
     bool show_neutrals = false;
     float max_range = 5000.0f;
-    float bar_width = 40.0f;
-    float bar_height = 5.0f;
+    float enemy_bar_width = 40.0f;
+    float enemy_bar_height = 5.0f;
+    float friendly_bar_width = 40.0f;
+    float friendly_bar_height = 5.0f;
     float head_offset_z = -59.0f;
 
     std::string priority1_raw;
@@ -134,6 +208,7 @@ struct NameplateSettings {
     bool color_target = true;
 
     bool highlight_quest = true;
+    bool color_by_profession = false;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -153,14 +228,17 @@ public:
         LoadSetting("show_allies", settings_.show_allies);
         LoadSetting("show_neutrals", settings_.show_neutrals);
         LoadSetting("max_range", settings_.max_range);
-        LoadSetting("bar_width", settings_.bar_width);
-        LoadSetting("bar_height", settings_.bar_height);
+        LoadSetting("enemy_bar_width", settings_.enemy_bar_width);
+        LoadSetting("enemy_bar_height", settings_.enemy_bar_height);
+        LoadSetting("friendly_bar_width", settings_.friendly_bar_width);
+        LoadSetting("friendly_bar_height", settings_.friendly_bar_height);
         LoadSetting("head_offset_z", settings_.head_offset_z);
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
         LoadSetting("color_target", settings_.color_target);
         LoadSetting("highlight_quest", settings_.highlight_quest);
+        LoadSetting("color_by_profession", settings_.color_by_profession);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -171,14 +249,17 @@ public:
         SaveSetting("show_allies", settings_.show_allies);
         SaveSetting("show_neutrals", settings_.show_neutrals);
         SaveSetting("max_range", settings_.max_range);
-        SaveSetting("bar_width", settings_.bar_width);
-        SaveSetting("bar_height", settings_.bar_height);
+        SaveSetting("enemy_bar_width", settings_.enemy_bar_width);
+        SaveSetting("enemy_bar_height", settings_.enemy_bar_height);
+        SaveSetting("friendly_bar_width", settings_.friendly_bar_width);
+        SaveSetting("friendly_bar_height", settings_.friendly_bar_height);
         SaveSetting("head_offset_z", settings_.head_offset_z);
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
         SaveSetting("color_target", settings_.color_target);
         SaveSetting("highlight_quest", settings_.highlight_quest);
+        SaveSetting("color_by_profession", settings_.color_by_profession);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -266,6 +347,7 @@ private:
 
             if (living->GetIsDead()) continue;
             if (me && living->agent_id == me->agent_id) continue;
+            if (IsMinipet(living->player_number)) continue;
 
             if (!ShouldShowAllegiance(living->allegiance)) continue;
 
@@ -374,9 +456,13 @@ private:
         float hp_pct = living->hp;
         hp_pct = hp_pct < 0.f ? 0.f : (hp_pct > 1.f ? 1.f : hp_pct);
 
-        const ImVec2 top_left(screen.x - settings_.bar_width / 2.f, screen.y);
-        const ImVec2 bottom_right(top_left.x + settings_.bar_width, top_left.y + settings_.bar_height);
-        const ImVec2 fill_bottom_right(top_left.x + settings_.bar_width * hp_pct, bottom_right.y);
+        const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
+        const float bar_width = is_enemy ? settings_.enemy_bar_width : settings_.friendly_bar_width;
+        const float bar_height = is_enemy ? settings_.enemy_bar_height : settings_.friendly_bar_height;
+
+        const ImVec2 top_left(screen.x - bar_width / 2.f, screen.y);
+        const ImVec2 bottom_right(top_left.x + bar_width, top_left.y + bar_height);
+        const ImVec2 fill_bottom_right(top_left.x + bar_width * hp_pct, bottom_right.y);
 
         ImU32 fill_color;
         if (const auto priority_color = GetPriorityColor(name_lower)) {
@@ -384,6 +470,9 @@ private:
         }
         else if (settings_.highlight_quest && living->GetHasQuest()) {
             fill_color = kQuestColor;
+        }
+        else if (settings_.color_by_profession && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
+            fill_color = ProfessionColor(living->primary);
         }
         else {
             fill_color = ColorFor(living->allegiance);
@@ -413,20 +502,39 @@ private:
             case GW::Constants::Allegiance::Minion:
                 return IM_COL32(40, 200, 60, 255);
             default:
-                return IM_COL32(200, 200, 60, 255);
+                return IM_COL32(0, 255, 152, 255);
+        }
+    }
+
+    ImU32 ProfessionColor(GW::Constants::ProfessionByte prof) const {
+        switch (prof) {
+            case GW::Constants::ProfessionByte::Warrior:      return IM_COL32(205, 133, 63, 255);
+            case GW::Constants::ProfessionByte::Ranger:       return IM_COL32(34, 139, 34, 255);
+            case GW::Constants::ProfessionByte::Monk:         return IM_COL32(255, 250, 205, 255);
+            case GW::Constants::ProfessionByte::Necromancer:  return IM_COL32(85, 107, 47, 255);
+            case GW::Constants::ProfessionByte::Mesmer:       return IM_COL32(219, 112, 147, 255);
+            case GW::Constants::ProfessionByte::Elementalist: return IM_COL32(255, 69, 0, 255);
+            case GW::Constants::ProfessionByte::Assassin:     return IM_COL32(139, 0, 0, 255);
+            case GW::Constants::ProfessionByte::Ritualist:    return IM_COL32(0, 128, 128, 255);
+            case GW::Constants::ProfessionByte::Paragon:      return IM_COL32(255, 215, 0, 255);
+            case GW::Constants::ProfessionByte::Dervish:      return IM_COL32(222, 184, 135, 255);
+            default:                                          return IM_COL32(150, 150, 150, 255);
         }
     }
 
     void DrawSettingsInternal() {
         ImGui::Checkbox("Enabled", &settings_.enabled);
-        ImGui::Checkbox("Show enemies", &settings_.show_enemies);
+        ImGui::Checkbox("Show enemies (default red)", &settings_.show_enemies);
         ImGui::Checkbox("Show players/heroes/henchmen", &settings_.show_allies);
         ImGui::Checkbox("Show NPCs", &settings_.show_neutrals);
         ImGui::Checkbox("Color target (yellow border)", &settings_.color_target);
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
+        ImGui::Checkbox("Color players/heroes/henchmen by profession", &settings_.color_by_profession);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 10000.f);
-        ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 100.f);
-        ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
+        ImGui::SliderFloat("Enemy bar width", &settings_.enemy_bar_width, 10.f, 100.f);
+        ImGui::SliderFloat("Enemy bar height", &settings_.enemy_bar_height, 2.f, 20.f);
+        ImGui::SliderFloat("Friendly bar width", &settings_.friendly_bar_width, 10.f, 100.f);
+        ImGui::SliderFloat("Friendly bar height", &settings_.friendly_bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
 
         ImGui::Separator();
