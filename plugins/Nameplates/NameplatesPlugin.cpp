@@ -234,11 +234,11 @@ struct NameplateSettings {
     bool show_enemies = true;
     bool show_allies = true;
     bool show_neutrals = false;
-    float max_range = 5000.0f;
-    float enemy_bar_width = 40.0f;
-    float enemy_bar_height = 5.0f;
-    float friendly_bar_width = 40.0f;
-    float friendly_bar_height = 5.0f;
+    float max_range = 1500.0f;
+    float enemy_bar_width = 200.0f;
+    float enemy_bar_height = 20.0f;
+    float friendly_bar_width = 80.0f;
+    float friendly_bar_height = 17.0f;
     float head_offset_z = -59.0f;
 
     std::string priority1_raw;
@@ -601,7 +601,7 @@ private:
         ImGui::Checkbox("Color target (yellow border)", &settings_.color_target);
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
         ImGui::Checkbox("Color players/heroes/henchmen by profession", &settings_.color_by_profession);
-        ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 10000.f);
+        ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
         ImGui::SliderFloat("Enemy bar width", &settings_.enemy_bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Enemy bar height", &settings_.enemy_bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Friendly bar width", &settings_.friendly_bar_width, 10.f, 200.f);
