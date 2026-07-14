@@ -32,11 +32,35 @@
 #include <unordered_set>
 #include <cwchar>
 #include <optional>
+#include <cfloat>
+
+inline std::wstring Utf8ToWide(const std::string& utf8) {
+    if (utf8.empty()) return {};
+    const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring out(static_cast<size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), out.data(), len);
+    return out;
+}
+
+inline std::string WideToUtf8(const std::wstring& wide) {
+    if (wide.empty()) return {};
+    const int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return {};
+    std::string out(static_cast<size_t>(len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), len, nullptr, nullptr);
+    return out;
+}
 
 class AgentNameCache {
 public:
 
-    const std::wstring& GetLower(uint32_t agent_id, const wchar_t* enc_name) {
+    struct NameLookup {
+        const std::wstring& lower;
+        const std::string& display_utf8;
+    };
+
+    NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
         Entry& entry = cache_[agent_id];
         entry.last_seen_tick = tick_;
         if (enc_name && wcsncmp(entry.last_enc, enc_name, kMaxEncLen - 1) != 0) {
@@ -49,8 +73,9 @@ public:
             for (auto& c : entry.decoded_lower) {
                 c = static_cast<wchar_t>(towlower(c));
             }
+            entry.decoded_display_utf8 = WideToUtf8(entry.buffer);
         }
-        return entry.decoded_lower;
+        return { entry.decoded_lower, entry.decoded_display_utf8 };
     }
 
     void MaybePrune() {
@@ -76,21 +101,13 @@ private:
         wchar_t last_enc[kMaxEncLen] = {};
         wchar_t buffer[kBufferLen] = {};
         std::wstring decoded_lower;
+        std::string decoded_display_utf8;
         uint64_t last_seen_tick = 0;
     };
     std::unordered_map<uint32_t, Entry> cache_;
     uint64_t tick_ = 0;
     uint64_t last_prune_tick_ = 0;
 };
-
-inline std::wstring Utf8ToWide(const std::string& utf8) {
-    if (utf8.empty()) return {};
-    const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
-    if (len <= 0) return {};
-    std::wstring out(static_cast<size_t>(len), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), out.data(), len);
-    return out;
-}
 
 inline bool IsMinipet(uint16_t player_number) {
     static const std::unordered_set<int> ids = {
@@ -337,6 +354,7 @@ private:
         ImVec2 targeted_screen;
         GW::AgentLiving* targeted_living = nullptr;
         std::wstring targeted_name_lower;
+        std::string targeted_display_name;
 
         for (GW::Agent* agent : *agents) {
             if (!agent) continue;
@@ -356,7 +374,7 @@ private:
             ImVec2 screen;
             if (!WorldToScreen(living, view, view_proj, viewport_width, viewport_height, screen)) continue;
 
-            const std::wstring& name_lower = name_cache_.GetLower(
+            const auto name_lookup = name_cache_.Get(
                 living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
 
             const bool is_targeted = settings_.color_target && target && living->agent_id == target->agent_id;
@@ -365,15 +383,16 @@ private:
                 have_targeted_bar = true;
                 targeted_screen = screen;
                 targeted_living = living;
-                targeted_name_lower = name_lower;
+                targeted_name_lower = name_lookup.lower;
+                targeted_display_name = name_lookup.display_utf8;
                 continue;
             }
 
-            DrawBar(draw_list, screen, living, name_lower, false);
+            DrawBar(draw_list, screen, living, name_lookup.lower, name_lookup.display_utf8, false);
         }
 
         if (have_targeted_bar) {
-            DrawBar(draw_list, targeted_screen, targeted_living, targeted_name_lower, true);
+            DrawBar(draw_list, targeted_screen, targeted_living, targeted_name_lower, targeted_display_name, true);
         }
 
         name_cache_.MaybePrune();
@@ -452,7 +471,7 @@ private:
         return true;
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, bool is_targeted) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::string& display_name, bool is_targeted) {
         float hp_pct = living->hp;
         hp_pct = hp_pct < 0.f ? 0.f : (hp_pct > 1.f ? 1.f : hp_pct);
 
@@ -491,6 +510,27 @@ private:
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
         draw_list->AddRect(top_left, bottom_right, border_color);
+
+        if (!display_name.empty()) {
+            ImFont* font = ImGui::GetFont();
+            const float font_size = ImGui::GetFontSize();
+            const char* text_begin = display_name.c_str();
+            const char* text_end = text_begin + display_name.size();
+            const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, text_begin, text_end);
+
+            const float text_x = screen.x - text_size.x / 2.f;
+            const float text_y = top_left.y - text_size.y - 2.f;
+
+            static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
+            static constexpr ImU32 kTextColor = IM_COL32(255, 255, 255, 255);
+            static constexpr float kOutlineOffset = 1.f;
+
+            draw_list->AddText(font, font_size, ImVec2(text_x - kOutlineOffset, text_y), kOutlineColor, text_begin, text_end);
+            draw_list->AddText(font, font_size, ImVec2(text_x + kOutlineOffset, text_y), kOutlineColor, text_begin, text_end);
+            draw_list->AddText(font, font_size, ImVec2(text_x, text_y - kOutlineOffset), kOutlineColor, text_begin, text_end);
+            draw_list->AddText(font, font_size, ImVec2(text_x, text_y + kOutlineOffset), kOutlineColor, text_begin, text_end);
+            draw_list->AddText(font, font_size, ImVec2(text_x, text_y), kTextColor, text_begin, text_end);
+        }
     }
 
     ImU32 ColorFor(GW::Constants::Allegiance allegiance) const {
