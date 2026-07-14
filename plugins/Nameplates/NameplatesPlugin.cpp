@@ -133,7 +133,7 @@ inline bool IsMinipet(uint16_t player_number) {
         GW::Constants::ModelID::Minipet::MOX3, GW::Constants::ModelID::Minipet::MOX4,
         GW::Constants::ModelID::Minipet::MOX5, GW::Constants::ModelID::Minipet::MOX6,
         GW::Constants::ModelID::Minipet::BrownRabbit, GW::Constants::ModelID::Minipet::Yakkington,
-        GW::Constants::ModelID::Minipet::Unknown308, GW::Constants::ModelID::Minipet::CollectorsEditionKuunavang,
+        GW::Constants::ModelID::Minipet::CollectorsEditionKuunavang,
         GW::Constants::ModelID::Minipet::GrayGiant, GW::Constants::ModelID::Minipet::Asura,
         GW::Constants::ModelID::Minipet::DestroyerOfFlesh, GW::Constants::ModelID::Minipet::PolarBear,
         GW::Constants::ModelID::Minipet::CollectorsEditionVaresh, GW::Constants::ModelID::Minipet::Mallyx,
