@@ -240,6 +240,7 @@ struct NameplateSettings {
     float friendly_bar_width = 80.0f;
     float friendly_bar_height = 17.0f;
     float head_offset_z = -59.0f;
+    float height_scale = 0.8f;
 
     std::string priority1_raw;
     std::string priority2_raw;
@@ -273,6 +274,7 @@ public:
         LoadSetting("friendly_bar_width", settings_.friendly_bar_width);
         LoadSetting("friendly_bar_height", settings_.friendly_bar_height);
         LoadSetting("head_offset_z", settings_.head_offset_z);
+        LoadSetting("height_scale", settings_.height_scale);
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
@@ -294,6 +296,7 @@ public:
         SaveSetting("friendly_bar_width", settings_.friendly_bar_width);
         SaveSetting("friendly_bar_height", settings_.friendly_bar_height);
         SaveSetting("head_offset_z", settings_.head_offset_z);
+        SaveSetting("height_scale", settings_.height_scale);
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
@@ -476,7 +479,7 @@ private:
         using namespace DirectX;
 
         const XMVECTOR world_pos = XMVectorSet(
-            living->pos.x, living->pos.y, living->z + living->height1 + settings_.head_offset_z, 0.f);
+            living->pos.x, living->pos.y, living->z + living->height1 * settings_.height_scale + settings_.head_offset_z, 0.f);
 
         const XMVECTOR view_pos = XMVector3TransformCoord(world_pos, view);
         float view_pos_arr[4];
@@ -607,6 +610,7 @@ private:
         ImGui::SliderFloat("Friendly bar width", &settings_.friendly_bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Friendly bar height", &settings_.friendly_bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
+        ImGui::SliderFloat("Height scale (bounding box)", &settings_.height_scale, 0.1f, 1.5f);
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
