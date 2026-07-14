@@ -52,12 +52,34 @@ inline std::string WideToUtf8(const std::wstring& wide) {
     return out;
 }
 
+inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std::wstring& name, float max_width) {
+    const std::string full_utf8 = WideToUtf8(name);
+    const ImVec2 full_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, full_utf8.c_str());
+    if (full_size.x <= max_width) return full_utf8;
+
+    size_t lo = 0, hi = name.size();
+    std::string best_utf8 = WideToUtf8(L"...");
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo + 1) / 2;
+        const std::string candidate_utf8 = WideToUtf8(name.substr(0, mid) + L"...");
+        const ImVec2 candidate_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, candidate_utf8.c_str());
+        if (candidate_size.x <= max_width) {
+            lo = mid;
+            best_utf8 = candidate_utf8;
+        }
+        else {
+            hi = mid - 1;
+        }
+    }
+    return best_utf8;
+}
+
 class AgentNameCache {
 public:
 
     struct NameLookup {
         const std::wstring& lower;
-        const std::string& display_utf8;
+        const std::wstring& display;
     };
 
     NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
@@ -73,9 +95,9 @@ public:
             for (auto& c : entry.decoded_lower) {
                 c = static_cast<wchar_t>(towlower(c));
             }
-            entry.decoded_display_utf8 = WideToUtf8(entry.buffer);
+            entry.decoded_display = entry.buffer;
         }
-        return { entry.decoded_lower, entry.decoded_display_utf8 };
+        return { entry.decoded_lower, entry.decoded_display };
     }
 
     void MaybePrune() {
@@ -101,7 +123,7 @@ private:
         wchar_t last_enc[kMaxEncLen] = {};
         wchar_t buffer[kBufferLen] = {};
         std::wstring decoded_lower;
-        std::string decoded_display_utf8;
+        std::wstring decoded_display;
         uint64_t last_seen_tick = 0;
     };
     std::unordered_map<uint32_t, Entry> cache_;
@@ -354,7 +376,7 @@ private:
         ImVec2 targeted_screen;
         GW::AgentLiving* targeted_living = nullptr;
         std::wstring targeted_name_lower;
-        std::string targeted_display_name;
+        std::wstring targeted_display_name;
 
         for (GW::Agent* agent : *agents) {
             if (!agent) continue;
@@ -384,11 +406,11 @@ private:
                 targeted_screen = screen;
                 targeted_living = living;
                 targeted_name_lower = name_lookup.lower;
-                targeted_display_name = name_lookup.display_utf8;
+                targeted_display_name = name_lookup.display;
                 continue;
             }
 
-            DrawBar(draw_list, screen, living, name_lookup.lower, name_lookup.display_utf8, false);
+            DrawBar(draw_list, screen, living, name_lookup.lower, name_lookup.display, false);
         }
 
         if (have_targeted_bar) {
@@ -471,7 +493,7 @@ private:
         return true;
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::string& display_name, bool is_targeted) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, bool is_targeted) {
         float hp_pct = living->hp;
         hp_pct = hp_pct < 0.f ? 0.f : (hp_pct > 1.f ? 1.f : hp_pct);
 
@@ -514,22 +536,30 @@ private:
         if (!display_name.empty()) {
             ImFont* font = ImGui::GetFont();
             const float font_size = ImGui::GetFontSize();
-            const char* text_begin = display_name.c_str();
-            const char* text_end = text_begin + display_name.size();
-            const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, text_begin, text_end);
 
-            const float text_x = screen.x - text_size.x / 2.f;
-            const float text_y = top_left.y - text_size.y - 2.f;
+            constexpr float kPadding = 3.f;
+            const float max_text_width = bar_width - kPadding * 2.f;
 
-            static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
-            static constexpr ImU32 kTextColor = IM_COL32(255, 255, 255, 255);
-            static constexpr float kOutlineOffset = 1.f;
+            if (max_text_width > 0.f) {
+                const std::string clipped_utf8 = TruncateWithEllipsis(font, font_size, display_name, max_text_width);
+                const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, clipped_utf8.c_str());
 
-            draw_list->AddText(font, font_size, ImVec2(text_x - kOutlineOffset, text_y), kOutlineColor, text_begin, text_end);
-            draw_list->AddText(font, font_size, ImVec2(text_x + kOutlineOffset, text_y), kOutlineColor, text_begin, text_end);
-            draw_list->AddText(font, font_size, ImVec2(text_x, text_y - kOutlineOffset), kOutlineColor, text_begin, text_end);
-            draw_list->AddText(font, font_size, ImVec2(text_x, text_y + kOutlineOffset), kOutlineColor, text_begin, text_end);
-            draw_list->AddText(font, font_size, ImVec2(text_x, text_y), kTextColor, text_begin, text_end);
+                const float text_x = top_left.x + kPadding;
+                const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
+
+                static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
+                static constexpr ImU32 kTextColor = IM_COL32(255, 255, 255, 255);
+                static constexpr float kOutlineOffset = 1.f;
+
+                const char* text_begin = clipped_utf8.c_str();
+                const char* text_end = text_begin + clipped_utf8.size();
+
+                draw_list->AddText(font, font_size, ImVec2(text_x - kOutlineOffset, text_y), kOutlineColor, text_begin, text_end);
+                draw_list->AddText(font, font_size, ImVec2(text_x + kOutlineOffset, text_y), kOutlineColor, text_begin, text_end);
+                draw_list->AddText(font, font_size, ImVec2(text_x, text_y - kOutlineOffset), kOutlineColor, text_begin, text_end);
+                draw_list->AddText(font, font_size, ImVec2(text_x, text_y + kOutlineOffset), kOutlineColor, text_begin, text_end);
+                draw_list->AddText(font, font_size, ImVec2(text_x, text_y), kTextColor, text_begin, text_end);
+            }
         }
     }
 
@@ -571,9 +601,9 @@ private:
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
         ImGui::Checkbox("Color players/heroes/henchmen by profession", &settings_.color_by_profession);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 10000.f);
-        ImGui::SliderFloat("Enemy bar width", &settings_.enemy_bar_width, 10.f, 100.f);
+        ImGui::SliderFloat("Enemy bar width", &settings_.enemy_bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Enemy bar height", &settings_.enemy_bar_height, 2.f, 20.f);
-        ImGui::SliderFloat("Friendly bar width", &settings_.friendly_bar_width, 10.f, 100.f);
+        ImGui::SliderFloat("Friendly bar width", &settings_.friendly_bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Friendly bar height", &settings_.friendly_bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
 
