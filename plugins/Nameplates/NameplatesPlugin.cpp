@@ -250,6 +250,7 @@ struct NameplateSettings {
 
     bool highlight_quest = true;
     bool color_by_profession = false;
+    bool name_only_mode = false;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -281,6 +282,7 @@ public:
         LoadSetting("color_target", settings_.color_target);
         LoadSetting("highlight_quest", settings_.highlight_quest);
         LoadSetting("color_by_profession", settings_.color_by_profession);
+        LoadSetting("name_only_mode", settings_.name_only_mode);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -303,6 +305,7 @@ public:
         SaveSetting("color_target", settings_.color_target);
         SaveSetting("highlight_quest", settings_.highlight_quest);
         SaveSetting("color_by_profession", settings_.color_by_profession);
+        SaveSetting("name_only_mode", settings_.name_only_mode);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -497,7 +500,41 @@ private:
         return true;
     }
 
+    void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, const std::string& text_utf8) const {
+        static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
+        static constexpr float kOutlineOffset = 1.f;
+        const char* text_begin = text_utf8.c_str();
+        const char* text_end = text_begin + text_utf8.size();
+        draw_list->AddText(font, font_size, ImVec2(pos.x - kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
+        draw_list->AddText(font, font_size, ImVec2(pos.x + kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
+        draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y - kOutlineOffset), kOutlineColor, text_begin, text_end);
+        draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y + kOutlineOffset), kOutlineColor, text_begin, text_end);
+        draw_list->AddText(font, font_size, pos, text_color, text_begin, text_end);
+    }
+
+    void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& display_name) {
+        if (display_name.empty()) return;
+
+        ImFont* font = ImGui::GetFont();
+        const float font_size = static_cast<float>(FontLoader::FontSize::header2);
+        const std::string text_utf8 = WideToUtf8(display_name);
+        const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, text_utf8.c_str());
+
+        const float text_x = screen.x - text_size.x / 2.f;
+        const float text_y = screen.y - text_size.y / 2.f;
+
+        const ImU32 text_color = ProfessionColor(living->primary);
+        DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, text_utf8);
+    }
+
     void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, bool is_targeted) {
+        const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
+
+        if (settings_.name_only_mode && is_ally) {
+            DrawNameOnly(draw_list, screen, living, display_name);
+            return;
+        }
+
         float hp_pct = living->hp;
         hp_pct = hp_pct < 0.f ? 0.f : (hp_pct > 1.f ? 1.f : hp_pct);
 
@@ -516,7 +553,7 @@ private:
         else if (settings_.highlight_quest && living->GetHasQuest()) {
             fill_color = kQuestColor;
         }
-        else if (settings_.color_by_profession && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
+        else if (settings_.color_by_profession && is_ally) {
             fill_color = ProfessionColor(living->primary);
         }
         else {
@@ -551,18 +588,8 @@ private:
                 const float text_x = top_left.x + kPadding;
                 const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
 
-                static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
                 static constexpr ImU32 kTextColor = IM_COL32(255, 255, 255, 255);
-                static constexpr float kOutlineOffset = 1.f;
-
-                const char* text_begin = clipped_utf8.c_str();
-                const char* text_end = text_begin + clipped_utf8.size();
-
-                draw_list->AddText(font, font_size, ImVec2(text_x - kOutlineOffset, text_y), kOutlineColor, text_begin, text_end);
-                draw_list->AddText(font, font_size, ImVec2(text_x + kOutlineOffset, text_y), kOutlineColor, text_begin, text_end);
-                draw_list->AddText(font, font_size, ImVec2(text_x, text_y - kOutlineOffset), kOutlineColor, text_begin, text_end);
-                draw_list->AddText(font, font_size, ImVec2(text_x, text_y + kOutlineOffset), kOutlineColor, text_begin, text_end);
-                draw_list->AddText(font, font_size, ImVec2(text_x, text_y), kTextColor, text_begin, text_end);
+                DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), kTextColor, clipped_utf8);
             }
         }
     }
@@ -604,6 +631,7 @@ private:
         ImGui::Checkbox("Color target (yellow border)", &settings_.color_target);
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
         ImGui::Checkbox("Color players/heroes/henchmen by profession", &settings_.color_by_profession);
+        ImGui::Checkbox("Name-only mode for players/heroes/henchmen (no bar)", &settings_.name_only_mode);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
         ImGui::SliderFloat("Enemy bar width", &settings_.enemy_bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Enemy bar height", &settings_.enemy_bar_height, 2.f, 20.f);
