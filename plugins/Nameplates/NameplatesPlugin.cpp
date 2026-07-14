@@ -609,17 +609,17 @@ private:
 
     ImU32 ProfessionColor(GW::Constants::ProfessionByte prof) const {
         switch (prof) {
-            case GW::Constants::ProfessionByte::Warrior:      return IM_COL32(205, 133, 63, 255);
-            case GW::Constants::ProfessionByte::Ranger:       return IM_COL32(34, 139, 34, 255);
-            case GW::Constants::ProfessionByte::Monk:         return IM_COL32(255, 250, 205, 255);
-            case GW::Constants::ProfessionByte::Necromancer:  return IM_COL32(85, 107, 47, 255);
-            case GW::Constants::ProfessionByte::Mesmer:       return IM_COL32(219, 112, 147, 255);
-            case GW::Constants::ProfessionByte::Elementalist: return IM_COL32(255, 69, 0, 255);
-            case GW::Constants::ProfessionByte::Assassin:     return IM_COL32(139, 0, 0, 255);
-            case GW::Constants::ProfessionByte::Ritualist:    return IM_COL32(0, 128, 128, 255);
-            case GW::Constants::ProfessionByte::Paragon:      return IM_COL32(255, 215, 0, 255);
-            case GW::Constants::ProfessionByte::Dervish:      return IM_COL32(222, 184, 135, 255);
-            default:                                          return IM_COL32(150, 150, 150, 255);
+            case GW::Constants::ProfessionByte::Warrior:      return IM_COL32(255, 255, 136, 255);
+            case GW::Constants::ProfessionByte::Ranger:       return IM_COL32(204, 255, 153, 255);
+            case GW::Constants::ProfessionByte::Monk:         return IM_COL32(170, 204, 255, 255);
+            case GW::Constants::ProfessionByte::Necromancer:  return IM_COL32(153, 255, 204, 255);
+            case GW::Constants::ProfessionByte::Mesmer:       return IM_COL32(221, 170, 255, 255);
+            case GW::Constants::ProfessionByte::Elementalist: return IM_COL32(255, 187, 187, 255);
+            case GW::Constants::ProfessionByte::Assassin:     return IM_COL32(255, 204, 238, 255);
+            case GW::Constants::ProfessionByte::Ritualist:    return IM_COL32(187, 255, 255, 255);
+            case GW::Constants::ProfessionByte::Paragon:      return IM_COL32(255, 204, 153, 255);
+            case GW::Constants::ProfessionByte::Dervish:      return IM_COL32(221, 221, 255, 255);
+            default:                                          return IM_COL32(221, 221, 221, 255);
         }
     }
 
