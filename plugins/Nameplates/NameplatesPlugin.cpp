@@ -122,11 +122,10 @@ struct NameplateSettings {
     bool show_enemies = true;
     bool show_allies = true;
     bool show_neutrals = false;
-    bool hide_dead = true;
     float max_range = 5000.0f;
     float bar_width = 40.0f;
     float bar_height = 5.0f;
-    float head_offset_z = 0.0f;
+    float head_offset_z = -59.0f;
 
     std::string priority1_raw;
     std::string priority2_raw;
@@ -153,7 +152,6 @@ public:
         LoadSetting("show_enemies", settings_.show_enemies);
         LoadSetting("show_allies", settings_.show_allies);
         LoadSetting("show_neutrals", settings_.show_neutrals);
-        LoadSetting("hide_dead", settings_.hide_dead);
         LoadSetting("max_range", settings_.max_range);
         LoadSetting("bar_width", settings_.bar_width);
         LoadSetting("bar_height", settings_.bar_height);
@@ -172,7 +170,6 @@ public:
         SaveSetting("show_enemies", settings_.show_enemies);
         SaveSetting("show_allies", settings_.show_allies);
         SaveSetting("show_neutrals", settings_.show_neutrals);
-        SaveSetting("hide_dead", settings_.hide_dead);
         SaveSetting("max_range", settings_.max_range);
         SaveSetting("bar_width", settings_.bar_width);
         SaveSetting("bar_height", settings_.bar_height);
@@ -262,7 +259,8 @@ private:
             GW::AgentLiving* living = agent->GetAsAgentLiving();
             if (!living) continue;
 
-            if (settings_.hide_dead && living->GetIsDead()) continue;
+            if (living->GetIsDead()) continue;
+            if (me && living->agent_id == me->agent_id) continue;
 
             if (!ShouldShowAllegiance(living->allegiance)) continue;
 
@@ -405,15 +403,14 @@ private:
     void DrawSettingsInternal() {
         ImGui::Checkbox("Enabled", &settings_.enabled);
         ImGui::Checkbox("Show enemies", &settings_.show_enemies);
-        ImGui::Checkbox("Show allies", &settings_.show_allies);
-        ImGui::Checkbox("Show neutrals", &settings_.show_neutrals);
-        ImGui::Checkbox("Hide dead", &settings_.hide_dead);
+        ImGui::Checkbox("Show players/heroes/henchmen", &settings_.show_allies);
+        ImGui::Checkbox("Show NPCs", &settings_.show_neutrals);
         ImGui::Checkbox("Color target (yellow border)", &settings_.color_target);
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 10000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 100.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
-        ImGui::SliderFloat("Head offset (fine-tune)", &settings_.head_offset_z, -100.f, 100.f);
+        ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
