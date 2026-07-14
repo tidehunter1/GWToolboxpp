@@ -122,7 +122,6 @@ struct NameplateSettings {
     bool show_enemies = true;
     bool show_allies = true;
     bool show_neutrals = false;
-    bool hide_own_bar = true;
     bool hide_dead = true;
     float max_range = 5000.0f;
     float bar_width = 40.0f;
@@ -154,7 +153,6 @@ public:
         LoadSetting("show_enemies", settings_.show_enemies);
         LoadSetting("show_allies", settings_.show_allies);
         LoadSetting("show_neutrals", settings_.show_neutrals);
-        LoadSetting("hide_own_bar", settings_.hide_own_bar);
         LoadSetting("hide_dead", settings_.hide_dead);
         LoadSetting("max_range", settings_.max_range);
         LoadSetting("bar_width", settings_.bar_width);
@@ -174,7 +172,6 @@ public:
         SaveSetting("show_enemies", settings_.show_enemies);
         SaveSetting("show_allies", settings_.show_allies);
         SaveSetting("show_neutrals", settings_.show_neutrals);
-        SaveSetting("hide_own_bar", settings_.hide_own_bar);
         SaveSetting("hide_dead", settings_.hide_dead);
         SaveSetting("max_range", settings_.max_range);
         SaveSetting("bar_width", settings_.bar_width);
@@ -220,7 +217,7 @@ private:
     static constexpr ImU32 kPriority1Color = IM_COL32(135, 206, 250, 255);
     static constexpr ImU32 kPriority2Color = IM_COL32(255, 105, 180, 255);
     static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255);
-    static constexpr ImU32 kTargetColor    = IM_COL32(0, 0, 139, 255);
+    static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
@@ -266,7 +263,6 @@ private:
             if (!living) continue;
 
             if (settings_.hide_dead && living->GetIsDead()) continue;
-            if (settings_.hide_own_bar && me && living->agent_id == me->agent_id) continue;
 
             if (!ShouldShowAllegiance(living->allegiance)) continue;
 
@@ -368,10 +364,7 @@ private:
         const ImVec2 fill_bottom_right(top_left.x + settings_.bar_width * hp_pct, bottom_right.y);
 
         ImU32 fill_color;
-        if (is_targeted) {
-            fill_color = kTargetColor;
-        }
-        else if (const auto priority_color = GetPriorityColor(name_lower)) {
+        if (const auto priority_color = GetPriorityColor(name_lower)) {
             fill_color = *priority_color;
         }
         else if (settings_.highlight_quest && living->GetHasQuest()) {
@@ -389,9 +382,11 @@ private:
         bg_col4.w = kBgOpacity;
         const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
 
+        const ImU32 border_color = is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
+
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
-        draw_list->AddRect(top_left, bottom_right, IM_COL32(0, 0, 0, 180));
+        draw_list->AddRect(top_left, bottom_right, border_color);
     }
 
     ImU32 ColorFor(GW::Constants::Allegiance allegiance) const {
@@ -412,9 +407,8 @@ private:
         ImGui::Checkbox("Show enemies", &settings_.show_enemies);
         ImGui::Checkbox("Show allies", &settings_.show_allies);
         ImGui::Checkbox("Show neutrals", &settings_.show_neutrals);
-        ImGui::Checkbox("Hide own bar", &settings_.hide_own_bar);
         ImGui::Checkbox("Hide dead", &settings_.hide_dead);
-        ImGui::Checkbox("Color target (dark blue, overrides all other colors)", &settings_.color_target);
+        ImGui::Checkbox("Color target (yellow border)", &settings_.color_target);
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 10000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 100.f);
