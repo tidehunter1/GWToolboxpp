@@ -535,7 +535,7 @@ private:
         draw_list->AddRect(top_left, bottom_right, border_color);
 
         if (!display_name.empty()) {
-            ImFont* font = FontLoader::GetFont();
+            ImFont* font = ImGui::GetFont();
             const float font_size = static_cast<float>(FontLoader::FontSize::header2);
 
             constexpr float kPadding = 6.f;
