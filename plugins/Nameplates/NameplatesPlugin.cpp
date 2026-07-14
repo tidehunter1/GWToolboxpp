@@ -252,6 +252,11 @@ private:
 
         ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 
+        bool have_targeted_bar = false;
+        ImVec2 targeted_screen;
+        GW::AgentLiving* targeted_living = nullptr;
+        std::wstring targeted_name_lower;
+
         for (GW::Agent* agent : *agents) {
             if (!agent) continue;
             if (!agent->GetIsLivingType()) continue;
@@ -274,7 +279,19 @@ private:
 
             const bool is_targeted = settings_.color_target && target && living->agent_id == target->agent_id;
 
-            DrawBar(draw_list, screen, living, name_lower, is_targeted);
+            if (is_targeted) {
+                have_targeted_bar = true;
+                targeted_screen = screen;
+                targeted_living = living;
+                targeted_name_lower = name_lower;
+                continue;
+            }
+
+            DrawBar(draw_list, screen, living, name_lower, false);
+        }
+
+        if (have_targeted_bar) {
+            DrawBar(draw_list, targeted_screen, targeted_living, targeted_name_lower, true);
         }
 
         name_cache_.MaybePrune();
