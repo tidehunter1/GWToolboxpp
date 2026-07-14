@@ -53,8 +53,7 @@ inline std::string WideToUtf8(const std::wstring& wide) {
     return out;
 }
 
-inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std::wstring& name, float max_width) {
-    const std::string full_utf8 = WideToUtf8(name);
+inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std::wstring& name, const std::string& full_utf8, float max_width) {
     const ImVec2 full_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, full_utf8.c_str());
     if (full_size.x <= max_width) return full_utf8;
 
@@ -81,6 +80,7 @@ public:
     struct NameLookup {
         const std::wstring& lower;
         const std::wstring& display;
+        const std::string& display_utf8;
     };
 
     NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
@@ -89,16 +89,19 @@ public:
         if (enc_name && wcsncmp(entry.last_enc, enc_name, kMaxEncLen - 1) != 0) {
             wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
             entry.buffer[0] = L'\0';
+            entry.converted = false;
             GW::UI::AsyncDecodeStr(enc_name, entry.buffer, kBufferLen);
         }
-        if (entry.buffer[0] != L'\0') {
+        if (!entry.converted && entry.buffer[0] != L'\0') {
+            entry.decoded_display = entry.buffer;
             entry.decoded_lower = entry.buffer;
             for (auto& c : entry.decoded_lower) {
                 c = static_cast<wchar_t>(towlower(c));
             }
-            entry.decoded_display = entry.buffer;
+            entry.decoded_display_utf8 = WideToUtf8(entry.decoded_display);
+            entry.converted = true;
         }
-        return { entry.decoded_lower, entry.decoded_display };
+        return { entry.decoded_lower, entry.decoded_display, entry.decoded_display_utf8 };
     }
 
     void MaybePrune() {
@@ -123,8 +126,10 @@ private:
     struct Entry {
         wchar_t last_enc[kMaxEncLen] = {};
         wchar_t buffer[kBufferLen] = {};
+        bool converted = false;
         std::wstring decoded_lower;
         std::wstring decoded_display;
+        std::string decoded_display_utf8;
         uint64_t last_seen_tick = 0;
     };
     std::unordered_map<uint32_t, Entry> cache_;
@@ -384,6 +389,7 @@ private:
         GW::AgentLiving* targeted_living = nullptr;
         std::wstring targeted_name_lower;
         std::wstring targeted_display_name;
+        std::string targeted_display_utf8;
 
         for (GW::Agent* agent : *agents) {
             if (!agent) continue;
@@ -414,14 +420,15 @@ private:
                 targeted_living = living;
                 targeted_name_lower = name_lookup.lower;
                 targeted_display_name = name_lookup.display;
+                targeted_display_utf8 = name_lookup.display_utf8;
                 continue;
             }
 
-            DrawBar(draw_list, screen, living, name_lookup.lower, name_lookup.display, false);
+            DrawBar(draw_list, screen, living, name_lookup.lower, name_lookup.display, name_lookup.display_utf8, false);
         }
 
         if (have_targeted_bar) {
-            DrawBar(draw_list, targeted_screen, targeted_living, targeted_name_lower, targeted_display_name, true);
+            DrawBar(draw_list, targeted_screen, targeted_living, targeted_name_lower, targeted_display_name, targeted_display_utf8, true);
         }
 
         name_cache_.MaybePrune();
@@ -512,26 +519,25 @@ private:
         draw_list->AddText(font, font_size, pos, text_color, text_begin, text_end);
     }
 
-    void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& display_name) {
-        if (display_name.empty()) return;
+    void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::string& display_utf8) {
+        if (display_utf8.empty()) return;
 
         ImFont* font = ImGui::GetFont();
         const float font_size = static_cast<float>(FontLoader::FontSize::header2);
-        const std::string text_utf8 = WideToUtf8(display_name);
-        const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, text_utf8.c_str());
+        const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, display_utf8.c_str());
 
         const float text_x = screen.x - text_size.x / 2.f;
         const float text_y = screen.y - text_size.y / 2.f;
 
         const ImU32 text_color = ProfessionColor(living->primary);
-        DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, text_utf8);
+        DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, display_utf8);
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, bool is_targeted) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, bool is_targeted) {
         const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
         if (settings_.name_only_mode && is_ally) {
-            DrawNameOnly(draw_list, screen, living, display_name);
+            DrawNameOnly(draw_list, screen, living, display_utf8);
             return;
         }
 
@@ -582,7 +588,7 @@ private:
             const float max_text_width = bar_width - kPadding * 2.f;
 
             if (max_text_width > 0.f) {
-                const std::string clipped_utf8 = TruncateWithEllipsis(font, font_size, display_name, max_text_width);
+                const std::string clipped_utf8 = TruncateWithEllipsis(font, font_size, display_name, display_utf8, max_text_width);
                 const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, clipped_utf8.c_str());
 
                 const float text_x = top_left.x + kPadding;
