@@ -77,6 +77,55 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
     return best_utf8;
 }
 
+class PositionSmoother {
+public:
+    // Returns a smoothed position that eases toward 'target' rather than
+    // snapping to it - dampens both raw per-frame jitter and stacking-order
+    // flips (since the smoothed value changes slowly, small natural-position
+    // wobbles from camera movement rarely flip which of two nearby units
+    // reads as "higher" this frame). First sighting of an agent snaps
+    // directly, since there's nothing to ease from yet.
+    ImVec2 Update(uint32_t agent_id, const ImVec2& target, float alpha) {
+        Entry& e = cache_[agent_id];
+        e.last_seen_tick = tick_;
+        if (!e.initialized) {
+            e.pos = target;
+            e.initialized = true;
+        }
+        else {
+            e.pos.x += (target.x - e.pos.x) * alpha;
+            e.pos.y += (target.y - e.pos.y) * alpha;
+        }
+        return e.pos;
+    }
+
+    void MaybePrune() {
+        ++tick_;
+        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
+        last_prune_tick_ = tick_;
+
+        for (auto it = cache_.begin(); it != cache_.end(); ) {
+            if (tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
+                it = cache_.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+    }
+
+private:
+    static constexpr uint64_t kPruneIntervalTicks = 1800;
+    struct Entry {
+        ImVec2 pos{};
+        bool initialized = false;
+        uint64_t last_seen_tick = 0;
+    };
+    std::unordered_map<uint32_t, Entry> cache_;
+    uint64_t tick_ = 0;
+    uint64_t last_prune_tick_ = 0;
+};
+
 class AgentNameCache {
 public:
 
@@ -249,6 +298,7 @@ struct NameplateSettings {
     float friendly_bar_height = 17.0f;
     float head_offset_z = -59.0f;
     float height_scale = 0.8f;
+    float position_smoothing = 0.25f;
 
     std::string priority1_raw;
     std::string priority2_raw;
@@ -285,6 +335,7 @@ public:
         LoadSetting("friendly_bar_height", settings_.friendly_bar_height);
         LoadSetting("head_offset_z", settings_.head_offset_z);
         LoadSetting("height_scale", settings_.height_scale);
+        LoadSetting("position_smoothing", settings_.position_smoothing);
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
@@ -309,6 +360,7 @@ public:
         SaveSetting("friendly_bar_height", settings_.friendly_bar_height);
         SaveSetting("head_offset_z", settings_.head_offset_z);
         SaveSetting("height_scale", settings_.height_scale);
+        SaveSetting("position_smoothing", settings_.position_smoothing);
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
@@ -342,6 +394,7 @@ private:
     bool visible_ = true;
 
     AgentNameCache name_cache_;
+    PositionSmoother position_smoother_;
     std::unordered_set<std::wstring> priority1_names_, priority2_names_, priority3_names_;
 
     static constexpr size_t kPriorityBufSize = 512;
@@ -479,8 +532,9 @@ private:
 
             if (!WithinRange(living, me)) continue;
 
-            ImVec2 screen;
-            if (!WorldToScreen(living, view, view_proj, viewport_width, viewport_height, screen)) continue;
+            ImVec2 raw_screen;
+            if (!WorldToScreen(living, view, view_proj, viewport_width, viewport_height, raw_screen)) continue;
+            const ImVec2 screen = position_smoother_.Update(living->agent_id, raw_screen, settings_.position_smoothing);
 
             const auto name_lookup = name_cache_.Get(
                 living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
@@ -510,6 +564,7 @@ private:
         }
 
         name_cache_.MaybePrune();
+        position_smoother_.MaybePrune();
     }
 
     bool ShouldShowAllegiance(GW::Constants::Allegiance allegiance) const {
@@ -738,6 +793,7 @@ private:
         ImGui::SliderFloat("Friendly bar height", &settings_.friendly_bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
         ImGui::SliderFloat("Height scale (bounding box)", &settings_.height_scale, 0.1f, 1.5f);
+        ImGui::SliderFloat("Position smoothing (lower = smoother, slower)", &settings_.position_smoothing, 0.05f, 1.0f);
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
