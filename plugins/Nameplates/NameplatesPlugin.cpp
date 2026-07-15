@@ -98,6 +98,10 @@ public:
         return e.y;
     }
 
+    void Reset(uint32_t agent_id) {
+        cache_.erase(agent_id);
+    }
+
     void MaybePrune() {
         ++tick_;
         if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
@@ -438,6 +442,7 @@ private:
         std::string display_utf8;
         bool is_targeted = false;
         bool is_name_only = false;
+        bool stack_adjusted = false;
     };
 
     ImVec2 ComputeFootprint(const GW::AgentLiving* living, const std::string& display_utf8) const {
@@ -496,6 +501,7 @@ private:
                 }
             }
 
+            item.stack_adjusted = (cur_top != natural_top);
             item.screen.y += (cur_top - natural_top);
             placed.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
         }
@@ -553,7 +559,12 @@ private:
         ResolveStacking(pending);
 
         for (auto& pb : pending) {
-            pb.screen.y = stack_y_smoother_.Update(pb.living->agent_id, pb.screen.y, settings_.stack_smoothing);
+            if (pb.stack_adjusted) {
+                pb.screen.y = stack_y_smoother_.Update(pb.living->agent_id, pb.screen.y, settings_.stack_smoothing);
+            }
+            else {
+                stack_y_smoother_.Reset(pb.living->agent_id);
+            }
         }
 
         for (const auto& pb : pending) {
