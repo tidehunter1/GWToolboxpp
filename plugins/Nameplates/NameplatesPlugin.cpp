@@ -512,7 +512,7 @@ private:
 
     void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living) const {
         if (!settings_.click_to_target) return;
-        if (ImGui::IsMouseHoveringRect(rect_min, rect_max) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (ImGui::IsMouseHoveringRect(rect_min, rect_max, false) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             GW::Agents::ChangeTarget(living->agent_id);
         }
     }
