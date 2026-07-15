@@ -256,6 +256,7 @@ struct NameplateSettings {
     bool highlight_quest = true;
     bool color_by_profession = false;
     bool name_only_mode = false;
+    bool click_to_target = true;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -288,6 +289,7 @@ public:
         LoadSetting("highlight_quest", settings_.highlight_quest);
         LoadSetting("color_by_profession", settings_.color_by_profession);
         LoadSetting("name_only_mode", settings_.name_only_mode);
+        LoadSetting("click_to_target", settings_.click_to_target);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -311,6 +313,7 @@ public:
         SaveSetting("highlight_quest", settings_.highlight_quest);
         SaveSetting("color_by_profession", settings_.color_by_profession);
         SaveSetting("name_only_mode", settings_.name_only_mode);
+        SaveSetting("click_to_target", settings_.click_to_target);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -507,6 +510,13 @@ private:
         return true;
     }
 
+    void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living) const {
+        if (!settings_.click_to_target) return;
+        if (ImGui::IsMouseHoveringRect(rect_min, rect_max) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            GW::Agents::ChangeTarget(living->agent_id);
+        }
+    }
+
     void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, const std::string& text_utf8) const {
         static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
         static constexpr float kOutlineOffset = 1.f;
@@ -531,6 +541,8 @@ private:
 
         const ImU32 text_color = ProfessionColor(living->primary);
         DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, display_utf8);
+
+        CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + text_size.x, text_y + text_size.y), living);
     }
 
     void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, bool is_targeted) {
@@ -579,6 +591,8 @@ private:
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
         draw_list->AddRect(top_left, bottom_right, border_color);
+
+        CheckClickToTarget(top_left, bottom_right, living);
 
         if (!display_name.empty()) {
             ImFont* font = ImGui::GetFont();
@@ -638,6 +652,7 @@ private:
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
         ImGui::Checkbox("Color players/heroes/henchmen by profession", &settings_.color_by_profession);
         ImGui::Checkbox("Name-only mode for players/heroes/henchmen (no bar)", &settings_.name_only_mode);
+        ImGui::Checkbox("Click nameplate to target", &settings_.click_to_target);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
         ImGui::SliderFloat("Enemy bar width", &settings_.enemy_bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Enemy bar height", &settings_.enemy_bar_height, 2.f, 20.f);
