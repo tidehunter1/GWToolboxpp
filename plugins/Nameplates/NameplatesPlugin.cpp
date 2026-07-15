@@ -410,6 +410,7 @@ private:
     static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255);
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
+    static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
 
@@ -450,7 +451,7 @@ private:
         if (settings_.name_only_mode && is_ally) {
             if (display_utf8.empty()) return ImVec2(0.f, 0.f);
             ImFont* font = ImGui::GetFont();
-            const float font_size = static_cast<float>(FontLoader::FontSize::header2);
+            const float font_size = kNameplateFontSize;
             return font->CalcTextSizeA(font_size, FLT_MAX, 0.f, display_utf8.c_str());
         }
         const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
@@ -569,11 +570,11 @@ private:
 
         for (const auto& pb : pending) {
             if (pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, false);
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false);
         }
         for (const auto& pb : pending) {
             if (!pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, true);
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true);
         }
 
         name_cache_.MaybePrune();
@@ -675,12 +676,11 @@ private:
         draw_list->AddText(font, font_size, pos, text_color, text_begin, text_end);
     }
 
-    void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::string& display_utf8) {
+    void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::string& display_utf8, const ImVec2& text_size) {
         if (display_utf8.empty()) return;
 
         ImFont* font = ImGui::GetFont();
-        const float font_size = static_cast<float>(FontLoader::FontSize::header2);
-        const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, display_utf8.c_str());
+        const float font_size = kNameplateFontSize;
 
         const float text_x = screen.x - text_size.x / 2.f;
         const float text_y = screen.y - text_size.y / 2.f;
@@ -691,11 +691,11 @@ private:
         CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + text_size.x, text_y + text_size.y), living);
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, bool is_targeted) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, const ImVec2& footprint, bool is_targeted) {
         const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
         if (settings_.name_only_mode && is_ally) {
-            DrawNameOnly(draw_list, screen, living, display_utf8);
+            DrawNameOnly(draw_list, screen, living, display_utf8, footprint);
             return;
         }
 
@@ -742,7 +742,7 @@ private:
 
         if (!display_name.empty()) {
             ImFont* font = ImGui::GetFont();
-            const float font_size = static_cast<float>(FontLoader::FontSize::header2);
+            const float font_size = kNameplateFontSize;
 
             constexpr float kPadding = 6.f;
             const float max_text_width = bar_width - kPadding * 2.f;
