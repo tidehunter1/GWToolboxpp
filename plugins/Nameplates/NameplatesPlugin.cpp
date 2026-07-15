@@ -24,6 +24,7 @@
 #include <GWCA/Managers/GameThreadMgr.h>
 
 #include <ToolboxPlugin.h>
+#include <Modules/GwDatModule.h>
 #include <Utils/FontLoader.h>
 #include <imgui.h>
 
@@ -301,7 +302,7 @@ struct NameplateSettings {
     float friendly_bar_height = 17.0f;
     float head_offset_z = -59.0f;
     float height_scale = 0.8f;
-    float stack_smoothing = 0.25f;
+    float stack_smoothing = 0.05f;
 
     std::string priority1_raw;
     std::string priority2_raw;
@@ -411,6 +412,8 @@ private:
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
+    static constexpr uint32_t kHealthBarSpriteFileId = 0x1737b;
+    static constexpr int kHealthBarSpriteLayers = 4;
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
 
@@ -734,8 +737,32 @@ private:
 
         const ImU32 border_color = is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
 
-        draw_list->AddRectFilled(top_left, bottom_right, bg_color);
-        draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
+        IDirect3DTexture9** tex_pp = GwDatModule::LoadTextureFromFileId(kHealthBarSpriteFileId);
+        IDirect3DTexture9* tex = tex_pp ? *tex_pp : nullptr;
+
+        if (tex) {
+            // Experimental: 0x1737b is claimed to be the client's native
+            // health-bar sprite, a vertical atlas of 4 stacked frames. Layer
+            // index/purpose is unverified against the real asset - using
+            // layer 0 for both background and fill, distinguished only by
+            // tint, since we don't actually know which of the 4 frames (if
+            // any) is specifically a "background-only" shape.
+            constexpr int kLayer = 0;
+            const ImVec2 uv0(0.f, static_cast<float>(kLayer) / kHealthBarSpriteLayers);
+            const ImVec2 uv1(1.f, static_cast<float>(kLayer + 1) / kHealthBarSpriteLayers);
+
+            const ImVec2 fill_uv1(uv0.x + (uv1.x - uv0.x) * hp_pct, uv1.y);
+            const ImVec2 fill_uv0 = uv0;
+
+            draw_list->AddImage(tex, top_left, bottom_right, uv0, uv1, bg_color);
+            if (hp_pct > 0.f) {
+                draw_list->AddImage(tex, top_left, fill_bottom_right, fill_uv0, fill_uv1, fill_color);
+            }
+        }
+        else {
+            draw_list->AddRectFilled(top_left, bottom_right, bg_color);
+            draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
+        }
         draw_list->AddRect(top_left, bottom_right, border_color);
 
         CheckClickToTarget(top_left, bottom_right, living);
