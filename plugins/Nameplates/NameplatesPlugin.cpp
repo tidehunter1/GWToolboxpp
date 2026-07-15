@@ -35,6 +35,8 @@
 #include <cwchar>
 #include <optional>
 #include <cfloat>
+#include <algorithm>
+#include <utility>
 
 inline std::wstring Utf8ToWide(const std::string& utf8) {
     if (utf8.empty()) return {};
@@ -375,6 +377,78 @@ private:
         return std::nullopt;
     }
 
+    struct PendingBar {
+        GW::AgentLiving* living = nullptr;
+        ImVec2 screen{};
+        ImVec2 footprint{};
+        std::wstring name_lower;
+        std::wstring display;
+        std::string display_utf8;
+        bool is_targeted = false;
+        bool is_name_only = false;
+    };
+
+    ImVec2 ComputeFootprint(const GW::AgentLiving* living, const std::string& display_utf8) const {
+        const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
+        if (settings_.name_only_mode && is_ally) {
+            if (display_utf8.empty()) return ImVec2(0.f, 0.f);
+            ImFont* font = ImGui::GetFont();
+            const float font_size = static_cast<float>(FontLoader::FontSize::header2);
+            return font->CalcTextSizeA(font_size, FLT_MAX, 0.f, display_utf8.c_str());
+        }
+        const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
+        return ImVec2(is_enemy ? settings_.enemy_bar_width : settings_.friendly_bar_width,
+                      is_enemy ? settings_.enemy_bar_height : settings_.friendly_bar_height);
+    }
+
+    // Vertical-only stacking: sorts candidates top-to-bottom by their natural
+    // screen position, then places each one in order, pushing it upward
+    // (repeatedly, in case that creates a new conflict further up) until its
+    // footprint no longer overlaps any already-placed one. Bars that never
+    // conflict with anything keep their natural position untouched.
+    void ResolveStacking(std::vector<PendingBar>& items) const {
+        static constexpr float kGap = 2.f;
+
+        std::vector<size_t> order(items.size());
+        for (size_t i = 0; i < items.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            return items[a].screen.y < items[b].screen.y;
+        });
+
+        struct PlacedRect { float x_min, x_max, y_min, y_max; };
+        std::vector<PlacedRect> placed;
+        placed.reserve(items.size());
+
+        for (size_t oi : order) {
+            PendingBar& item = items[oi];
+            if (item.footprint.x <= 0.f || item.footprint.y <= 0.f) continue;
+
+            const float half_w = item.footprint.x / 2.f;
+            const float x_min = item.screen.x - half_w;
+            const float x_max = item.screen.x + half_w;
+            const float natural_top = item.is_name_only ? item.screen.y - item.footprint.y / 2.f : item.screen.y;
+
+            float cur_top = natural_top;
+            bool moved = true;
+            while (moved) {
+                moved = false;
+                for (const auto& p : placed) {
+                    const float y_min = cur_top;
+                    const float y_max = cur_top + item.footprint.y;
+                    const bool overlap_x = x_min < p.x_max && x_max > p.x_min;
+                    const bool overlap_y = y_min < p.y_max && y_max > p.y_min;
+                    if (overlap_x && overlap_y) {
+                        cur_top = p.y_min - item.footprint.y - kGap;
+                        moved = true;
+                    }
+                }
+            }
+
+            item.screen.y += (cur_top - natural_top);
+            placed.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
+        }
+    }
+
     void DrawNameplates() {
         GW::AgentArray* agents = GW::Agents::GetAgentArray();
         if (!agents || !agents->valid()) return;
@@ -388,12 +462,7 @@ private:
 
         ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 
-        bool have_targeted_bar = false;
-        ImVec2 targeted_screen;
-        GW::AgentLiving* targeted_living = nullptr;
-        std::wstring targeted_name_lower;
-        std::wstring targeted_display_name;
-        std::string targeted_display_utf8;
+        std::vector<PendingBar> pending;
 
         for (GW::Agent* agent : *agents) {
             if (!agent) continue;
@@ -416,23 +485,28 @@ private:
             const auto name_lookup = name_cache_.Get(
                 living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
 
-            const bool is_targeted = settings_.color_target && target && living->agent_id == target->agent_id;
+            PendingBar pb;
+            pb.living = living;
+            pb.screen = screen;
+            pb.name_lower = name_lookup.lower;
+            pb.display = name_lookup.display;
+            pb.display_utf8 = name_lookup.display_utf8;
+            pb.is_targeted = settings_.color_target && target && living->agent_id == target->agent_id;
+            pb.is_name_only = settings_.name_only_mode && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
+            pb.footprint = ComputeFootprint(living, pb.display_utf8);
 
-            if (is_targeted) {
-                have_targeted_bar = true;
-                targeted_screen = screen;
-                targeted_living = living;
-                targeted_name_lower = name_lookup.lower;
-                targeted_display_name = name_lookup.display;
-                targeted_display_utf8 = name_lookup.display_utf8;
-                continue;
-            }
-
-            DrawBar(draw_list, screen, living, name_lookup.lower, name_lookup.display, name_lookup.display_utf8, false);
+            pending.push_back(std::move(pb));
         }
 
-        if (have_targeted_bar) {
-            DrawBar(draw_list, targeted_screen, targeted_living, targeted_name_lower, targeted_display_name, targeted_display_utf8, true);
+        ResolveStacking(pending);
+
+        for (const auto& pb : pending) {
+            if (pb.is_targeted) continue;
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, false);
+        }
+        for (const auto& pb : pending) {
+            if (!pb.is_targeted) continue;
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, true);
         }
 
         name_cache_.MaybePrune();
