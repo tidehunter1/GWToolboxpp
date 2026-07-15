@@ -21,6 +21,7 @@
 #include <GWCA/Managers/CameraMgr.h>
 #include <GWCA/Managers/RenderMgr.h>
 #include <GWCA/Managers/UIMgr.h>
+#include <GWCA/Managers/GameThreadMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <Utils/FontLoader.h>
@@ -513,7 +514,10 @@ private:
     void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living) const {
         if (!settings_.click_to_target) return;
         if (ImGui::IsMouseHoveringRect(rect_min, rect_max, false) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            GW::Agents::ChangeTarget(living->agent_id);
+            const uint32_t agent_id = living->agent_id;
+            GW::GameThread::Enqueue([agent_id] {
+                GW::Agents::ChangeTarget(agent_id);
+            });
         }
     }
 
