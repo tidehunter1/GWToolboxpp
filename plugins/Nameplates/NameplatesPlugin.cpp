@@ -21,6 +21,8 @@
 #include <GWCA/Managers/CameraMgr.h>
 #include <GWCA/Managers/RenderMgr.h>
 #include <GWCA/Managers/UIMgr.h>
+#include <GWCA/Managers/MapMgr.h>
+#include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 
 #include <ToolboxPlugin.h>
@@ -491,6 +493,7 @@ private:
 
         GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
         GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
+        const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
 
         DirectX::XMMATRIX view, view_proj;
         float viewport_width, viewport_height;
@@ -526,6 +529,10 @@ private:
             }
             else if (is_allied) {
                 if (living->hp * 100.f > settings_.allied_health_threshold) continue;
+                if (in_outpost) {
+                    const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
+                    if (npc && npc->IsHenchman()) continue;
+                }
             }
 
             if (!WithinRange(living, me)) continue;
