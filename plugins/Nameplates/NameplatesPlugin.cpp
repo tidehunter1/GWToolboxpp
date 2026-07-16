@@ -429,6 +429,7 @@ private:
         if (settings_.name_only_mode && is_ally) {
             if (display_utf8.empty()) return ImVec2(0.f, 0.f);
             ImFont* font = ImGui::GetFont();
+            if (!font) return ImVec2(0.f, 0.f);
             const float font_size = kNameplateFontSize;
             return font->CalcTextSizeA(font_size, FLT_MAX, 0.f, display_utf8.c_str());
         }
@@ -611,6 +612,7 @@ private:
 
         out_viewport_width  = static_cast<float>(GW::Render::GetViewportWidth());
         out_viewport_height = static_cast<float>(GW::Render::GetViewportHeight());
+        if (out_viewport_width <= 0.f || out_viewport_height <= 0.f) return false;
 
         const float fov = GW::Render::GetFieldOfView();
         const float aspect = out_viewport_width / out_viewport_height;
@@ -683,6 +685,7 @@ private:
         if (display_utf8.empty()) return;
 
         ImFont* font = ImGui::GetFont();
+        if (!font) return;
         const float font_size = kNameplateFontSize;
 
         const float text_x = screen.x - text_size.x / 2.f;
@@ -744,20 +747,22 @@ private:
 
         if (!display_name.empty()) {
             ImFont* font = ImGui::GetFont();
-            const float font_size = kNameplateFontSize;
+            if (font) {
+                const float font_size = kNameplateFontSize;
 
-            constexpr float kPadding = 6.f;
-            const float max_text_width = bar_width - kPadding * 2.f;
+                constexpr float kPadding = 6.f;
+                const float max_text_width = bar_width - kPadding * 2.f;
 
-            if (max_text_width > 0.f) {
-                const std::string clipped_utf8 = TruncateWithEllipsis(font, font_size, display_name, display_utf8, max_text_width);
-                const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, clipped_utf8.c_str());
+                if (max_text_width > 0.f) {
+                    const std::string clipped_utf8 = TruncateWithEllipsis(font, font_size, display_name, display_utf8, max_text_width);
+                    const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, clipped_utf8.c_str());
 
-                const float text_x = top_left.x + kPadding;
-                const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
+                    const float text_x = top_left.x + kPadding;
+                    const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
 
-                static constexpr ImU32 kTextColor = IM_COL32(255, 255, 255, 255);
-                DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), kTextColor, clipped_utf8);
+                    static constexpr ImU32 kTextColor = IM_COL32(255, 255, 255, 255);
+                    DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), kTextColor, clipped_utf8);
+                }
             }
         }
     }
@@ -793,14 +798,14 @@ private:
 
     void DrawSettingsInternal() {
         ImGui::Checkbox("Show enemies", &settings_.show_enemies);
-        ImGui::Checkbox("Allied name-only mode", &settings_.name_only_mode);
+        ImGui::Checkbox("Ally name-only mode", &settings_.name_only_mode);
         ShowHelpMarker("Show Players/Heroes/Henchmen names only");
-        ImGui::SliderFloat("NPC Visibility Threshold", &settings_.npc_health_threshold, 0.f, 100.f);
+        ImGui::SliderFloat("NPC visibility threshold", &settings_.npc_health_threshold, 0.f, 100.f);
         ShowHelpMarker("100 = always show");
-        ImGui::SliderFloat("Allied Visibility Threshold", &settings_.allied_health_threshold, 0.f, 100.f);
+        ImGui::SliderFloat("Ally visibility threshold", &settings_.allied_health_threshold, 0.f, 100.f);
         ShowHelpMarker("Players/Heroes/Henchmen, 100 = always show");
-        ImGui::Checkbox("Show quest-givers", &settings_.friendly_quest_only);
-        ShowHelpMarker("Overrides the NPC Visibility Threshold slider");
+        ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
+        ShowHelpMarker("Overrides the NPC visibility threshold slider");
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
