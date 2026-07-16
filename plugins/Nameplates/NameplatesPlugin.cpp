@@ -292,10 +292,9 @@ inline std::unordered_set<std::wstring> ParseSemicolonNameList(const std::string
 struct NameplateSettings {
     bool show_enemies = true;
     bool show_allies = true;
-    bool show_neutrals = false;
     float max_range = 1500.0f;
-    float bar_width = 100.0f;
-    float bar_height = 17.0f;
+    float bar_width = 200.0f;
+    float bar_height = 20.0f;
     float head_offset_z = -59.0f;
     float height_scale = 0.8f;
 
@@ -303,7 +302,6 @@ struct NameplateSettings {
     std::string priority2_raw;
     std::string priority3_raw;
 
-    bool highlight_quest = true;
     float friendly_health_threshold = 100.0f;
     bool friendly_quest_only = false;
     bool name_only_mode = false;
@@ -323,7 +321,6 @@ public:
         LoadSetting("visible", visible_);
         LoadSetting("show_enemies", settings_.show_enemies);
         LoadSetting("show_allies", settings_.show_allies);
-        LoadSetting("show_neutrals", settings_.show_neutrals);
         LoadSetting("max_range", settings_.max_range);
         LoadSetting("bar_width", settings_.bar_width);
         LoadSetting("bar_height", settings_.bar_height);
@@ -332,7 +329,6 @@ public:
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
-        LoadSetting("highlight_quest", settings_.highlight_quest);
         LoadSetting("friendly_health_threshold", settings_.friendly_health_threshold);
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
@@ -343,7 +339,6 @@ public:
         SaveSetting("visible", visible_);
         SaveSetting("show_enemies", settings_.show_enemies);
         SaveSetting("show_allies", settings_.show_allies);
-        SaveSetting("show_neutrals", settings_.show_neutrals);
         SaveSetting("max_range", settings_.max_range);
         SaveSetting("bar_width", settings_.bar_width);
         SaveSetting("bar_height", settings_.bar_height);
@@ -352,7 +347,6 @@ public:
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
-        SaveSetting("highlight_quest", settings_.highlight_quest);
         SaveSetting("friendly_health_threshold", settings_.friendly_health_threshold);
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
@@ -579,7 +573,7 @@ private:
                 return settings_.show_allies;
             case GW::Constants::Allegiance::Neutral:
             case GW::Constants::Allegiance::Npc_Minipet:
-                return settings_.show_neutrals;
+                return true;
             default:
                 return false;
         }
@@ -651,6 +645,19 @@ private:
         }
     }
 
+    // Mirrors GWToolbox's own ImGuiAddons::ShowHelp pattern (SameLine + "(?)"
+    // + tooltip on hover), reimplemented locally with only core ImGui calls -
+    // the original is declared IMGUI_API in ImGuiAddons.h, the same export
+    // category that failed to link from this plugin before (FontLoader::GetFont,
+    // GwDatModule::LoadTextureFromFileId), so this avoids that risk entirely.
+    void ShowHelpMarker(const char* help) const {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", help);
+        }
+    }
+
     void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, const std::string& text_utf8) const {
         static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
         static constexpr float kOutlineOffset = 1.f;
@@ -700,7 +707,7 @@ private:
         if (const auto priority_color = GetPriorityColor(name_lower)) {
             fill_color = *priority_color;
         }
-        else if (settings_.highlight_quest && living->GetHasQuest()) {
+        else if (living->GetHasQuest()) {
             fill_color = kQuestColor;
         }
         else if (is_ally) {
@@ -776,12 +783,11 @@ private:
     }
 
     void DrawSettingsInternal() {
-        ImGui::Checkbox("Show enemies (default red)", &settings_.show_enemies);
+        ImGui::Checkbox("Show enemies", &settings_.show_enemies);
         ImGui::Checkbox("Show players/heroes/henchmen", &settings_.show_allies);
-        ImGui::Checkbox("Show NPCs", &settings_.show_neutrals);
-        ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
-        ImGui::SliderFloat("Only show friendlies below HP% (100 = always show)", &settings_.friendly_health_threshold, 0.f, 100.f);
-        ImGui::Checkbox("Only show friendlies with a quest available", &settings_.friendly_quest_only);
+        ImGui::SliderFloat("Friendly Visibility Threshold", &settings_.friendly_health_threshold, 0.f, 100.f);
+        ShowHelpMarker("100 = always show");
+        ImGui::Checkbox("Filter quest NPCs only", &settings_.friendly_quest_only);
         ImGui::Checkbox("Name-only mode for players/heroes/henchmen (no bar)", &settings_.name_only_mode);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 200.f);
