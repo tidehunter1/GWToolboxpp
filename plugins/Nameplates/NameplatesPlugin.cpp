@@ -290,31 +290,23 @@ inline std::unordered_set<std::wstring> ParseSemicolonNameList(const std::string
 }
 
 struct NameplateSettings {
-    bool enabled = true;
     bool show_enemies = true;
     bool show_allies = true;
     bool show_neutrals = false;
     float max_range = 1500.0f;
-    float enemy_bar_width = 200.0f;
-    float enemy_bar_height = 20.0f;
-    float friendly_bar_width = 80.0f;
-    float friendly_bar_height = 17.0f;
+    float bar_width = 100.0f;
+    float bar_height = 17.0f;
     float head_offset_z = -59.0f;
     float height_scale = 0.8f;
-    float stack_smoothing = 0.05f;
 
     std::string priority1_raw;
     std::string priority2_raw;
     std::string priority3_raw;
 
-    bool color_target = true;
-
     bool highlight_quest = true;
-    bool color_by_profession = false;
     float friendly_health_threshold = 100.0f;
     bool friendly_quest_only = false;
     bool name_only_mode = false;
-    bool click_to_target = true;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -329,55 +321,41 @@ public:
     void LoadSettings(const wchar_t* folder) override {
         ToolboxPlugin::LoadSettings(folder);
         LoadSetting("visible", visible_);
-        LoadSetting("enabled", settings_.enabled);
         LoadSetting("show_enemies", settings_.show_enemies);
         LoadSetting("show_allies", settings_.show_allies);
         LoadSetting("show_neutrals", settings_.show_neutrals);
         LoadSetting("max_range", settings_.max_range);
-        LoadSetting("enemy_bar_width", settings_.enemy_bar_width);
-        LoadSetting("enemy_bar_height", settings_.enemy_bar_height);
-        LoadSetting("friendly_bar_width", settings_.friendly_bar_width);
-        LoadSetting("friendly_bar_height", settings_.friendly_bar_height);
+        LoadSetting("bar_width", settings_.bar_width);
+        LoadSetting("bar_height", settings_.bar_height);
         LoadSetting("head_offset_z", settings_.head_offset_z);
         LoadSetting("height_scale", settings_.height_scale);
-        LoadSetting("stack_smoothing", settings_.stack_smoothing);
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
-        LoadSetting("color_target", settings_.color_target);
         LoadSetting("highlight_quest", settings_.highlight_quest);
-        LoadSetting("color_by_profession", settings_.color_by_profession);
         LoadSetting("friendly_health_threshold", settings_.friendly_health_threshold);
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
-        LoadSetting("click_to_target", settings_.click_to_target);
         RefreshPriorityBuffersAndLists();
     }
 
     void SaveSettings(const wchar_t* folder) override {
         SaveSetting("visible", visible_);
-        SaveSetting("enabled", settings_.enabled);
         SaveSetting("show_enemies", settings_.show_enemies);
         SaveSetting("show_allies", settings_.show_allies);
         SaveSetting("show_neutrals", settings_.show_neutrals);
         SaveSetting("max_range", settings_.max_range);
-        SaveSetting("enemy_bar_width", settings_.enemy_bar_width);
-        SaveSetting("enemy_bar_height", settings_.enemy_bar_height);
-        SaveSetting("friendly_bar_width", settings_.friendly_bar_width);
-        SaveSetting("friendly_bar_height", settings_.friendly_bar_height);
+        SaveSetting("bar_width", settings_.bar_width);
+        SaveSetting("bar_height", settings_.bar_height);
         SaveSetting("head_offset_z", settings_.head_offset_z);
         SaveSetting("height_scale", settings_.height_scale);
-        SaveSetting("stack_smoothing", settings_.stack_smoothing);
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
-        SaveSetting("color_target", settings_.color_target);
         SaveSetting("highlight_quest", settings_.highlight_quest);
-        SaveSetting("color_by_profession", settings_.color_by_profession);
         SaveSetting("friendly_health_threshold", settings_.friendly_health_threshold);
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
-        SaveSetting("click_to_target", settings_.click_to_target);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -394,7 +372,6 @@ public:
     bool CanTerminate() override { return true; }
 
     void Draw(IDirect3DDevice9* ) override {
-        if (!settings_.enabled) return;
         DrawNameplates();
     }
 
@@ -417,6 +394,7 @@ private:
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
+    static constexpr float kStackSmoothing = 0.05f;
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
 
@@ -460,9 +438,7 @@ private:
             const float font_size = kNameplateFontSize;
             return font->CalcTextSizeA(font_size, FLT_MAX, 0.f, display_utf8.c_str());
         }
-        const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
-        return ImVec2(is_enemy ? settings_.enemy_bar_width : settings_.friendly_bar_width,
-                      is_enemy ? settings_.enemy_bar_height : settings_.friendly_bar_height);
+        return ImVec2(settings_.bar_width, settings_.bar_height);
     }
 
     // Vertical-only stacking: sorts candidates top-to-bottom by their natural
@@ -543,8 +519,9 @@ private:
             if (!ShouldShowAllegiance(living->allegiance)) continue;
 
             if (living->allegiance != GW::Constants::Allegiance::Enemy) {
-                if (living->hp * 100.f > settings_.friendly_health_threshold) continue;
-                if (settings_.friendly_quest_only && !living->GetHasQuest()) continue;
+                const bool passes_health = (living->hp * 100.f <= settings_.friendly_health_threshold);
+                const bool passes_quest = settings_.friendly_quest_only && living->GetHasQuest();
+                if (!passes_health && !passes_quest) continue;
             }
 
             if (!WithinRange(living, me)) continue;
@@ -561,7 +538,7 @@ private:
             pb.name_lower = name_lookup.lower;
             pb.display = name_lookup.display;
             pb.display_utf8 = name_lookup.display_utf8;
-            pb.is_targeted = settings_.color_target && target && living->agent_id == target->agent_id;
+            pb.is_targeted = target && living->agent_id == target->agent_id;
             pb.is_name_only = settings_.name_only_mode && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
             pb.footprint = ComputeFootprint(living, pb.display_utf8);
 
@@ -572,7 +549,7 @@ private:
 
         for (auto& pb : pending) {
             if (pb.stack_adjusted) {
-                pb.screen.y = stack_y_smoother_.Update(pb.living->agent_id, pb.screen.y, settings_.stack_smoothing);
+                pb.screen.y = stack_y_smoother_.Update(pb.living->agent_id, pb.screen.y, kStackSmoothing);
             }
             else {
                 stack_y_smoother_.Reset(pb.living->agent_id);
@@ -666,7 +643,6 @@ private:
     }
 
     void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living) const {
-        if (!settings_.click_to_target) return;
         if (ImGui::IsMouseHoveringRect(rect_min, rect_max, false) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             const uint32_t agent_id = living->agent_id;
             GW::GameThread::Enqueue([agent_id] {
@@ -713,9 +689,8 @@ private:
         float hp_pct = living->hp;
         hp_pct = hp_pct < 0.f ? 0.f : (hp_pct > 1.f ? 1.f : hp_pct);
 
-        const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
-        const float bar_width = is_enemy ? settings_.enemy_bar_width : settings_.friendly_bar_width;
-        const float bar_height = is_enemy ? settings_.enemy_bar_height : settings_.friendly_bar_height;
+        const float bar_width = settings_.bar_width;
+        const float bar_height = settings_.bar_height;
 
         const ImVec2 top_left(screen.x - bar_width / 2.f, screen.y);
         const ImVec2 bottom_right(top_left.x + bar_width, top_left.y + bar_height);
@@ -728,7 +703,7 @@ private:
         else if (settings_.highlight_quest && living->GetHasQuest()) {
             fill_color = kQuestColor;
         }
-        else if (settings_.color_by_profession && is_ally) {
+        else if (is_ally) {
             fill_color = ProfessionColor(living->primary);
         }
         else {
@@ -801,25 +776,18 @@ private:
     }
 
     void DrawSettingsInternal() {
-        ImGui::Checkbox("Enabled", &settings_.enabled);
         ImGui::Checkbox("Show enemies (default red)", &settings_.show_enemies);
         ImGui::Checkbox("Show players/heroes/henchmen", &settings_.show_allies);
         ImGui::Checkbox("Show NPCs", &settings_.show_neutrals);
-        ImGui::Checkbox("Color target (yellow border)", &settings_.color_target);
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
-        ImGui::Checkbox("Color players/heroes/henchmen by profession", &settings_.color_by_profession);
         ImGui::SliderFloat("Only show friendlies below HP% (100 = always show)", &settings_.friendly_health_threshold, 0.f, 100.f);
         ImGui::Checkbox("Only show friendlies with a quest available", &settings_.friendly_quest_only);
         ImGui::Checkbox("Name-only mode for players/heroes/henchmen (no bar)", &settings_.name_only_mode);
-        ImGui::Checkbox("Click nameplate to target", &settings_.click_to_target);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
-        ImGui::SliderFloat("Enemy bar width", &settings_.enemy_bar_width, 10.f, 200.f);
-        ImGui::SliderFloat("Enemy bar height", &settings_.enemy_bar_height, 2.f, 20.f);
-        ImGui::SliderFloat("Friendly bar width", &settings_.friendly_bar_width, 10.f, 200.f);
-        ImGui::SliderFloat("Friendly bar height", &settings_.friendly_bar_height, 2.f, 20.f);
+        ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 200.f);
+        ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
         ImGui::SliderFloat("Height scale (bounding box)", &settings_.height_scale, 0.1f, 1.5f);
-        ImGui::SliderFloat("Stacking transition smoothing (Y only, lower = smoother)", &settings_.stack_smoothing, 0.05f, 1.0f);
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
