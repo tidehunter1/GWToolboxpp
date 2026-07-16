@@ -426,9 +426,8 @@ private:
         bool stack_adjusted = false;
     };
 
-    ImVec2 ComputeFootprint(const GW::AgentLiving* living, const std::string& display_utf8) const {
-        const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
-        if (settings_.name_only_mode && is_ally) {
+    ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8) const {
+        if (is_name_only) {
             if (display_utf8.empty()) return ImVec2(0.f, 0.f);
             ImFont* font = ImGui::GetFont();
             if (!font) return ImVec2(0.f, 0.f);
@@ -513,6 +512,8 @@ private:
             if (living->GetIsDead()) continue;
             if (me && living->agent_id == me->agent_id) continue;
             if (IsMinipet(living->player_number)) continue;
+            if (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
+                || living->allegiance == GW::Constants::Allegiance::Minion) continue;
 
             if (!ShouldShowAllegiance(living->allegiance)) continue;
 
@@ -550,8 +551,8 @@ private:
             pb.display = name_lookup.display;
             pb.display_utf8 = name_lookup.display_utf8;
             pb.is_targeted = target && living->agent_id == target->agent_id;
-            pb.is_name_only = settings_.name_only_mode && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
-            pb.footprint = ComputeFootprint(living, pb.display_utf8);
+            pb.is_name_only = settings_.name_only_mode && in_outpost && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
+            pb.footprint = ComputeFootprint(pb.is_name_only, pb.display_utf8);
 
             pending.push_back(std::move(pb));
         }
@@ -569,11 +570,11 @@ private:
 
         for (const auto& pb : pending) {
             if (pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false);
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false, pb.is_name_only);
         }
         for (const auto& pb : pending) {
             if (!pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true);
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true, pb.is_name_only);
         }
 
         name_cache_.MaybePrune();
@@ -704,10 +705,10 @@ private:
         CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + text_size.x, text_y + text_size.y), living);
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, const ImVec2& footprint, bool is_targeted) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, const ImVec2& footprint, bool is_targeted, bool is_name_only) {
         const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
-        if (settings_.name_only_mode && is_ally) {
+        if (is_name_only) {
             DrawNameOnly(draw_list, screen, living, display_utf8, footprint);
             return;
         }
