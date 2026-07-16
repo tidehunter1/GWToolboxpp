@@ -307,6 +307,7 @@ struct NameplateSettings {
     float allied_health_threshold = 100.0f;
     bool friendly_quest_only = false;
     bool name_only_mode = false;
+    bool show_summoned_allies = false;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -334,6 +335,7 @@ public:
         LoadSetting("allied_health_threshold", settings_.allied_health_threshold);
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
+        LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -352,6 +354,7 @@ public:
         SaveSetting("allied_health_threshold", settings_.allied_health_threshold);
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
+        SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -512,8 +515,9 @@ private:
             if (living->GetIsDead()) continue;
             if (me && living->agent_id == me->agent_id) continue;
             if (IsMinipet(living->player_number)) continue;
-            if (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
-                || living->allegiance == GW::Constants::Allegiance::Minion) continue;
+            if (!settings_.show_summoned_allies
+                && (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
+                    || living->allegiance == GW::Constants::Allegiance::Minion)) continue;
 
             if (!ShouldShowAllegiance(living->allegiance)) continue;
 
@@ -529,7 +533,8 @@ private:
                 if (!passes_threshold && !passes_quest) continue;
             }
             else if (is_allied) {
-                if (living->hp * 100.f > settings_.allied_health_threshold) continue;
+                const bool always_show_player_in_outpost = in_outpost && living->IsPlayer();
+                if (!always_show_player_in_outpost && living->hp * 100.f > settings_.allied_health_threshold) continue;
                 if (in_outpost) {
                     GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
                     if (npc && npc->IsHenchman()) continue;
@@ -808,6 +813,8 @@ private:
         ImGui::Checkbox("Show enemies", &settings_.show_enemies);
         ImGui::Checkbox("Ally name-only mode", &settings_.name_only_mode);
         ShowHelpMarker("Show Players/Heroes/Henchmen names only");
+        ImGui::Checkbox("Show allied summoned creatures", &settings_.show_summoned_allies);
+        ShowHelpMarker("Shows spirits and minions");
         ImGui::SliderFloat("NPC visibility threshold", &settings_.npc_health_threshold, 0.f, 100.f);
         ShowHelpMarker("100 = always show");
         ImGui::SliderFloat("Ally visibility threshold", &settings_.allied_health_threshold, 0.f, 100.f);
