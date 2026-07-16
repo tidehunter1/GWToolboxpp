@@ -291,7 +291,6 @@ inline std::unordered_set<std::wstring> ParseSemicolonNameList(const std::string
 
 struct NameplateSettings {
     bool show_enemies = true;
-    bool show_allies = true;
     float max_range = 1500.0f;
     float bar_width = 200.0f;
     float bar_height = 20.0f;
@@ -302,7 +301,8 @@ struct NameplateSettings {
     std::string priority2_raw;
     std::string priority3_raw;
 
-    float friendly_health_threshold = 100.0f;
+    float npc_health_threshold = 100.0f;
+    float allied_health_threshold = 100.0f;
     bool friendly_quest_only = false;
     bool name_only_mode = false;
 };
@@ -320,7 +320,6 @@ public:
         ToolboxPlugin::LoadSettings(folder);
         LoadSetting("visible", visible_);
         LoadSetting("show_enemies", settings_.show_enemies);
-        LoadSetting("show_allies", settings_.show_allies);
         LoadSetting("max_range", settings_.max_range);
         LoadSetting("bar_width", settings_.bar_width);
         LoadSetting("bar_height", settings_.bar_height);
@@ -329,7 +328,8 @@ public:
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
-        LoadSetting("friendly_health_threshold", settings_.friendly_health_threshold);
+        LoadSetting("npc_health_threshold", settings_.npc_health_threshold);
+        LoadSetting("allied_health_threshold", settings_.allied_health_threshold);
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
         RefreshPriorityBuffersAndLists();
@@ -338,7 +338,6 @@ public:
     void SaveSettings(const wchar_t* folder) override {
         SaveSetting("visible", visible_);
         SaveSetting("show_enemies", settings_.show_enemies);
-        SaveSetting("show_allies", settings_.show_allies);
         SaveSetting("max_range", settings_.max_range);
         SaveSetting("bar_width", settings_.bar_width);
         SaveSetting("bar_height", settings_.bar_height);
@@ -347,7 +346,8 @@ public:
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
-        SaveSetting("friendly_health_threshold", settings_.friendly_health_threshold);
+        SaveSetting("npc_health_threshold", settings_.npc_health_threshold);
+        SaveSetting("allied_health_threshold", settings_.allied_health_threshold);
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
         ToolboxPlugin::SaveSettings(folder);
@@ -512,10 +512,19 @@ private:
 
             if (!ShouldShowAllegiance(living->allegiance)) continue;
 
-            if (living->allegiance != GW::Constants::Allegiance::Enemy) {
-                const bool passes_health = (living->hp * 100.f <= settings_.friendly_health_threshold);
+            const bool is_npc = living->allegiance == GW::Constants::Allegiance::Neutral
+                || living->allegiance == GW::Constants::Allegiance::Npc_Minipet;
+            const bool is_allied = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable
+                || living->allegiance == GW::Constants::Allegiance::Spirit_Pet
+                || living->allegiance == GW::Constants::Allegiance::Minion;
+
+            if (is_npc) {
+                const bool passes_threshold = (living->hp * 100.f <= settings_.npc_health_threshold);
                 const bool passes_quest = settings_.friendly_quest_only && living->GetHasQuest();
-                if (!passes_health && !passes_quest) continue;
+                if (!passes_threshold && !passes_quest) continue;
+            }
+            else if (is_allied) {
+                if (living->hp * 100.f > settings_.allied_health_threshold) continue;
             }
 
             if (!WithinRange(living, me)) continue;
@@ -570,7 +579,7 @@ private:
             case GW::Constants::Allegiance::Ally_NonAttackable:
             case GW::Constants::Allegiance::Spirit_Pet:
             case GW::Constants::Allegiance::Minion:
-                return settings_.show_allies;
+                return true;
             case GW::Constants::Allegiance::Neutral:
             case GW::Constants::Allegiance::Npc_Minipet:
                 return true;
@@ -784,11 +793,14 @@ private:
 
     void DrawSettingsInternal() {
         ImGui::Checkbox("Show enemies", &settings_.show_enemies);
-        ImGui::Checkbox("Show players/heroes/henchmen", &settings_.show_allies);
-        ImGui::SliderFloat("Friendly Visibility Threshold", &settings_.friendly_health_threshold, 0.f, 100.f);
+        ImGui::Checkbox("Allied name-only mode", &settings_.name_only_mode);
+        ShowHelpMarker("Show Players/Heroes/Henchmen names only");
+        ImGui::SliderFloat("NPC Visibility Threshold", &settings_.npc_health_threshold, 0.f, 100.f);
         ShowHelpMarker("100 = always show");
-        ImGui::Checkbox("Filter quest NPCs only", &settings_.friendly_quest_only);
-        ImGui::Checkbox("Name-only mode for players/heroes/henchmen (no bar)", &settings_.name_only_mode);
+        ImGui::SliderFloat("Allied Visibility Threshold", &settings_.allied_health_threshold, 0.f, 100.f);
+        ShowHelpMarker("Players/Heroes/Henchmen, 100 = always show");
+        ImGui::Checkbox("Show quest-givers", &settings_.friendly_quest_only);
+        ShowHelpMarker("Overrides the NPC Visibility Threshold slider");
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
