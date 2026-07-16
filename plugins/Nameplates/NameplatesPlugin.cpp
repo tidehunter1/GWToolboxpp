@@ -24,7 +24,6 @@
 #include <GWCA/Managers/GameThreadMgr.h>
 
 #include <ToolboxPlugin.h>
-#include <Modules/GwDatModule.h>
 #include <Utils/FontLoader.h>
 #include <imgui.h>
 
@@ -312,6 +311,8 @@ struct NameplateSettings {
 
     bool highlight_quest = true;
     bool color_by_profession = false;
+    float friendly_health_threshold = 100.0f;
+    bool friendly_quest_only = false;
     bool name_only_mode = false;
     bool click_to_target = true;
 };
@@ -346,6 +347,8 @@ public:
         LoadSetting("color_target", settings_.color_target);
         LoadSetting("highlight_quest", settings_.highlight_quest);
         LoadSetting("color_by_profession", settings_.color_by_profession);
+        LoadSetting("friendly_health_threshold", settings_.friendly_health_threshold);
+        LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
         LoadSetting("click_to_target", settings_.click_to_target);
         RefreshPriorityBuffersAndLists();
@@ -371,6 +374,8 @@ public:
         SaveSetting("color_target", settings_.color_target);
         SaveSetting("highlight_quest", settings_.highlight_quest);
         SaveSetting("color_by_profession", settings_.color_by_profession);
+        SaveSetting("friendly_health_threshold", settings_.friendly_health_threshold);
+        SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
         SaveSetting("click_to_target", settings_.click_to_target);
         ToolboxPlugin::SaveSettings(folder);
@@ -412,8 +417,6 @@ private:
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
-    static constexpr uint32_t kHealthBarSpriteFileId = 0x1737b;
-    static constexpr int kHealthBarSpriteLayers = 4;
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
 
@@ -538,6 +541,11 @@ private:
             if (IsMinipet(living->player_number)) continue;
 
             if (!ShouldShowAllegiance(living->allegiance)) continue;
+
+            if (living->allegiance != GW::Constants::Allegiance::Enemy) {
+                if (living->hp * 100.f > settings_.friendly_health_threshold) continue;
+                if (settings_.friendly_quest_only && !living->GetHasQuest()) continue;
+            }
 
             if (!WithinRange(living, me)) continue;
 
@@ -737,32 +745,8 @@ private:
 
         const ImU32 border_color = is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
 
-        IDirect3DTexture9** tex_pp = GwDatModule::LoadTextureFromFileId(kHealthBarSpriteFileId);
-        IDirect3DTexture9* tex = tex_pp ? *tex_pp : nullptr;
-
-        if (tex) {
-            // Experimental: 0x1737b is claimed to be the client's native
-            // health-bar sprite, a vertical atlas of 4 stacked frames. Layer
-            // index/purpose is unverified against the real asset - using
-            // layer 0 for both background and fill, distinguished only by
-            // tint, since we don't actually know which of the 4 frames (if
-            // any) is specifically a "background-only" shape.
-            constexpr int kLayer = 0;
-            const ImVec2 uv0(0.f, static_cast<float>(kLayer) / kHealthBarSpriteLayers);
-            const ImVec2 uv1(1.f, static_cast<float>(kLayer + 1) / kHealthBarSpriteLayers);
-
-            const ImVec2 fill_uv1(uv0.x + (uv1.x - uv0.x) * hp_pct, uv1.y);
-            const ImVec2 fill_uv0 = uv0;
-
-            draw_list->AddImage(tex, top_left, bottom_right, uv0, uv1, bg_color);
-            if (hp_pct > 0.f) {
-                draw_list->AddImage(tex, top_left, fill_bottom_right, fill_uv0, fill_uv1, fill_color);
-            }
-        }
-        else {
-            draw_list->AddRectFilled(top_left, bottom_right, bg_color);
-            draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
-        }
+        draw_list->AddRectFilled(top_left, bottom_right, bg_color);
+        draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
         draw_list->AddRect(top_left, bottom_right, border_color);
 
         CheckClickToTarget(top_left, bottom_right, living);
@@ -824,6 +808,8 @@ private:
         ImGui::Checkbox("Color target (yellow border)", &settings_.color_target);
         ImGui::Checkbox("Highlight quest NPCs (light orange)", &settings_.highlight_quest);
         ImGui::Checkbox("Color players/heroes/henchmen by profession", &settings_.color_by_profession);
+        ImGui::SliderFloat("Only show friendlies below HP% (100 = always show)", &settings_.friendly_health_threshold, 0.f, 100.f);
+        ImGui::Checkbox("Only show friendlies with a quest available", &settings_.friendly_quest_only);
         ImGui::Checkbox("Name-only mode for players/heroes/henchmen (no bar)", &settings_.name_only_mode);
         ImGui::Checkbox("Click nameplate to target", &settings_.click_to_target);
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
