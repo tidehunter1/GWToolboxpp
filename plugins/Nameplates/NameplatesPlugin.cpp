@@ -530,7 +530,7 @@ private:
             else if (is_allied) {
                 if (living->hp * 100.f > settings_.allied_health_threshold) continue;
                 if (in_outpost) {
-                    const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
+                    GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
                     if (npc && npc->IsHenchman()) continue;
                 }
             }
