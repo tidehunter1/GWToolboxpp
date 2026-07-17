@@ -266,7 +266,8 @@ struct NameplateSettings {
 
     float stack_hysteresis = 25.0f;
     float stack_smoothing = 0.15f;
-    float stack_gap = 2.0f;
+    float overlap_v = 1.1f; // 1.0 = exactly touching, >1.0 = a proportional gap
+    float overlap_h = 0.8f; // horizontal collision tolerance (<1.0 allows some visual overlap before treated as colliding)
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -297,7 +298,8 @@ public:
         LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
         LoadSetting("stack_hysteresis", settings_.stack_hysteresis);
         LoadSetting("stack_smoothing", settings_.stack_smoothing);
-        LoadSetting("stack_gap", settings_.stack_gap);
+        LoadSetting("overlap_v", settings_.overlap_v);
+        LoadSetting("overlap_h", settings_.overlap_h);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -319,7 +321,8 @@ public:
         SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
         SaveSetting("stack_hysteresis", settings_.stack_hysteresis);
         SaveSetting("stack_smoothing", settings_.stack_smoothing);
-        SaveSetting("stack_gap", settings_.stack_gap);
+        SaveSetting("overlap_v", settings_.overlap_v);
+        SaveSetting("overlap_h", settings_.overlap_h);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -439,7 +442,10 @@ private:
         });
 
         // 3. Deterministic hard placement (same guaranteed-no-overlap loop
-        // as before - keep pushing up until genuinely clear).
+        // as before - keep pushing up until genuinely clear), now using
+        // proportional padding instead of a flat pixel gap - the collision
+        // box scales with each plate's own size, so spacing feels
+        // consistent whether a plate is small (name-only mode) or large.
         struct PlacedRect { float x_min, x_max, y_min, y_max; };
         std::vector<PlacedRect> placed;
         placed.reserve(items.size());
@@ -447,7 +453,9 @@ private:
         for (auto& item : items) {
             if (item.footprint.x <= 0.f || item.footprint.y <= 0.f) continue;
 
-            const float half_w = item.footprint.x / 2.f;
+            const float padded_width = item.footprint.x * settings_.overlap_h;
+            const float padded_height = item.footprint.y * settings_.overlap_v;
+            const float half_w = padded_width / 2.f;
             const float x_min = item.screen.x - half_w;
             const float x_max = item.screen.x + half_w;
 
@@ -455,18 +463,18 @@ private:
             bool moved = true;
             while (moved) {
                 moved = false;
+                const float cur_bottom = cur_top + padded_height;
                 for (const auto& p : placed) {
-                    const float y_max = cur_top + item.footprint.y;
                     const bool overlap_x = x_min < p.x_max && x_max > p.x_min;
-                    const bool overlap_y = cur_top < p.y_max && y_max > p.y_min;
+                    const bool overlap_y = cur_top < p.y_max && cur_bottom > p.y_min;
                     if (overlap_x && overlap_y) {
-                        cur_top = p.y_min - item.footprint.y - settings_.stack_gap;
+                        cur_top = p.y_min - padded_height;
                         moved = true;
                     }
                 }
             }
 
-            placed.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
+            placed.push_back({x_min, x_max, cur_top, cur_top + padded_height});
             item.stack_adjusted = (cur_top != item.natural_y);
 
             // 4. Smooth interpolation - only for units actually displaced by
@@ -917,7 +925,10 @@ private:
         ShowHelpMarker("How far a unit must move before it's allowed to swap stacking order with another");
         ImGui::SliderFloat("Transition smoothing", &settings_.stack_smoothing, 0.05f, 0.5f);
         ShowHelpMarker("How quickly a displaced plate eases into its new slot - lower is smoother/slower");
-        ImGui::SliderFloat("Gap", &settings_.stack_gap, 0.f, 10.f);
+        ImGui::SliderFloat("Vertical overlap tolerance", &settings_.overlap_v, 0.5f, 2.0f);
+        ShowHelpMarker("1.0 = plates exactly touching, higher = proportional gap between them");
+        ImGui::SliderFloat("Horizontal overlap tolerance", &settings_.overlap_h, 0.3f, 1.5f);
+        ShowHelpMarker("Below 1.0 allows some side-by-side overlap before plates are treated as colliding");
         ShowHelpMarker("Spacing between stacked plates");
 
         ImGui::Separator();
