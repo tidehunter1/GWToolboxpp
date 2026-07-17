@@ -689,7 +689,7 @@ private:
         static constexpr float kTriWidth = kTriHeight * 1.3f;
         static constexpr float kTriSpacing = kTriWidth + 2.f;
         static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
-        static constexpr float kOutlineThickness = 1.5f;
+        static constexpr float kOutlineThickness = 1.0f;
 
         int count = 0;
         auto draw_tri = [&](ImU32 color, bool upsidedown) {
@@ -802,7 +802,7 @@ private:
                 const float font_size = kNameplateFontSize;
 
                 constexpr float kPadding = 6.f;
-                const float max_text_width = bar_width - kPadding * 2.f;
+                const float max_text_width = bar_width * 0.8f - kPadding;
 
                 if (max_text_width > 0.f) {
                     const std::string clipped_utf8 = TruncateWithEllipsis(font, font_size, display_name, display_utf8, max_text_width);
