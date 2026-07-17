@@ -79,6 +79,67 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
     return best_utf8;
 }
 
+class OrderCommitDelay {
+public:
+    // Sort-order hysteresis gated on TIME (consecutive frames), not distance
+    // magnitude - a different mechanism from the distance-threshold version
+    // tried and reverted earlier. A natural-Y change only gets committed
+    // (and starts affecting sort order) once it's persisted for
+    // 'frames_threshold' consecutive frames; single-frame camera-jitter
+    // spikes reset the counter and never get committed at all. State is a
+    // real per-agent member cache that survives across frames - not a
+    // locally rebuilt container - so the frame count actually accumulates.
+    float GetCommittedY(uint32_t agent_id, float natural_y, float deadband, int frames_threshold) {
+        Entry& e = cache_[agent_id];
+        e.last_seen_tick = tick_;
+        if (!e.initialized) {
+            e.committed_y = natural_y;
+            e.initialized = true;
+            e.pending_frames = 0;
+            return e.committed_y;
+        }
+
+        if (std::fabs(natural_y - e.committed_y) <= deadband) {
+            e.pending_frames = 0;
+        }
+        else {
+            ++e.pending_frames;
+            if (e.pending_frames >= frames_threshold) {
+                e.committed_y = natural_y;
+                e.pending_frames = 0;
+            }
+        }
+        return e.committed_y;
+    }
+
+    void MaybePrune() {
+        ++tick_;
+        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
+        last_prune_tick_ = tick_;
+
+        for (auto it = cache_.begin(); it != cache_.end(); ) {
+            if (tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
+                it = cache_.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+    }
+
+private:
+    static constexpr uint64_t kPruneIntervalTicks = 1800;
+    struct Entry {
+        float committed_y = 0.f;
+        int pending_frames = 0;
+        bool initialized = false;
+        uint64_t last_seen_tick = 0;
+    };
+    std::unordered_map<uint32_t, Entry> cache_;
+    uint64_t tick_ = 0;
+    uint64_t last_prune_tick_ = 0;
+};
+
 class StackYSmoother {
 public:
     // Eases toward a resolved stacking Y position rather than snapping to it.
@@ -370,6 +431,7 @@ private:
 
     AgentNameCache name_cache_;
     StackYSmoother stack_y_smoother_;
+    OrderCommitDelay order_commit_delay_;
     std::unordered_set<std::wstring> priority1_names_, priority2_names_, priority3_names_;
 
     static constexpr size_t kPriorityBufSize = 512;
@@ -438,13 +500,21 @@ private:
     // (repeatedly, in case that creates a new conflict further up) until its
     // footprint no longer overlaps any already-placed one. Bars that never
     // conflict with anything keep their natural position untouched.
-    void ResolveStacking(std::vector<PendingBar>& items) const {
+    void ResolveStacking(std::vector<PendingBar>& items) {
         static constexpr float kGap = 2.f;
+        static constexpr float kOrderDeadband = 3.f;     // pixels - ignore changes smaller than this entirely
+        static constexpr int kOrderFramesThreshold = 10; // consecutive frames a change must persist before it's committed
 
         std::vector<size_t> order(items.size());
         for (size_t i = 0; i < items.size(); ++i) order[i] = i;
-        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-            return items[a].screen.y < items[b].screen.y;
+
+        std::vector<float> commit_keys(items.size());
+        for (size_t i = 0; i < items.size(); ++i) {
+            commit_keys[i] = order_commit_delay_.GetCommittedY(items[i].living->agent_id, items[i].screen.y, kOrderDeadband, kOrderFramesThreshold);
+        }
+
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            return commit_keys[a] < commit_keys[b];
         });
 
         struct PlacedRect { float x_min, x_max, y_min, y_max; };
@@ -591,6 +661,7 @@ private:
 
         name_cache_.MaybePrune();
         stack_y_smoother_.MaybePrune();
+        order_commit_delay_.MaybePrune();
     }
 
     bool ShouldShowAllegiance(GW::Constants::Allegiance allegiance) const {
