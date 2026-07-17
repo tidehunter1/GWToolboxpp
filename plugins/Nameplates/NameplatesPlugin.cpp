@@ -391,6 +391,7 @@ private:
     static constexpr ImU32 kPriority2Color = IM_COL32(255, 105, 180, 255);
     static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255);
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
+    static constexpr ImU32 kHoverColor     = IM_COL32(255, 255, 255, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
     static constexpr float kStackSmoothing = 0.05f;
@@ -533,9 +534,10 @@ private:
                 if (!passes_threshold && !passes_quest) continue;
             }
             else if (is_allied) {
-                const bool always_show_player_in_outpost = in_outpost && living->IsPlayer();
+                const bool is_real_player = living->IsPlayer();
+                const bool always_show_player_in_outpost = in_outpost && is_real_player;
                 if (!always_show_player_in_outpost && living->hp * 100.f > settings_.allied_health_threshold) continue;
-                if (in_outpost) {
+                if (in_outpost && !is_real_player) {
                     GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
                     if (npc && npc->IsHenchman()) continue;
                 }
@@ -682,6 +684,41 @@ private:
         }
     }
 
+    // Matches EnemyWindow.cpp's DrawStatusTriangle technique and colors - small
+    // filled triangles via the draw list, offset sideways per active status so
+    // multiple conditions don't overlap. Enchanted points down, hexed and
+    // conditioned point up, same as the original.
+    void DrawStatusTriangles(ImDrawList* draw_list, const ImVec2& anchor, const GW::AgentLiving* living) const {
+        static constexpr ImU32 kEnchantedColor = IM_COL32(224, 253, 94, 255);
+        static constexpr ImU32 kHexedColor = IM_COL32(253, 113, 255, 255);
+        static constexpr ImU32 kConditionedColor = IM_COL32(160, 117, 85, 255);
+        static constexpr float kTriSize = 8.f;
+        static constexpr float kTriSpacing = 10.f;
+
+        int count = 0;
+        auto draw_tri = [&](ImU32 color, bool upsidedown) {
+            const float x = anchor.x + count * kTriSpacing;
+            const float y = anchor.y;
+            ImVec2 p1, p2, p3;
+            if (upsidedown) {
+                p1 = ImVec2(x, y);
+                p2 = ImVec2(x + kTriSize, y);
+                p3 = ImVec2(x + kTriSize / 2.f, y + kTriSize);
+            }
+            else {
+                p1 = ImVec2(x, y + kTriSize);
+                p2 = ImVec2(x + kTriSize, y + kTriSize);
+                p3 = ImVec2(x + kTriSize / 2.f, y);
+            }
+            draw_list->AddTriangleFilled(p1, p2, p3, color);
+            ++count;
+        };
+
+        if (living->GetIsEnchanted()) draw_tri(kEnchantedColor, false);
+        if (living->GetIsHexed()) draw_tri(kHexedColor, true);
+        if (living->GetIsConditioned()) draw_tri(kConditionedColor, true);
+    }
+
     void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, const std::string& text_utf8) const {
         static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
         static constexpr float kOutlineOffset = 1.f;
@@ -706,6 +743,8 @@ private:
 
         const ImU32 text_color = ProfessionColor(living->primary);
         DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, display_utf8);
+
+        DrawStatusTriangles(draw_list, ImVec2(text_x, text_y - 10.f), living);
 
         CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + text_size.x, text_y + text_size.y), living);
     }
@@ -750,11 +789,14 @@ private:
         bg_col4.w = kBgOpacity;
         const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
 
-        const ImU32 border_color = is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
+        const bool is_hovered = ImGui::IsMouseHoveringRect(top_left, bottom_right, false);
+        const ImU32 border_color = is_targeted ? kTargetColor : (is_hovered ? kHoverColor : IM_COL32(0, 0, 0, 180));
 
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
         draw_list->AddRect(top_left, bottom_right, border_color);
+
+        DrawStatusTriangles(draw_list, ImVec2(top_left.x, top_left.y - 10.f), living);
 
         CheckClickToTarget(top_left, bottom_right, living);
 
@@ -773,8 +815,11 @@ private:
                     const float text_x = top_left.x + kPadding;
                     const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
 
-                    static constexpr ImU32 kTextColor = IM_COL32(255, 255, 255, 255);
-                    DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), kTextColor, clipped_utf8);
+                    static constexpr ImU32 kNormalTextColor = IM_COL32(255, 255, 255, 255);
+                    static constexpr ImU32 kInCombatTextColor = IM_COL32(253, 198, 193, 255);
+                    const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && living->GetInCombatStance();
+                    const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
+                    DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
                 }
             }
         }
