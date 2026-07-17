@@ -79,6 +79,55 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
     return best_utf8;
 }
 
+class SortOrderStabilizer {
+public:
+    // Returns a "stable" Y value used only for deciding stacking sort order,
+    // not for actual placement. Only updates to the real, current Y once the
+    // change exceeds 'threshold' - small camera-jitter-induced wobble below
+    // that threshold is ignored, so two units with near-identical natural Y
+    // don't flip which one sorts "above" the other on every frame. This adds
+    // hysteresis to the ordering DECISION itself, separate from (and on top
+    // of) smoothing the resulting displayed position.
+    float GetStableY(uint32_t agent_id, float natural_y, float threshold) {
+        Entry& e = cache_[agent_id];
+        e.last_seen_tick = tick_;
+        if (!e.initialized) {
+            e.stable_y = natural_y;
+            e.initialized = true;
+        }
+        else if (std::fabs(natural_y - e.stable_y) > threshold) {
+            e.stable_y = natural_y;
+        }
+        return e.stable_y;
+    }
+
+    void MaybePrune() {
+        ++tick_;
+        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
+        last_prune_tick_ = tick_;
+
+        for (auto it = cache_.begin(); it != cache_.end(); ) {
+            if (tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
+                it = cache_.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+    }
+
+private:
+    static constexpr uint64_t kPruneIntervalTicks = 1800;
+    struct Entry {
+        float stable_y = 0.f;
+        bool initialized = false;
+        uint64_t last_seen_tick = 0;
+    };
+    std::unordered_map<uint32_t, Entry> cache_;
+    uint64_t tick_ = 0;
+    uint64_t last_prune_tick_ = 0;
+};
+
 class StackYSmoother {
 public:
     // Eases toward a resolved stacking Y position rather than snapping to it.
@@ -370,6 +419,7 @@ private:
 
     AgentNameCache name_cache_;
     StackYSmoother stack_y_smoother_;
+    SortOrderStabilizer sort_order_stabilizer_;
     std::unordered_set<std::wstring> priority1_names_, priority2_names_, priority3_names_;
 
     static constexpr size_t kPriorityBufSize = 512;
@@ -438,13 +488,21 @@ private:
     // (repeatedly, in case that creates a new conflict further up) until its
     // footprint no longer overlaps any already-placed one. Bars that never
     // conflict with anything keep their natural position untouched.
-    void ResolveStacking(std::vector<PendingBar>& items) const {
+    void ResolveStacking(std::vector<PendingBar>& items) {
         static constexpr float kGap = 2.f;
+        static constexpr float kSortHysteresis = 6.f; // pixels - min natural-Y change before two units are allowed to swap sort order
 
         std::vector<size_t> order(items.size());
         for (size_t i = 0; i < items.size(); ++i) order[i] = i;
-        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-            return items[a].screen.y < items[b].screen.y;
+
+        std::vector<float> stable_keys(items.size());
+        for (size_t i = 0; i < items.size(); ++i) {
+            stable_keys[i] = sort_order_stabilizer_.GetStableY(items[i].living->agent_id, items[i].screen.y, kSortHysteresis);
+        }
+
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            if (stable_keys[a] != stable_keys[b]) return stable_keys[a] < stable_keys[b];
+            return items[a].living->agent_id < items[b].living->agent_id; // deterministic tiebreaker
         });
 
         struct PlacedRect { float x_min, x_max, y_min, y_max; };
@@ -586,6 +644,7 @@ private:
 
         name_cache_.MaybePrune();
         stack_y_smoother_.MaybePrune();
+        sort_order_stabilizer_.MaybePrune();
     }
 
     bool ShouldShowAllegiance(GW::Constants::Allegiance allegiance) const {
@@ -697,7 +756,7 @@ private:
         static constexpr float kTriWidth = kTriHeight * 1.3f;
         static constexpr float kTriSpacing = kTriWidth + 2.f;
         static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
-        static constexpr float kOutlineThickness = 0.5f;
+        static constexpr float kOutlineThickness = 0.2f;
 
         int count = 0;
         auto draw_tri = [&](ImU32 color, bool upsidedown) {
