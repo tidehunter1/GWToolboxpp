@@ -79,9 +79,9 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
     return best_utf8;
 }
 
-struct SmootherEntry {
-    float current_y = 0.f;
-    float velocity_y = 0.f;
+struct HysteresisEntry {
+    float sort_y = 0.f;
+    float visual_y = 0.f;
     bool initialized = false;
     uint64_t last_seen_tick = 0;
 };
@@ -264,10 +264,9 @@ struct NameplateSettings {
     bool name_only_mode = false;
     bool show_summoned_allies = false;
 
-    float stack_spring_force = 0.1f;
-    float stack_repel_force = 0.5f;
-    float stack_damping = 0.7f;
-    int stack_iterations = 3;
+    float stack_hysteresis = 25.0f;
+    float stack_smoothing = 0.15f;
+    float stack_gap = 2.0f;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -296,10 +295,9 @@ public:
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
         LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
-        LoadSetting("stack_spring_force", settings_.stack_spring_force);
-        LoadSetting("stack_repel_force", settings_.stack_repel_force);
-        LoadSetting("stack_damping", settings_.stack_damping);
-        LoadSetting("stack_iterations", settings_.stack_iterations);
+        LoadSetting("stack_hysteresis", settings_.stack_hysteresis);
+        LoadSetting("stack_smoothing", settings_.stack_smoothing);
+        LoadSetting("stack_gap", settings_.stack_gap);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -319,10 +317,9 @@ public:
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
         SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
-        SaveSetting("stack_spring_force", settings_.stack_spring_force);
-        SaveSetting("stack_repel_force", settings_.stack_repel_force);
-        SaveSetting("stack_damping", settings_.stack_damping);
-        SaveSetting("stack_iterations", settings_.stack_iterations);
+        SaveSetting("stack_hysteresis", settings_.stack_hysteresis);
+        SaveSetting("stack_smoothing", settings_.stack_smoothing);
+        SaveSetting("stack_gap", settings_.stack_gap);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -337,9 +334,9 @@ private:
     bool visible_ = true;
 
     AgentNameCache name_cache_;
-    std::unordered_map<uint32_t, SmootherEntry> stack_smoother_cache_;
-    uint64_t stack_smoother_tick_ = 0;
-    uint64_t stack_smoother_last_prune_tick_ = 0;
+    std::unordered_map<uint32_t, HysteresisEntry> stacking_cache_;
+    uint64_t stacking_tick_ = 0;
+    uint64_t stacking_last_prune_tick_ = 0;
     std::unordered_set<std::wstring> priority1_names_, priority2_names_, priority3_names_;
 
     static constexpr size_t kPriorityBufSize = 512;
@@ -387,8 +384,10 @@ private:
         std::string display_utf8;
         bool is_targeted = false;
         bool is_name_only = false;
+        bool stack_adjusted = false;
         bool is_in_combat = false;
-        float target_y = 0.f;
+        float sort_y = 0.f;
+        float natural_y = 0.f;
     };
 
     ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8) const {
@@ -407,89 +406,91 @@ private:
     // (repeatedly, in case that creates a new conflict further up) until its
     // footprint no longer overlaps any already-placed one. Bars that never
     // conflict with anything keep their natural position untouched.
-    void ResolveStackingSmooth(std::vector<PendingBar>& items) {
+    void ResolveStackingHysteresis(std::vector<PendingBar>& items) {
         static constexpr uint64_t kPruneIntervalTicks = 1800;
+        ++stacking_tick_;
 
-        ++stack_smoother_tick_;
-
-        // 1. Initialize or get current positions
+        // 1. Assign stable sort keys - only updates the key used for
+        // ordering once a unit's natural position has moved more than
+        // settings_.stack_hysteresis pixels from its last committed value,
+        // so small camera-jitter wobble never flips two units' relative order.
         for (auto& item : items) {
-            SmootherEntry& e = stack_smoother_cache_[item.living->agent_id];
-            e.last_seen_tick = stack_smoother_tick_;
             const float natural_y = item.is_name_only ? item.screen.y - item.footprint.y / 2.f : item.screen.y;
+            HysteresisEntry& e = stacking_cache_[item.living->agent_id];
+            e.last_seen_tick = stacking_tick_;
 
             if (!e.initialized) {
-                e.current_y = natural_y;
+                e.sort_y = natural_y;
+                e.visual_y = natural_y;
                 e.initialized = true;
             }
-            item.screen.y = e.current_y; // visual Y for physics calculations
-            item.target_y = natural_y;   // where it "wants" to go
-        }
-
-        // 2. Iterative Relaxation (Position-Based Dynamics)
-        for (int iter = 0; iter < settings_.stack_iterations; ++iter) {
-            // Spring pulling each plate toward its natural position
-            for (auto& item : items) {
-                SmootherEntry& e = stack_smoother_cache_[item.living->agent_id];
-                const float force = (item.target_y - e.current_y) * settings_.stack_spring_force;
-                e.velocity_y += force;
+            else if (std::fabs(natural_y - e.sort_y) > settings_.stack_hysteresis) {
+                e.sort_y = natural_y;
             }
 
-            // Repulsion between overlapping pairs
-            for (size_t i = 0; i < items.size(); ++i) {
-                for (size_t j = i + 1; j < items.size(); ++j) {
-                    PendingBar& a = items[i];
-                    PendingBar& b = items[j];
+            item.sort_y = e.sort_y;
+            item.natural_y = natural_y;
+        }
 
-                    const float a_half_w = a.footprint.x / 2.f;
-                    const float b_half_w = b.footprint.x / 2.f;
-                    if (a.screen.x - a_half_w > b.screen.x + b_half_w || a.screen.x + a_half_w < b.screen.x - b_half_w) {
-                        continue; // no X overlap
-                    }
+        // 2. Stable sort, bottom-to-top - process the lowest-on-screen plate
+        // first, cascading others upward to avoid it.
+        std::stable_sort(items.begin(), items.end(), [](const PendingBar& a, const PendingBar& b) {
+            return a.sort_y > b.sort_y;
+        });
 
-                    SmootherEntry& ea = stack_smoother_cache_[a.living->agent_id];
-                    SmootherEntry& eb = stack_smoother_cache_[b.living->agent_id];
+        // 3. Deterministic hard placement (same guaranteed-no-overlap loop
+        // as before - keep pushing up until genuinely clear).
+        struct PlacedRect { float x_min, x_max, y_min, y_max; };
+        std::vector<PlacedRect> placed;
+        placed.reserve(items.size());
 
-                    const float center_a = ea.current_y + a.footprint.y / 2.f;
-                    const float center_b = eb.current_y + b.footprint.y / 2.f;
+        for (auto& item : items) {
+            if (item.footprint.x <= 0.f || item.footprint.y <= 0.f) continue;
 
-                    const float dist = std::fabs(center_a - center_b);
-                    const float min_dist = (a.footprint.y + b.footprint.y) / 2.f;
+            const float half_w = item.footprint.x / 2.f;
+            const float x_min = item.screen.x - half_w;
+            const float x_max = item.screen.x + half_w;
 
-                    if (dist < min_dist) {
-                        const float overlap = min_dist - dist;
-                        const float push = (overlap * settings_.stack_repel_force) / 2.f;
-
-                        if (center_a < center_b) {
-                            ea.velocity_y -= push;
-                            eb.velocity_y += push;
-                        }
-                        else {
-                            ea.velocity_y += push;
-                            eb.velocity_y -= push;
-                        }
+            float cur_top = item.natural_y;
+            bool moved = true;
+            while (moved) {
+                moved = false;
+                for (const auto& p : placed) {
+                    const float y_max = cur_top + item.footprint.y;
+                    const bool overlap_x = x_min < p.x_max && x_max > p.x_min;
+                    const bool overlap_y = cur_top < p.y_max && y_max > p.y_min;
+                    if (overlap_x && overlap_y) {
+                        cur_top = p.y_min - item.footprint.y - settings_.stack_gap;
+                        moved = true;
                     }
                 }
             }
 
-            // 3. Apply velocity and damping
-            for (auto& item : items) {
-                SmootherEntry& e = stack_smoother_cache_[item.living->agent_id];
-                e.velocity_y *= settings_.stack_damping;
-                e.current_y += e.velocity_y;
-                // e.current_y is maintained in "top" space for physics, but
-                // DrawNameOnly expects screen.y to be the vertical CENTER -
-                // convert back for name-only items (bar mode already uses
-                // top-space directly, so no conversion needed there).
-                item.screen.y = item.is_name_only ? e.current_y + item.footprint.y / 2.f : e.current_y;
+            placed.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
+            item.stack_adjusted = (cur_top != item.natural_y);
+
+            // 4. Smooth interpolation - only for units actually displaced by
+            // the placement step; units that never conflicted keep their
+            // exact natural position untouched, no drift.
+            HysteresisEntry& e = stacking_cache_[item.living->agent_id];
+            if (item.stack_adjusted) {
+                e.visual_y += (cur_top - e.visual_y) * settings_.stack_smoothing;
             }
+            else {
+                e.visual_y = cur_top;
+            }
+
+            // e.visual_y/cur_top are in "top" space; DrawNameOnly expects
+            // screen.y to be the vertical CENTER for name-only items (bar
+            // mode already uses top-space directly).
+            item.screen.y = item.is_name_only ? e.visual_y + item.footprint.y / 2.f : e.visual_y;
         }
 
-        if (stack_smoother_tick_ - stack_smoother_last_prune_tick_ >= kPruneIntervalTicks) {
-            stack_smoother_last_prune_tick_ = stack_smoother_tick_;
-            for (auto it = stack_smoother_cache_.begin(); it != stack_smoother_cache_.end(); ) {
-                if (stack_smoother_tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
-                    it = stack_smoother_cache_.erase(it);
+        if (stacking_tick_ - stacking_last_prune_tick_ >= kPruneIntervalTicks) {
+            stacking_last_prune_tick_ = stacking_tick_;
+            for (auto it = stacking_cache_.begin(); it != stacking_cache_.end(); ) {
+                if (stacking_tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
+                    it = stacking_cache_.erase(it);
                 }
                 else {
                     ++it;
@@ -585,7 +586,7 @@ private:
             pending.push_back(std::move(pb));
         }
 
-        ResolveStackingSmooth(pending);
+        ResolveStackingHysteresis(pending);
 
         for (const auto& pb : pending) {
             if (pb.is_targeted) continue;
@@ -911,15 +912,13 @@ private:
         ImGui::SliderFloat("Height scale (bounding box)", &settings_.height_scale, 0.1f, 1.5f);
 
         ImGui::Separator();
-        ImGui::TextUnformatted("Stacking physics (experimental)");
-        ImGui::SliderFloat("Spring force", &settings_.stack_spring_force, 0.01f, 1.0f);
-        ShowHelpMarker("How strongly a plate pulls back toward its natural position");
-        ImGui::SliderFloat("Repel force", &settings_.stack_repel_force, 0.01f, 2.0f);
-        ShowHelpMarker("How strongly overlapping plates push apart");
-        ImGui::SliderFloat("Damping", &settings_.stack_damping, 0.0f, 0.99f);
-        ShowHelpMarker("Friction on movement - higher settles faster, lower can oscillate/bounce");
-        ImGui::SliderInt("Iterations", &settings_.stack_iterations, 1, 10);
-        ShowHelpMarker("More iterations = more stable separation per frame, at a small extra cost");
+        ImGui::TextUnformatted("Stacking hysteresis (experimental)");
+        ImGui::SliderFloat("Sort hysteresis (px)", &settings_.stack_hysteresis, 0.f, 60.f);
+        ShowHelpMarker("How far a unit must move before it's allowed to swap stacking order with another");
+        ImGui::SliderFloat("Transition smoothing", &settings_.stack_smoothing, 0.05f, 0.5f);
+        ShowHelpMarker("How quickly a displaced plate eases into its new slot - lower is smoother/slower");
+        ImGui::SliderFloat("Gap", &settings_.stack_gap, 0.f, 10.f);
+        ShowHelpMarker("Spacing between stacked plates");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
