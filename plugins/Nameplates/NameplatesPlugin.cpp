@@ -685,25 +685,29 @@ private:
         static constexpr ImU32 kEnchantedColor = IM_COL32(224, 253, 94, 255);
         static constexpr ImU32 kHexedColor = IM_COL32(253, 113, 255, 255);
         static constexpr ImU32 kConditionedColor = IM_COL32(160, 117, 85, 255);
-        static constexpr float kTriSize = 8.f;
-        static constexpr float kTriSpacing = 10.f;
+        static constexpr float kTriHeight = 8.f;
+        static constexpr float kTriWidth = kTriHeight * 1.3f;
+        static constexpr float kTriSpacing = kTriWidth + 2.f;
+        static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
+        static constexpr float kOutlineThickness = 1.5f;
 
         int count = 0;
         auto draw_tri = [&](ImU32 color, bool upsidedown) {
-            const float x = (right_x - count * kTriSpacing) - kTriSize;
-            const float y = center_y - kTriSize / 2.f;
+            const float x = (right_x - count * kTriSpacing) - kTriWidth;
+            const float y = center_y - kTriHeight / 2.f;
             ImVec2 p1, p2, p3;
             if (upsidedown) {
                 p1 = ImVec2(x, y);
-                p2 = ImVec2(x + kTriSize, y);
-                p3 = ImVec2(x + kTriSize / 2.f, y + kTriSize);
+                p2 = ImVec2(x + kTriWidth, y);
+                p3 = ImVec2(x + kTriWidth / 2.f, y + kTriHeight);
             }
             else {
-                p1 = ImVec2(x, y + kTriSize);
-                p2 = ImVec2(x + kTriSize, y + kTriSize);
-                p3 = ImVec2(x + kTriSize / 2.f, y);
+                p1 = ImVec2(x, y + kTriHeight);
+                p2 = ImVec2(x + kTriWidth, y + kTriHeight);
+                p3 = ImVec2(x + kTriWidth / 2.f, y);
             }
             draw_list->AddTriangleFilled(p1, p2, p3, color);
+            draw_list->AddTriangle(p1, p2, p3, kOutlineColor, kOutlineThickness);
             ++count;
         };
 
@@ -788,7 +792,7 @@ private:
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
         draw_list->AddRect(top_left, bottom_right, border_color);
 
-        DrawStatusTriangles(draw_list, bottom_right.x - 3.f, top_left.y + bar_height / 2.f, living);
+        DrawStatusTriangles(draw_list, bottom_right.x - 8.f, top_left.y + bar_height / 2.f, living);
 
         CheckClickToTarget(top_left, bottom_right, living, left_clicked_this_frame);
 
@@ -808,7 +812,7 @@ private:
                     const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
 
                     static constexpr ImU32 kNormalTextColor = IM_COL32(255, 255, 255, 255);
-                    static constexpr ImU32 kInCombatTextColor = IM_COL32(0, 255, 255, 255);
+                    static constexpr ImU32 kInCombatTextColor = IM_COL32(255, 190, 116, 255);
                     const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && living->GetInCombatStance();
                     const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
                     DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
