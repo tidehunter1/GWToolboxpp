@@ -813,7 +813,8 @@ private:
 
                     static constexpr ImU32 kNormalTextColor = IM_COL32(255, 255, 255, 255);
                     static constexpr ImU32 kInCombatTextColor = IM_COL32(255, 190, 116, 255);
-                    const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && living->GetInCombatStance();
+                    const bool is_in_combat = living->GetInCombatStance() || living->GetIsAttacking() || living->GetIsCasting();
+                    const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && is_in_combat;
                     const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
                     DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
                 }
