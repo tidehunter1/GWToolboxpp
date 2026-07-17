@@ -79,117 +79,11 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
     return best_utf8;
 }
 
-class OrderCommitDelay {
-public:
-    // Sort-order hysteresis gated on TIME (consecutive frames), not distance
-    // magnitude - a different mechanism from the distance-threshold version
-    // tried and reverted earlier. A natural-Y change only gets committed
-    // (and starts affecting sort order) once it's persisted for
-    // 'frames_threshold' consecutive frames; single-frame camera-jitter
-    // spikes reset the counter and never get committed at all. State is a
-    // real per-agent member cache that survives across frames - not a
-    // locally rebuilt container - so the frame count actually accumulates.
-    float GetCommittedY(uint32_t agent_id, float natural_y, float deadband, int frames_threshold) {
-        Entry& e = cache_[agent_id];
-        e.last_seen_tick = tick_;
-        if (!e.initialized) {
-            e.committed_y = natural_y;
-            e.initialized = true;
-            e.pending_frames = 0;
-            return e.committed_y;
-        }
-
-        if (std::fabs(natural_y - e.committed_y) <= deadband) {
-            e.pending_frames = 0;
-        }
-        else {
-            ++e.pending_frames;
-            if (e.pending_frames >= frames_threshold) {
-                e.committed_y = natural_y;
-                e.pending_frames = 0;
-            }
-        }
-        return e.committed_y;
-    }
-
-    void MaybePrune() {
-        ++tick_;
-        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
-        last_prune_tick_ = tick_;
-
-        for (auto it = cache_.begin(); it != cache_.end(); ) {
-            if (tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
-                it = cache_.erase(it);
-            }
-            else {
-                ++it;
-            }
-        }
-    }
-
-private:
-    static constexpr uint64_t kPruneIntervalTicks = 1800;
-    struct Entry {
-        float committed_y = 0.f;
-        int pending_frames = 0;
-        bool initialized = false;
-        uint64_t last_seen_tick = 0;
-    };
-    std::unordered_map<uint32_t, Entry> cache_;
-    uint64_t tick_ = 0;
-    uint64_t last_prune_tick_ = 0;
-};
-
-class StackYSmoother {
-public:
-    // Eases toward a resolved stacking Y position rather than snapping to it.
-    // Deliberately Y-only: X is never touched, so there's no lag/drag on
-    // horizontal position as the camera moves - only the vertical slot a
-    // unit gets assigned by stacking eases in, rather than jumping instantly
-    // when that assignment changes frame to frame. First sighting of an
-    // agent snaps directly, since there's nothing to ease from yet.
-    float Update(uint32_t agent_id, float target_y, float alpha) {
-        Entry& e = cache_[agent_id];
-        e.last_seen_tick = tick_;
-        if (!e.initialized) {
-            e.y = target_y;
-            e.initialized = true;
-        }
-        else {
-            e.y += (target_y - e.y) * alpha;
-        }
-        return e.y;
-    }
-
-    void Reset(uint32_t agent_id) {
-        cache_.erase(agent_id);
-    }
-
-    void MaybePrune() {
-        ++tick_;
-        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
-        last_prune_tick_ = tick_;
-
-        for (auto it = cache_.begin(); it != cache_.end(); ) {
-            if (tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
-                it = cache_.erase(it);
-            }
-            else {
-                ++it;
-            }
-        }
-    }
-
-private:
-    static constexpr uint64_t kPruneIntervalTicks = 1800;
-    struct Entry {
-        float y = 0.f;
-        bool initialized = false;
-        uint64_t last_seen_tick = 0;
-    };
-    std::unordered_map<uint32_t, Entry> cache_;
-    uint64_t tick_ = 0;
-    uint64_t last_prune_tick_ = 0;
+struct SmootherEntry {
+    float current_y = 0.f;
+    float velocity_y = 0.f;
+    bool initialized = false;
+    uint64_t last_seen_tick = 0;
 };
 
 class AgentNameCache {
@@ -369,6 +263,11 @@ struct NameplateSettings {
     bool friendly_quest_only = false;
     bool name_only_mode = false;
     bool show_summoned_allies = false;
+
+    float stack_spring_force = 0.1f;
+    float stack_repel_force = 0.5f;
+    float stack_damping = 0.7f;
+    int stack_iterations = 3;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -397,6 +296,10 @@ public:
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
         LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
+        LoadSetting("stack_spring_force", settings_.stack_spring_force);
+        LoadSetting("stack_repel_force", settings_.stack_repel_force);
+        LoadSetting("stack_damping", settings_.stack_damping);
+        LoadSetting("stack_iterations", settings_.stack_iterations);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -416,6 +319,10 @@ public:
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
         SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
+        SaveSetting("stack_spring_force", settings_.stack_spring_force);
+        SaveSetting("stack_repel_force", settings_.stack_repel_force);
+        SaveSetting("stack_damping", settings_.stack_damping);
+        SaveSetting("stack_iterations", settings_.stack_iterations);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -430,8 +337,9 @@ private:
     bool visible_ = true;
 
     AgentNameCache name_cache_;
-    StackYSmoother stack_y_smoother_;
-    OrderCommitDelay order_commit_delay_;
+    std::unordered_map<uint32_t, SmootherEntry> stack_smoother_cache_;
+    uint64_t stack_smoother_tick_ = 0;
+    uint64_t stack_smoother_last_prune_tick_ = 0;
     std::unordered_set<std::wstring> priority1_names_, priority2_names_, priority3_names_;
 
     static constexpr size_t kPriorityBufSize = 512;
@@ -445,7 +353,6 @@ private:
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
-    static constexpr float kStackSmoothing = 0.05f;
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
 
@@ -480,8 +387,8 @@ private:
         std::string display_utf8;
         bool is_targeted = false;
         bool is_name_only = false;
-        bool stack_adjusted = false;
         bool is_in_combat = false;
+        float target_y = 0.f;
     };
 
     ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8) const {
@@ -500,55 +407,94 @@ private:
     // (repeatedly, in case that creates a new conflict further up) until its
     // footprint no longer overlaps any already-placed one. Bars that never
     // conflict with anything keep their natural position untouched.
-    void ResolveStacking(std::vector<PendingBar>& items) {
-        static constexpr float kGap = 2.f;
-        static constexpr float kOrderDeadband = 3.f;     // pixels - ignore changes smaller than this entirely
-        static constexpr int kOrderFramesThreshold = 10; // consecutive frames a change must persist before it's committed
+    void ResolveStackingSmooth(std::vector<PendingBar>& items) {
+        static constexpr uint64_t kPruneIntervalTicks = 1800;
 
-        std::vector<size_t> order(items.size());
-        for (size_t i = 0; i < items.size(); ++i) order[i] = i;
+        ++stack_smoother_tick_;
 
-        std::vector<float> commit_keys(items.size());
-        for (size_t i = 0; i < items.size(); ++i) {
-            commit_keys[i] = order_commit_delay_.GetCommittedY(items[i].living->agent_id, items[i].screen.y, kOrderDeadband, kOrderFramesThreshold);
+        // 1. Initialize or get current positions
+        for (auto& item : items) {
+            SmootherEntry& e = stack_smoother_cache_[item.living->agent_id];
+            e.last_seen_tick = stack_smoother_tick_;
+            const float natural_y = item.is_name_only ? item.screen.y - item.footprint.y / 2.f : item.screen.y;
+
+            if (!e.initialized) {
+                e.current_y = natural_y;
+                e.initialized = true;
+            }
+            item.screen.y = e.current_y; // visual Y for physics calculations
+            item.target_y = natural_y;   // where it "wants" to go
         }
 
-        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-            return commit_keys[a] < commit_keys[b];
-        });
+        // 2. Iterative Relaxation (Position-Based Dynamics)
+        for (int iter = 0; iter < settings_.stack_iterations; ++iter) {
+            // Spring pulling each plate toward its natural position
+            for (auto& item : items) {
+                SmootherEntry& e = stack_smoother_cache_[item.living->agent_id];
+                const float force = (item.target_y - e.current_y) * settings_.stack_spring_force;
+                e.velocity_y += force;
+            }
 
-        struct PlacedRect { float x_min, x_max, y_min, y_max; };
-        std::vector<PlacedRect> placed;
-        placed.reserve(items.size());
+            // Repulsion between overlapping pairs
+            for (size_t i = 0; i < items.size(); ++i) {
+                for (size_t j = i + 1; j < items.size(); ++j) {
+                    PendingBar& a = items[i];
+                    PendingBar& b = items[j];
 
-        for (size_t oi : order) {
-            PendingBar& item = items[oi];
-            if (item.footprint.x <= 0.f || item.footprint.y <= 0.f) continue;
+                    const float a_half_w = a.footprint.x / 2.f;
+                    const float b_half_w = b.footprint.x / 2.f;
+                    if (a.screen.x - a_half_w > b.screen.x + b_half_w || a.screen.x + a_half_w < b.screen.x - b_half_w) {
+                        continue; // no X overlap
+                    }
 
-            const float half_w = item.footprint.x / 2.f;
-            const float x_min = item.screen.x - half_w;
-            const float x_max = item.screen.x + half_w;
-            const float natural_top = item.is_name_only ? item.screen.y - item.footprint.y / 2.f : item.screen.y;
+                    SmootherEntry& ea = stack_smoother_cache_[a.living->agent_id];
+                    SmootherEntry& eb = stack_smoother_cache_[b.living->agent_id];
 
-            float cur_top = natural_top;
-            bool moved = true;
-            while (moved) {
-                moved = false;
-                for (const auto& p : placed) {
-                    const float y_min = cur_top;
-                    const float y_max = cur_top + item.footprint.y;
-                    const bool overlap_x = x_min < p.x_max && x_max > p.x_min;
-                    const bool overlap_y = y_min < p.y_max && y_max > p.y_min;
-                    if (overlap_x && overlap_y) {
-                        cur_top = p.y_min - item.footprint.y - kGap;
-                        moved = true;
+                    const float center_a = ea.current_y + a.footprint.y / 2.f;
+                    const float center_b = eb.current_y + b.footprint.y / 2.f;
+
+                    const float dist = std::fabs(center_a - center_b);
+                    const float min_dist = (a.footprint.y + b.footprint.y) / 2.f;
+
+                    if (dist < min_dist) {
+                        const float overlap = min_dist - dist;
+                        const float push = (overlap * settings_.stack_repel_force) / 2.f;
+
+                        if (center_a < center_b) {
+                            ea.velocity_y -= push;
+                            eb.velocity_y += push;
+                        }
+                        else {
+                            ea.velocity_y += push;
+                            eb.velocity_y -= push;
+                        }
                     }
                 }
             }
 
-            item.stack_adjusted = (cur_top != natural_top);
-            item.screen.y += (cur_top - natural_top);
-            placed.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
+            // 3. Apply velocity and damping
+            for (auto& item : items) {
+                SmootherEntry& e = stack_smoother_cache_[item.living->agent_id];
+                e.velocity_y *= settings_.stack_damping;
+                e.current_y += e.velocity_y;
+                // e.current_y is maintained in "top" space for physics, but
+                // DrawNameOnly expects screen.y to be the vertical CENTER -
+                // convert back for name-only items (bar mode already uses
+                // top-space directly, so no conversion needed there).
+                item.screen.y = item.is_name_only ? e.current_y + item.footprint.y / 2.f : e.current_y;
+            }
+        }
+
+        if (stack_smoother_tick_ - stack_smoother_last_prune_tick_ >= kPruneIntervalTicks) {
+            stack_smoother_last_prune_tick_ = stack_smoother_tick_;
+            for (auto it = stack_smoother_cache_.begin(); it != stack_smoother_cache_.end(); ) {
+                if (stack_smoother_tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
+                    it = stack_smoother_cache_.erase(it);
+                }
+                else {
+                    ++it;
+                }
+            }
         }
     }
 
@@ -639,16 +585,7 @@ private:
             pending.push_back(std::move(pb));
         }
 
-        ResolveStacking(pending);
-
-        for (auto& pb : pending) {
-            if (pb.stack_adjusted) {
-                pb.screen.y = stack_y_smoother_.Update(pb.living->agent_id, pb.screen.y, kStackSmoothing);
-            }
-            else {
-                stack_y_smoother_.Reset(pb.living->agent_id);
-            }
-        }
+        ResolveStackingSmooth(pending);
 
         for (const auto& pb : pending) {
             if (pb.is_targeted) continue;
@@ -660,8 +597,6 @@ private:
         }
 
         name_cache_.MaybePrune();
-        stack_y_smoother_.MaybePrune();
-        order_commit_delay_.MaybePrune();
     }
 
     bool ShouldShowAllegiance(GW::Constants::Allegiance allegiance) const {
@@ -974,6 +909,17 @@ private:
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
         ImGui::SliderFloat("Height scale (bounding box)", &settings_.height_scale, 0.1f, 1.5f);
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Stacking physics (experimental)");
+        ImGui::SliderFloat("Spring force", &settings_.stack_spring_force, 0.01f, 1.0f);
+        ShowHelpMarker("How strongly a plate pulls back toward its natural position");
+        ImGui::SliderFloat("Repel force", &settings_.stack_repel_force, 0.01f, 2.0f);
+        ShowHelpMarker("How strongly overlapping plates push apart");
+        ImGui::SliderFloat("Damping", &settings_.stack_damping, 0.0f, 0.99f);
+        ShowHelpMarker("Friction on movement - higher settles faster, lower can oscillate/bounce");
+        ImGui::SliderInt("Iterations", &settings_.stack_iterations, 1, 10);
+        ShowHelpMarker("More iterations = more stable separation per frame, at a small extra cost");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
