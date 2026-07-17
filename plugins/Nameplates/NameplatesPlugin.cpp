@@ -463,8 +463,8 @@ private:
             bool moved = true;
             while (moved) {
                 moved = false;
-                const float cur_bottom = cur_top + padded_height;
                 for (const auto& p : placed) {
+                    const float cur_bottom = cur_top + padded_height;
                     const bool overlap_x = x_min < p.x_max && x_max > p.x_min;
                     const bool overlap_y = cur_top < p.y_max && cur_bottom > p.y_min;
                     if (overlap_x && overlap_y) {
