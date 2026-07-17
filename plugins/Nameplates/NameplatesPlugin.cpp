@@ -391,7 +391,6 @@ private:
     static constexpr ImU32 kPriority2Color = IM_COL32(255, 105, 180, 255);
     static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255);
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
-    static constexpr ImU32 kHoverColor     = IM_COL32(255, 255, 255, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
     static constexpr float kStackSmoothing = 0.05f;
@@ -497,6 +496,7 @@ private:
         GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
         GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
         const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
+        const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
         DirectX::XMMATRIX view, view_proj;
         float viewport_width, viewport_height;
@@ -577,11 +577,11 @@ private:
 
         for (const auto& pb : pending) {
             if (pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false, pb.is_name_only);
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false, pb.is_name_only, left_clicked_this_frame);
         }
         for (const auto& pb : pending) {
             if (!pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true, pb.is_name_only);
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true, pb.is_name_only, left_clicked_this_frame);
         }
 
         name_cache_.MaybePrune();
@@ -662,8 +662,9 @@ private:
         return true;
     }
 
-    void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living) const {
-        if (ImGui::IsMouseHoveringRect(rect_min, rect_max, false) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living, bool left_clicked_this_frame) const {
+        if (!left_clicked_this_frame) return;
+        if (ImGui::IsMouseHoveringRect(rect_min, rect_max, false)) {
             const uint32_t agent_id = living->agent_id;
             GW::GameThread::Enqueue([agent_id] {
                 GW::Agents::ChangeTarget(agent_id);
@@ -688,7 +689,7 @@ private:
     // filled triangles via the draw list, offset sideways per active status so
     // multiple conditions don't overlap. Enchanted points down, hexed and
     // conditioned point up, same as the original.
-    void DrawStatusTriangles(ImDrawList* draw_list, const ImVec2& anchor, const GW::AgentLiving* living) const {
+    void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float center_y, const GW::AgentLiving* living) const {
         static constexpr ImU32 kEnchantedColor = IM_COL32(224, 253, 94, 255);
         static constexpr ImU32 kHexedColor = IM_COL32(253, 113, 255, 255);
         static constexpr ImU32 kConditionedColor = IM_COL32(160, 117, 85, 255);
@@ -697,8 +698,8 @@ private:
 
         int count = 0;
         auto draw_tri = [&](ImU32 color, bool upsidedown) {
-            const float x = anchor.x + count * kTriSpacing;
-            const float y = anchor.y;
+            const float x = (right_x - count * kTriSpacing) - kTriSize;
+            const float y = center_y - kTriSize / 2.f;
             ImVec2 p1, p2, p3;
             if (upsidedown) {
                 p1 = ImVec2(x, y);
@@ -731,7 +732,7 @@ private:
         draw_list->AddText(font, font_size, pos, text_color, text_begin, text_end);
     }
 
-    void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::string& display_utf8, const ImVec2& text_size) {
+    void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::string& display_utf8, const ImVec2& text_size, bool left_clicked_this_frame) {
         if (display_utf8.empty()) return;
 
         ImFont* font = ImGui::GetFont();
@@ -744,16 +745,16 @@ private:
         const ImU32 text_color = ProfessionColor(living->primary);
         DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, display_utf8);
 
-        DrawStatusTriangles(draw_list, ImVec2(text_x, text_y - 10.f), living);
+        DrawStatusTriangles(draw_list, text_x + text_size.x, text_y - 6.f, living);
 
-        CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + text_size.x, text_y + text_size.y), living);
+        CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + text_size.x, text_y + text_size.y), living, left_clicked_this_frame);
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, const ImVec2& footprint, bool is_targeted, bool is_name_only) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, const ImVec2& footprint, bool is_targeted, bool is_name_only, bool left_clicked_this_frame) {
         const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
         if (is_name_only) {
-            DrawNameOnly(draw_list, screen, living, display_utf8, footprint);
+            DrawNameOnly(draw_list, screen, living, display_utf8, footprint, left_clicked_this_frame);
             return;
         }
 
@@ -789,16 +790,15 @@ private:
         bg_col4.w = kBgOpacity;
         const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
 
-        const bool is_hovered = ImGui::IsMouseHoveringRect(top_left, bottom_right, false);
-        const ImU32 border_color = is_targeted ? kTargetColor : (is_hovered ? kHoverColor : IM_COL32(0, 0, 0, 180));
+        const ImU32 border_color = is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
 
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
         draw_list->AddRect(top_left, bottom_right, border_color);
 
-        DrawStatusTriangles(draw_list, ImVec2(top_left.x, top_left.y - 10.f), living);
+        DrawStatusTriangles(draw_list, bottom_right.x - 3.f, top_left.y + bar_height / 2.f, living);
 
-        CheckClickToTarget(top_left, bottom_right, living);
+        CheckClickToTarget(top_left, bottom_right, living, left_clicked_this_frame);
 
         if (!display_name.empty()) {
             ImFont* font = ImGui::GetFont();
@@ -816,7 +816,7 @@ private:
                     const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
 
                     static constexpr ImU32 kNormalTextColor = IM_COL32(255, 255, 255, 255);
-                    static constexpr ImU32 kInCombatTextColor = IM_COL32(253, 198, 193, 255);
+                    static constexpr ImU32 kInCombatTextColor = IM_COL32(0, 255, 255, 255);
                     const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && living->GetInCombatStance();
                     const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
                     DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
