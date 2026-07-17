@@ -79,55 +79,6 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
     return best_utf8;
 }
 
-class SortOrderStabilizer {
-public:
-    // Returns a "stable" Y value used only for deciding stacking sort order,
-    // not for actual placement. Only updates to the real, current Y once the
-    // change exceeds 'threshold' - small camera-jitter-induced wobble below
-    // that threshold is ignored, so two units with near-identical natural Y
-    // don't flip which one sorts "above" the other on every frame. This adds
-    // hysteresis to the ordering DECISION itself, separate from (and on top
-    // of) smoothing the resulting displayed position.
-    float GetStableY(uint32_t agent_id, float natural_y, float threshold) {
-        Entry& e = cache_[agent_id];
-        e.last_seen_tick = tick_;
-        if (!e.initialized) {
-            e.stable_y = natural_y;
-            e.initialized = true;
-        }
-        else if (std::fabs(natural_y - e.stable_y) > threshold) {
-            e.stable_y = natural_y;
-        }
-        return e.stable_y;
-    }
-
-    void MaybePrune() {
-        ++tick_;
-        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
-        last_prune_tick_ = tick_;
-
-        for (auto it = cache_.begin(); it != cache_.end(); ) {
-            if (tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
-                it = cache_.erase(it);
-            }
-            else {
-                ++it;
-            }
-        }
-    }
-
-private:
-    static constexpr uint64_t kPruneIntervalTicks = 1800;
-    struct Entry {
-        float stable_y = 0.f;
-        bool initialized = false;
-        uint64_t last_seen_tick = 0;
-    };
-    std::unordered_map<uint32_t, Entry> cache_;
-    uint64_t tick_ = 0;
-    uint64_t last_prune_tick_ = 0;
-};
-
 class StackYSmoother {
 public:
     // Eases toward a resolved stacking Y position rather than snapping to it.
@@ -419,7 +370,6 @@ private:
 
     AgentNameCache name_cache_;
     StackYSmoother stack_y_smoother_;
-    SortOrderStabilizer sort_order_stabilizer_;
     std::unordered_set<std::wstring> priority1_names_, priority2_names_, priority3_names_;
 
     static constexpr size_t kPriorityBufSize = 512;
@@ -488,21 +438,13 @@ private:
     // (repeatedly, in case that creates a new conflict further up) until its
     // footprint no longer overlaps any already-placed one. Bars that never
     // conflict with anything keep their natural position untouched.
-    void ResolveStacking(std::vector<PendingBar>& items) {
+    void ResolveStacking(std::vector<PendingBar>& items) const {
         static constexpr float kGap = 2.f;
-        static constexpr float kSortHysteresis = 6.f; // pixels - min natural-Y change before two units are allowed to swap sort order
 
         std::vector<size_t> order(items.size());
         for (size_t i = 0; i < items.size(); ++i) order[i] = i;
-
-        std::vector<float> stable_keys(items.size());
-        for (size_t i = 0; i < items.size(); ++i) {
-            stable_keys[i] = sort_order_stabilizer_.GetStableY(items[i].living->agent_id, items[i].screen.y, kSortHysteresis);
-        }
-
-        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-            if (stable_keys[a] != stable_keys[b]) return stable_keys[a] < stable_keys[b];
-            return items[a].living->agent_id < items[b].living->agent_id; // deterministic tiebreaker
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            return items[a].screen.y < items[b].screen.y;
         });
 
         struct PlacedRect { float x_min, x_max, y_min, y_max; };
@@ -611,11 +553,16 @@ private:
             pb.is_targeted = target && living->agent_id == target->agent_id;
             pb.is_name_only = settings_.name_only_mode && in_outpost && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
-            {
-                const float dx = me ? living->pos.x - me->pos.x : 0.f;
-                const float dy = me ? living->pos.y - me->pos.y : 0.f;
-                const bool within_earshot = me && (dx * dx + dy * dy) <= GW::Constants::SqrRange::Earshot;
-                pb.is_in_combat = living->GetInCombatStance() || (living->GetIsMoving() && within_earshot);
+            if (living->GetInCombatStance()) {
+                pb.is_in_combat = true;
+            }
+            else if (me && living->GetIsMoving()) {
+                const float dx = living->pos.x - me->pos.x;
+                const float dy = living->pos.y - me->pos.y;
+                pb.is_in_combat = (dx * dx + dy * dy) <= GW::Constants::SqrRange::Earshot;
+            }
+            else {
+                pb.is_in_combat = false;
             }
             pb.footprint = ComputeFootprint(pb.is_name_only, pb.display_utf8);
 
@@ -644,7 +591,6 @@ private:
 
         name_cache_.MaybePrune();
         stack_y_smoother_.MaybePrune();
-        sort_order_stabilizer_.MaybePrune();
     }
 
     bool ShouldShowAllegiance(GW::Constants::Allegiance allegiance) const {
@@ -756,25 +702,38 @@ private:
         static constexpr float kTriWidth = kTriHeight * 1.3f;
         static constexpr float kTriSpacing = kTriWidth + 2.f;
         static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
-        static constexpr float kOutlineThickness = 0.2f;
+        static constexpr float kOutlinePx = 1.0f; // exact pixel width of the visible border
 
         int count = 0;
+        auto make_triangle = [&](float w, float h, float ox, float oy, bool upsidedown, ImVec2& p1, ImVec2& p2, ImVec2& p3) {
+            if (upsidedown) {
+                p1 = ImVec2(ox, oy);
+                p2 = ImVec2(ox + w, oy);
+                p3 = ImVec2(ox + w / 2.f, oy + h);
+            }
+            else {
+                p1 = ImVec2(ox, oy + h);
+                p2 = ImVec2(ox + w, oy + h);
+                p3 = ImVec2(ox + w / 2.f, oy);
+            }
+        };
+
         auto draw_tri = [&](ImU32 color, bool upsidedown) {
             const float x = (right_x - count * kTriSpacing) - kTriWidth;
             const float y = center_y - kTriHeight / 2.f;
+
+            // Slightly larger black triangle drawn first, acting as the
+            // outline; the real colored triangle is drawn on top, inset by
+            // kOutlinePx, so exactly that many pixels of black show around
+            // the edge - not dependent on stroke anti-aliasing at all.
+            ImVec2 op1, op2, op3;
+            make_triangle(kTriWidth + kOutlinePx * 2.f, kTriHeight + kOutlinePx * 2.f, x - kOutlinePx, y - kOutlinePx, upsidedown, op1, op2, op3);
+            draw_list->AddTriangleFilled(op1, op2, op3, kOutlineColor);
+
             ImVec2 p1, p2, p3;
-            if (upsidedown) {
-                p1 = ImVec2(x, y);
-                p2 = ImVec2(x + kTriWidth, y);
-                p3 = ImVec2(x + kTriWidth / 2.f, y + kTriHeight);
-            }
-            else {
-                p1 = ImVec2(x, y + kTriHeight);
-                p2 = ImVec2(x + kTriWidth, y + kTriHeight);
-                p3 = ImVec2(x + kTriWidth / 2.f, y);
-            }
+            make_triangle(kTriWidth, kTriHeight, x, y, upsidedown, p1, p2, p3);
             draw_list->AddTriangleFilled(p1, p2, p3, color);
-            draw_list->AddTriangle(p1, p2, p3, kOutlineColor, kOutlineThickness);
+
             ++count;
         };
 
