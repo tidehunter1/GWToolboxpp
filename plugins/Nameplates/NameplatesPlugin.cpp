@@ -358,16 +358,6 @@ public:
         ToolboxPlugin::SaveSettings(folder);
     }
 
-    void Initialize(ImGuiContext* ctx, ImGuiAllocFns allocator_fns, HMODULE toolbox_dll) override {
-        ToolboxPlugin::Initialize(ctx, allocator_fns, toolbox_dll);
-
-    }
-
-    void SignalTerminate() override {
-        ToolboxPlugin::SignalTerminate();
-
-    }
-
     bool CanTerminate() override { return true; }
 
     void Draw(IDirect3DDevice9* ) override {
@@ -400,13 +390,15 @@ private:
     static constexpr float kZNear = 46.875f;
     static constexpr float kZFar  = 48000.f;
 
+    void RefreshOnePriorityBuffer(char* buf, const std::string& raw, std::unordered_set<std::wstring>& names) {
+        strncpy_s(buf, kPriorityBufSize, raw.c_str(), kPriorityBufSize - 1);
+        names = ParseSemicolonNameList(raw);
+    }
+
     void RefreshPriorityBuffersAndLists() {
-        strncpy_s(priority1_buf_, settings_.priority1_raw.c_str(), kPriorityBufSize - 1);
-        strncpy_s(priority2_buf_, settings_.priority2_raw.c_str(), kPriorityBufSize - 1);
-        strncpy_s(priority3_buf_, settings_.priority3_raw.c_str(), kPriorityBufSize - 1);
-        priority1_names_ = ParseSemicolonNameList(settings_.priority1_raw);
-        priority2_names_ = ParseSemicolonNameList(settings_.priority2_raw);
-        priority3_names_ = ParseSemicolonNameList(settings_.priority3_raw);
+        RefreshOnePriorityBuffer(priority1_buf_, settings_.priority1_raw, priority1_names_);
+        RefreshOnePriorityBuffer(priority2_buf_, settings_.priority2_raw, priority2_names_);
+        RefreshOnePriorityBuffer(priority3_buf_, settings_.priority3_raw, priority3_names_);
     }
 
     std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const {
@@ -854,6 +846,16 @@ private:
         }
     }
 
+    void DrawPriorityInput(const char* label, ImU32 color, char* buf, std::string& raw, std::unordered_set<std::wstring>& names) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
+        const bool changed = ImGui::InputText(label, buf, kPriorityBufSize);
+        ImGui::PopStyleColor();
+        if (changed) {
+            raw = buf;
+            names = ParseSemicolonNameList(raw);
+        }
+    }
+
     void DrawSettingsInternal() {
         ImGui::Checkbox("Show enemies", &settings_.show_enemies);
         ImGui::Checkbox("Ally name-only mode", &settings_.name_only_mode);
@@ -875,29 +877,9 @@ private:
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
 
-        ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kPriority1Color).Value);
-        const bool p1_changed = ImGui::InputText("Priority 1 (light blue)", priority1_buf_, kPriorityBufSize);
-        ImGui::PopStyleColor();
-        if (p1_changed) {
-            settings_.priority1_raw = priority1_buf_;
-            priority1_names_ = ParseSemicolonNameList(settings_.priority1_raw);
-        }
-
-        ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kPriority2Color).Value);
-        const bool p2_changed = ImGui::InputText("Priority 2 (pink)", priority2_buf_, kPriorityBufSize);
-        ImGui::PopStyleColor();
-        if (p2_changed) {
-            settings_.priority2_raw = priority2_buf_;
-            priority2_names_ = ParseSemicolonNameList(settings_.priority2_raw);
-        }
-
-        ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kPriority3Color).Value);
-        const bool p3_changed = ImGui::InputText("Priority 3 (purple)", priority3_buf_, kPriorityBufSize);
-        ImGui::PopStyleColor();
-        if (p3_changed) {
-            settings_.priority3_raw = priority3_buf_;
-            priority3_names_ = ParseSemicolonNameList(settings_.priority3_raw);
-        }
+        DrawPriorityInput("Priority 1 (light blue)", kPriority1Color, priority1_buf_, settings_.priority1_raw, priority1_names_);
+        DrawPriorityInput("Priority 2 (pink)", kPriority2Color, priority2_buf_, settings_.priority2_raw, priority2_names_);
+        DrawPriorityInput("Priority 3 (purple)", kPriority3Color, priority3_buf_, settings_.priority3_raw, priority3_names_);
     }
 };
 
