@@ -419,6 +419,7 @@ private:
         bool is_targeted = false;
         bool is_name_only = false;
         bool stack_adjusted = false;
+        bool is_in_combat = false;
     };
 
     ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8) const {
@@ -551,6 +552,13 @@ private:
             pb.display_utf8 = name_lookup.display_utf8;
             pb.is_targeted = target && living->agent_id == target->agent_id;
             pb.is_name_only = settings_.name_only_mode && in_outpost && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
+
+            {
+                const float dx = me ? living->pos.x - me->pos.x : 0.f;
+                const float dy = me ? living->pos.y - me->pos.y : 0.f;
+                const bool within_earshot = me && (dx * dx + dy * dy) <= GW::Constants::SqrRange::Earshot;
+                pb.is_in_combat = living->GetInCombatStance() || (living->GetIsMoving() && within_earshot);
+            }
             pb.footprint = ComputeFootprint(pb.is_name_only, pb.display_utf8);
 
             pending.push_back(std::move(pb));
@@ -569,11 +577,11 @@ private:
 
         for (const auto& pb : pending) {
             if (pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false, pb.is_name_only, left_clicked_this_frame);
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false, pb.is_name_only, left_clicked_this_frame, pb.is_in_combat);
         }
         for (const auto& pb : pending) {
             if (!pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true, pb.is_name_only, left_clicked_this_frame);
+            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true, pb.is_name_only, left_clicked_this_frame, pb.is_in_combat);
         }
 
         name_cache_.MaybePrune();
@@ -689,7 +697,7 @@ private:
         static constexpr float kTriWidth = kTriHeight * 1.3f;
         static constexpr float kTriSpacing = kTriWidth + 2.f;
         static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
-        static constexpr float kOutlineThickness = 1.0f;
+        static constexpr float kOutlineThickness = 0.5f;
 
         int count = 0;
         auto draw_tri = [&](ImU32 color, bool upsidedown) {
@@ -746,7 +754,7 @@ private:
         CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + text_size.x, text_y + text_size.y), living, left_clicked_this_frame);
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, const ImVec2& footprint, bool is_targeted, bool is_name_only, bool left_clicked_this_frame) {
+    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, const ImVec2& footprint, bool is_targeted, bool is_name_only, bool left_clicked_this_frame, bool is_in_combat) {
         const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
         if (is_name_only) {
@@ -813,7 +821,6 @@ private:
 
                     static constexpr ImU32 kNormalTextColor = IM_COL32(255, 255, 255, 255);
                     static constexpr ImU32 kInCombatTextColor = IM_COL32(255, 190, 116, 255);
-                    const bool is_in_combat = living->GetInCombatStance() || living->GetIsAttacking() || living->GetIsCasting();
                     const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && is_in_combat;
                     const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
                     DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
