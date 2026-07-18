@@ -852,7 +852,7 @@ private:
         ShowHelpMarker("All friendly Players, heroes, henchmen, NPCs, summoned creatures. Minipets and Henchmen hidden in Outposts");
 
         ImGui::Checkbox("Show outpost names only", &settings_.name_only_mode);
-        ShowHelpMarker("Show only profession colored player names in outposts");
+        ShowHelpMarker("Show only profession-colored player names in outposts");
         ImGui::SameLine();
         ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
         ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
