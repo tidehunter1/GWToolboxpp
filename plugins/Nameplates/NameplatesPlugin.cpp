@@ -390,7 +390,6 @@ private:
 
     static constexpr float kZNear = 46.875f;
     static constexpr float kZFar  = 48000.f;
-    static constexpr float kStandardSliderWidth = 200.f;
 
     void RefreshOnePriorityBuffer(char* buf, const std::string& raw, std::unordered_set<std::wstring>& names) {
         strncpy_s(buf, kPriorityBufSize, raw.c_str(), kPriorityBufSize - 1);
@@ -822,11 +821,9 @@ private:
     }
 
     void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::unordered_set<std::wstring>& names) {
-        ImGui::PushItemWidth(kStandardSliderWidth);
         ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
         const bool changed = ImGui::InputText(label, buf, kPriorityBufSize);
         ImGui::PopStyleColor();
-        ImGui::PopItemWidth();
         if (changed) {
             raw = buf;
             names = ParseSemicolonNameList(raw);
@@ -873,21 +870,17 @@ private:
             static_cast<int>(std::lround(settings_.npc_health_threshold)),
             static_cast<int>(std::lround(settings_.allied_health_threshold))
         };
-        ImGui::PushItemWidth(kStandardSliderWidth);
         if (ImGui::SliderInt2("NPC & Ally visibility threshold", thresholds, 0, 100)) {
             settings_.npc_health_threshold = static_cast<float>(thresholds[0]);
             settings_.allied_health_threshold = static_cast<float>(thresholds[1]);
         }
-        ImGui::PopItemWidth();
         ShowHelpMarker("0 = off, 100 = on");
 
-        ImGui::PushItemWidth(kStandardSliderWidth);
         if (ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f, "%.0f")) {
             settings_.max_range = std::round(settings_.max_range);
         }
-        ImGui::PopItemWidth();
 
-        const float half_width = (kStandardSliderWidth - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
+        const float half_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
         ImGui::PushItemWidth(half_width);
         if (ImGui::SliderFloat("##bar_width", &settings_.bar_width, 50.f, 200.f, "%.0f")) {
             settings_.bar_width = std::round(settings_.bar_width);
