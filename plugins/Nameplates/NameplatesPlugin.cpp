@@ -843,6 +843,7 @@ private:
         if (ImGui::ColorEdit3("##color_show_enemies", &enemy_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
             settings_.enemy_color = ImGui::ColorConvertFloat4ToU32(enemy_color_vec);
         }
+        ImGui::SameLine();
 
         ImGui::Checkbox("Show friendlies", &settings_.show_friendlies);
         ImGui::SameLine();
@@ -851,16 +852,16 @@ private:
             settings_.friendly_color = ImGui::ColorConvertFloat4ToU32(friendly_color_vec);
         }
         ShowHelpMarker("All friendly NPCs, summoned creatures, players, heroes, henchmen. Minipets and Henchmen hidden in Outposts");
-        ImGui::SameLine();
+
         ImGui::Checkbox("Show outpost names only", &settings_.name_only_mode);
-        ShowHelpMarker("Players, heroes & henchmen names are colored by their profession in outposts only");
+        ShowHelpMarker("Show only profession-colored player names in outposts");
         ImGui::SameLine();
         ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
         ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
         int npc_display = static_cast<int>(std::lround(settings_.npc_health_threshold));
         int allied_display = static_cast<int>(std::lround(settings_.allied_health_threshold));
-        static constexpr float kPairedSliderWidth = 200.f;
+        static constexpr float kPairedSliderWidth = 260.f;
         ImGui::PushItemWidth(kPairedSliderWidth);
         if (ImGui::SliderInt("##npc_threshold", &npc_display, 0, 100)) {
             settings_.npc_health_threshold = static_cast<float>(npc_display);
