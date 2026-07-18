@@ -22,7 +22,7 @@ target_link_libraries(plugin_base INTERFACE
     glaze::glaze
     gwca
     IconFontCppHeaders
-    GWToolboxdll # for GetFont
+    #GWToolboxdll # for GetFont
     )
 target_compile_definitions(plugin_base INTERFACE BUILD_DLL)
 
