@@ -36,6 +36,7 @@
 #include <cwchar>
 #include <optional>
 #include <cfloat>
+#include <cmath>
 #include <algorithm>
 #include <array>
 #include <utility>
@@ -79,11 +80,6 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
     return best_utf8;
 }
 
-// Matches EnemyWindow.cpp's DrawStatusTriangle technique and colors - small
-// filled triangles via the draw list, offset sideways per active status so
-// multiple conditions don't overlap. Enchanted points down, hexed and
-// conditioned point up, same as the original. Free function rather than a
-// member method since it doesn't touch any plugin/class state.
 inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float center_y, const GW::AgentLiving* living) {
     static constexpr ImU32 kEnchantedColor = IM_COL32(224, 253, 94, 255);
     static constexpr ImU32 kHexedColor = IM_COL32(253, 113, 255, 255);
@@ -92,7 +88,7 @@ inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float cent
     static constexpr float kTriWidth = kTriHeight * 1.3f;
     static constexpr float kTriSpacing = kTriWidth + 2.f;
     static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
-    static constexpr float kOutlinePx = 1.0f; // exact pixel width of the visible border
+    static constexpr float kOutlinePx = 1.0f;
 
     int count = 0;
     auto make_triangle = [&](float w, float h, float ox, float oy, bool upsidedown, ImVec2& p1, ImVec2& p2, ImVec2& p3) {
@@ -112,10 +108,6 @@ inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float cent
         const float x = (right_x - count * kTriSpacing) - kTriWidth;
         const float y = center_y - kTriHeight / 2.f;
 
-        // Slightly larger black triangle drawn first, acting as the
-        // outline; the real colored triangle is drawn on top, inset by
-        // kOutlinePx, so exactly that many pixels of black show around
-        // the edge - not dependent on stroke anti-aliasing at all.
         ImVec2 op1, op2, op3;
         make_triangle(kTriWidth + kOutlinePx * 2.f, kTriHeight + kOutlinePx * 2.f, x - kOutlinePx, y - kOutlinePx, upsidedown, op1, op2, op3);
         draw_list->AddTriangleFilled(op1, op2, op3, kOutlineColor);
@@ -146,12 +138,7 @@ inline void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_siz
 
 class StackYSmoother {
 public:
-    // Eases toward a resolved stacking Y position rather than snapping to it.
-    // Deliberately Y-only: X is never touched, so there's no lag/drag on
-    // horizontal position as the camera moves - only the vertical slot a
-    // unit gets assigned by stacking eases in, rather than jumping instantly
-    // when that assignment changes frame to frame. First sighting of an
-    // agent snaps directly, since there's nothing to ease from yet.
+
     float Update(uint32_t agent_id, float target_y, float alpha) {
         Entry& e = cache_[agent_id];
         e.last_seen_tick = tick_;
@@ -258,11 +245,7 @@ private:
 };
 
 inline bool IsMinipet(uint16_t player_number) {
-    // Sorted, contiguous array instead of a hash set - these 129 real IDs
-    // (extracted from GWCA's own header, sorted ascending) are built once
-    // at compile time with zero runtime initialization, and binary search
-    // on contiguous memory has better cache locality than a hash set's
-    // node-based lookups for a list that's never mutated.
+
     static constexpr std::array<uint16_t, 129> ids = {
         230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
         240, 241, 242, 243, 244, 245, 246, 247, 248, 249,
@@ -419,14 +402,12 @@ private:
         bool is_targeted = false;
         bool is_name_only = false;
         bool stack_adjusted = false;
+        float natural_y = 0.f;
         bool is_in_combat = false;
     };
 
     struct PlacedRect { float x_min, x_max, y_min, y_max; };
 
-    // Reused across frames instead of declared locally each call - clear()
-    // keeps existing capacity, avoiding repeated heap allocation/deallocation
-    // once these settle to a stable size after the first few frames.
     std::vector<PendingBar> pending_;
     std::vector<PlacedRect> placed_;
 
@@ -441,24 +422,20 @@ private:
         return ImVec2(settings_.bar_width, settings_.bar_height);
     }
 
-    // Vertical-only stacking: sorts candidates top-to-bottom by their natural
-    // screen position, then places each one in order, pushing it upward
-    // (repeatedly, in case that creates a new conflict further up) until its
-    // footprint no longer overlaps any already-placed one. Bars that never
-    // conflict with anything keep their natural position untouched.
     void ResolveStacking(std::vector<PendingBar>& items) {
         static constexpr float kGap = 2.f;
-        // Beyond this many bar-heights of upward displacement, give up and
-        // accept overlap for this bar rather than keep chasing a free slot
-        // further away - a capped, accepted overlap that stays near the
-        // owning unit beats an unbounded push that can drift a nameplate far
-        // from the agent it's labeling during a dense, chained pull.
+
         static constexpr float kMaxPushMultiplier = 4.f;
+
+        static constexpr float kSortEpsilon = 1.f;
 
         std::vector<size_t> order(items.size());
         for (size_t i = 0; i < items.size(); ++i) order[i] = i;
         std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-            return items[a].screen.y < items[b].screen.y;
+            const float ya = items[a].screen.y;
+            const float yb = items[b].screen.y;
+            if (std::fabs(ya - yb) > kSortEpsilon) return ya < yb;
+            return items[a].living->agent_id < items[b].living->agent_id;
         });
 
         placed_.clear();
@@ -486,8 +463,6 @@ private:
                     if (overlap_x && overlap_y) {
                         const float candidate_top = p.y_min - item.footprint.y - kGap;
                         if (natural_top - candidate_top > max_push) {
-                            // Pushing further would exceed the cap; stop here
-                            // and accept whatever overlap remains at cur_top.
                             moved = false;
                             break;
                         }
@@ -590,15 +565,16 @@ private:
             pending_.push_back(std::move(pb));
         }
 
+        for (auto& pb : pending_) {
+            pb.natural_y = pb.screen.y;
+        }
+
         ResolveStacking(pending_);
 
         for (auto& pb : pending_) {
-            if (pb.stack_adjusted) {
-                pb.screen.y = stack_y_smoother_.Update(pb.living->agent_id, pb.screen.y, kStackSmoothing);
-            }
-            else {
-                stack_y_smoother_.Reset(pb.living->agent_id);
-            }
+            const float target_offset = pb.screen.y - pb.natural_y;
+            const float smoothed_offset = stack_y_smoother_.Update(pb.living->agent_id, target_offset, kStackSmoothing);
+            pb.screen.y = pb.natural_y + smoothed_offset;
         }
 
         for (const auto& pb : pending_) {
@@ -668,10 +644,6 @@ private:
                        float viewport_width, float viewport_height, ImVec2& out) const {
         using namespace DirectX;
 
-        // Anchored to the game's own name_tag_z - the same value the client
-        // uses to place its own overhead name/health UI - rather than a
-        // bounding-box heuristic. This tracks correctly per-model without
-        // any manually tuned constant.
         const XMVECTOR world_pos = XMVectorSet(
             living->pos.x, living->pos.y, living->name_tag_z, 1.f);
 
@@ -679,9 +651,6 @@ private:
         float clip_arr[4];
         XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(clip_arr), clip_pos);
 
-        // For any standard perspective projection, W after this transform
-        // equals the view-space Z - the same near-plane check as before,
-        // without a separate view-only transform to get it.
         if (clip_arr[3] <= kZNear) return false;
 
         const float ndc_x = clip_arr[0] / clip_arr[3];
@@ -703,11 +672,6 @@ private:
         }
     }
 
-    // Mirrors GWToolbox's own ImGuiAddons::ShowHelp pattern (SameLine + "(?)"
-    // + tooltip on hover), reimplemented locally with only core ImGui calls -
-    // the original is declared IMGUI_API in ImGuiAddons.h, the same export
-    // category that failed to link from this plugin before (FontLoader::GetFont,
-    // GwDatModule::LoadTextureFromFileId), so this avoids that risk entirely.
     void ShowHelpMarker(const char* help) const {
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
