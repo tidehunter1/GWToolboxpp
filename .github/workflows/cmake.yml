@@ -108,8 +108,8 @@ jobs:
       working-directory: ${{runner.workspace}}/GWToolboxpp/build
       shell: bash
       # Execute the build.  You can specify a specific target with "--target <NAME>"
-      run: cmake --build . --config RelWithDebInfo
-
+      #run: cmake --build . --config RelWithDebInfo
+      run: cmake --build . --target Nameplates --config RelWithDebInfo
     - name: Save output
       uses: actions/upload-artifact@v4
       with:
