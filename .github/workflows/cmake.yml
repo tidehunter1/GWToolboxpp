@@ -31,7 +31,7 @@ jobs:
     # Exposed at job level so the release steps can gate on `env.CERTUM_OTP_URI`
     # (secrets can't be referenced directly in an `if:` expression).
     env:
-      BUILD_CONFIG: Debug
+      BUILD_CONFIG: RelWithDebInfo
       CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
       CERTUM_USERID: ${{ secrets.CERTUM_USERID }}
       CERTUM_CERT_SHA1: ${{ secrets.CERTUM_CERT_SHA1 }}
