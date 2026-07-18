@@ -1,7 +1,5 @@
 #include <cstdint>
 #include <cstring>
-#include <cmath>
-#include <cstdlib>
 #include <functional>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -32,12 +30,14 @@
 #include <DirectXMath.h>
 #include <vector>
 #include <string>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <cwchar>
 #include <optional>
 #include <cfloat>
 #include <algorithm>
+#include <array>
 #include <utility>
 
 inline std::wstring Utf8ToWide(const std::string& utf8) {
@@ -77,6 +77,71 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
         }
     }
     return best_utf8;
+}
+
+// Matches EnemyWindow.cpp's DrawStatusTriangle technique and colors - small
+// filled triangles via the draw list, offset sideways per active status so
+// multiple conditions don't overlap. Enchanted points down, hexed and
+// conditioned point up, same as the original. Free function rather than a
+// member method since it doesn't touch any plugin/class state.
+inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float center_y, const GW::AgentLiving* living) {
+    static constexpr ImU32 kEnchantedColor = IM_COL32(224, 253, 94, 255);
+    static constexpr ImU32 kHexedColor = IM_COL32(253, 113, 255, 255);
+    static constexpr ImU32 kConditionedColor = IM_COL32(160, 117, 85, 255);
+    static constexpr float kTriHeight = 8.f;
+    static constexpr float kTriWidth = kTriHeight * 1.3f;
+    static constexpr float kTriSpacing = kTriWidth + 2.f;
+    static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
+    static constexpr float kOutlinePx = 1.0f; // exact pixel width of the visible border
+
+    int count = 0;
+    auto make_triangle = [&](float w, float h, float ox, float oy, bool upsidedown, ImVec2& p1, ImVec2& p2, ImVec2& p3) {
+        if (upsidedown) {
+            p1 = ImVec2(ox, oy);
+            p2 = ImVec2(ox + w, oy);
+            p3 = ImVec2(ox + w / 2.f, oy + h);
+        }
+        else {
+            p1 = ImVec2(ox, oy + h);
+            p2 = ImVec2(ox + w, oy + h);
+            p3 = ImVec2(ox + w / 2.f, oy);
+        }
+    };
+
+    auto draw_tri = [&](ImU32 color, bool upsidedown) {
+        const float x = (right_x - count * kTriSpacing) - kTriWidth;
+        const float y = center_y - kTriHeight / 2.f;
+
+        // Slightly larger black triangle drawn first, acting as the
+        // outline; the real colored triangle is drawn on top, inset by
+        // kOutlinePx, so exactly that many pixels of black show around
+        // the edge - not dependent on stroke anti-aliasing at all.
+        ImVec2 op1, op2, op3;
+        make_triangle(kTriWidth + kOutlinePx * 2.f, kTriHeight + kOutlinePx * 2.f, x - kOutlinePx, y - kOutlinePx, upsidedown, op1, op2, op3);
+        draw_list->AddTriangleFilled(op1, op2, op3, kOutlineColor);
+
+        ImVec2 p1, p2, p3;
+        make_triangle(kTriWidth, kTriHeight, x, y, upsidedown, p1, p2, p3);
+        draw_list->AddTriangleFilled(p1, p2, p3, color);
+
+        ++count;
+    };
+
+    if (living->GetIsEnchanted()) draw_tri(kEnchantedColor, false);
+    if (living->GetIsHexed()) draw_tri(kHexedColor, true);
+    if (living->GetIsConditioned()) draw_tri(kConditionedColor, true);
+}
+
+inline void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, const std::string& text_utf8) {
+    static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
+    static constexpr float kOutlineOffset = 1.f;
+    const char* text_begin = text_utf8.c_str();
+    const char* text_end = text_begin + text_utf8.size();
+    draw_list->AddText(font, font_size, ImVec2(pos.x - kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
+    draw_list->AddText(font, font_size, ImVec2(pos.x + kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
+    draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y - kOutlineOffset), kOutlineColor, text_begin, text_end);
+    draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y + kOutlineOffset), kOutlineColor, text_begin, text_end);
+    draw_list->AddText(font, font_size, pos, text_color, text_begin, text_end);
 }
 
 class StackYSmoother {
@@ -152,9 +217,7 @@ public:
         if (!entry.converted && entry.buffer[0] != L'\0') {
             entry.decoded_display = entry.buffer;
             entry.decoded_lower = entry.buffer;
-            for (auto& c : entry.decoded_lower) {
-                c = static_cast<wchar_t>(towlower(c));
-            }
+            std::transform(entry.decoded_lower.begin(), entry.decoded_lower.end(), entry.decoded_lower.begin(), ::towlower);
             entry.decoded_display_utf8 = WideToUtf8(entry.decoded_display);
             entry.converted = true;
         }
@@ -195,99 +258,42 @@ private:
 };
 
 inline bool IsMinipet(uint16_t player_number) {
-    static const std::unordered_set<int> ids = {
-        GW::Constants::ModelID::Minipet::Charr, GW::Constants::ModelID::Minipet::Dragon,
-        GW::Constants::ModelID::Minipet::Rurik, GW::Constants::ModelID::Minipet::Shiro,
-        GW::Constants::ModelID::Minipet::Titan, GW::Constants::ModelID::Minipet::Kirin,
-        GW::Constants::ModelID::Minipet::NecridHorseman, GW::Constants::ModelID::Minipet::JadeArmor,
-        GW::Constants::ModelID::Minipet::Hydra, GW::Constants::ModelID::Minipet::FungalWallow,
-        GW::Constants::ModelID::Minipet::SiegeTurtle, GW::Constants::ModelID::Minipet::TempleGuardian,
-        GW::Constants::ModelID::Minipet::JungleTroll, GW::Constants::ModelID::Minipet::WhiptailDevourer,
-        GW::Constants::ModelID::Minipet::Gwen, GW::Constants::ModelID::Minipet::GwenDoll,
-        GW::Constants::ModelID::Minipet::WaterDjinn, GW::Constants::ModelID::Minipet::Lich,
-        GW::Constants::ModelID::Minipet::Elf, GW::Constants::ModelID::Minipet::PalawaJoko,
-        GW::Constants::ModelID::Minipet::Koss, GW::Constants::ModelID::Minipet::MandragorImp,
-        GW::Constants::ModelID::Minipet::HeketWarrior, GW::Constants::ModelID::Minipet::HarpyRanger,
-        GW::Constants::ModelID::Minipet::Juggernaut, GW::Constants::ModelID::Minipet::WindRider,
-        GW::Constants::ModelID::Minipet::FireImp, GW::Constants::ModelID::Minipet::Aatxe,
-        GW::Constants::ModelID::Minipet::ThornWolf, GW::Constants::ModelID::Minipet::Abyssal,
-        GW::Constants::ModelID::Minipet::BlackBeast, GW::Constants::ModelID::Minipet::Freezie,
-        GW::Constants::ModelID::Minipet::Irukandji, GW::Constants::ModelID::Minipet::MadKingThorn,
-        GW::Constants::ModelID::Minipet::ForestMinotaur, GW::Constants::ModelID::Minipet::Mursaat,
-        GW::Constants::ModelID::Minipet::Nornbear, GW::Constants::ModelID::Minipet::Ooze,
-        GW::Constants::ModelID::Minipet::Raptor, GW::Constants::ModelID::Minipet::RoaringEther,
-        GW::Constants::ModelID::Minipet::CloudtouchedSimian, GW::Constants::ModelID::Minipet::CaveSpider,
-        GW::Constants::ModelID::Minipet::WhiteRabbit, GW::Constants::ModelID::Minipet::WordofMadness,
-        GW::Constants::ModelID::Minipet::DredgeBrute, GW::Constants::ModelID::Minipet::TerrorwebDryder,
-        GW::Constants::ModelID::Minipet::Abomination, GW::Constants::ModelID::Minipet::KraitNeoss,
-        GW::Constants::ModelID::Minipet::DesertGriffon, GW::Constants::ModelID::Minipet::Kveldulf,
-        GW::Constants::ModelID::Minipet::QuetzalSly, GW::Constants::ModelID::Minipet::Jora,
-        GW::Constants::ModelID::Minipet::FlowstoneElemental, GW::Constants::ModelID::Minipet::Nian,
-        GW::Constants::ModelID::Minipet::DagnarStonepate, GW::Constants::ModelID::Minipet::FlameDjinn,
-        GW::Constants::ModelID::Minipet::EyeOfJanthir, GW::Constants::ModelID::Minipet::Seer,
-        GW::Constants::ModelID::Minipet::SiegeDevourer, GW::Constants::ModelID::Minipet::ShardWolf,
-        GW::Constants::ModelID::Minipet::FireDrake, GW::Constants::ModelID::Minipet::SummitGiantHerder,
-        GW::Constants::ModelID::Minipet::OphilNahualli, GW::Constants::ModelID::Minipet::CobaltScabara,
-        GW::Constants::ModelID::Minipet::ScourgeManta, GW::Constants::ModelID::Minipet::Ventari,
-        GW::Constants::ModelID::Minipet::Oola, GW::Constants::ModelID::Minipet::CandysmithMarley,
-        GW::Constants::ModelID::Minipet::ZhuHanuku, GW::Constants::ModelID::Minipet::KingAdelbern,
-        GW::Constants::ModelID::Minipet::MOX1, GW::Constants::ModelID::Minipet::MOX2,
-        GW::Constants::ModelID::Minipet::MOX3, GW::Constants::ModelID::Minipet::MOX4,
-        GW::Constants::ModelID::Minipet::MOX5, GW::Constants::ModelID::Minipet::MOX6,
-        GW::Constants::ModelID::Minipet::BrownRabbit, GW::Constants::ModelID::Minipet::Yakkington,
-        GW::Constants::ModelID::Minipet::CollectorsEditionKuunavang,
-        GW::Constants::ModelID::Minipet::GrayGiant, GW::Constants::ModelID::Minipet::Asura,
-        GW::Constants::ModelID::Minipet::DestroyerOfFlesh, GW::Constants::ModelID::Minipet::PolarBear,
-        GW::Constants::ModelID::Minipet::CollectorsEditionVaresh, GW::Constants::ModelID::Minipet::Mallyx,
-        GW::Constants::ModelID::Minipet::Ceratadon, GW::Constants::ModelID::Minipet::Kanaxai,
-        GW::Constants::ModelID::Minipet::Panda, GW::Constants::ModelID::Minipet::IslandGuardian,
-        GW::Constants::ModelID::Minipet::NagaRaincaller, GW::Constants::ModelID::Minipet::LonghairYeti,
-        GW::Constants::ModelID::Minipet::Oni, GW::Constants::ModelID::Minipet::ShirokenAssassin,
-        GW::Constants::ModelID::Minipet::Vizu, GW::Constants::ModelID::Minipet::ZhedShadowhoof,
-        GW::Constants::ModelID::Minipet::Grawl, GW::Constants::ModelID::Minipet::GhostlyHero,
-        GW::Constants::ModelID::Minipet::Pig, GW::Constants::ModelID::Minipet::GreasedLightning,
-        GW::Constants::ModelID::Minipet::WorldFamousRacingBeetle, GW::Constants::ModelID::Minipet::CelestialPig,
-        GW::Constants::ModelID::Minipet::CelestialRat, GW::Constants::ModelID::Minipet::CelestialOx,
-        GW::Constants::ModelID::Minipet::CelestialTiger, GW::Constants::ModelID::Minipet::CelestialRabbit,
-        GW::Constants::ModelID::Minipet::CelestialDragon, GW::Constants::ModelID::Minipet::CelestialSnake,
-        GW::Constants::ModelID::Minipet::CelestialHorse, GW::Constants::ModelID::Minipet::CelestialSheep,
-        GW::Constants::ModelID::Minipet::CelestialMonkey, GW::Constants::ModelID::Minipet::CelestialRooster,
-        GW::Constants::ModelID::Minipet::CelestialDog, GW::Constants::ModelID::Minipet::BlackMoaChick,
-        GW::Constants::ModelID::Minipet::Dhuum, GW::Constants::ModelID::Minipet::MadKingsGuard,
-        GW::Constants::ModelID::Minipet::SmiteCrawler, GW::Constants::ModelID::Minipet::GuildLord,
-        GW::Constants::ModelID::Minipet::HighPriestZhang, GW::Constants::ModelID::Minipet::GhostlyPriest,
-        GW::Constants::ModelID::Minipet::RiftWarden, GW::Constants::ModelID::Minipet::MiniatureLegionnaire,
-        GW::Constants::ModelID::Minipet::MiniatureConfessorDorian, GW::Constants::ModelID::Minipet::MiniaturePrincessSalma,
-        GW::Constants::ModelID::Minipet::MiniatureLivia, GW::Constants::ModelID::Minipet::MiniatureEvennia,
-        GW::Constants::ModelID::Minipet::MiniatureConfessorIsaiah, GW::Constants::ModelID::Minipet::MiniaturePeacekeeperEnforcer,
-        GW::Constants::ModelID::Minipet::MiniatureMinisterReiko, GW::Constants::ModelID::Minipet::MiniatureEcclesiateXunRao,
+    // Sorted, contiguous array instead of a hash set - these 129 real IDs
+    // (extracted from GWCA's own header, sorted ascending) are built once
+    // at compile time with zero runtime initialization, and binary search
+    // on contiguous memory has better cache locality than a hash set's
+    // node-based lookups for a list that's never mutated.
+    static constexpr std::array<uint16_t, 129> ids = {
+        230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
+        240, 241, 242, 243, 244, 245, 246, 247, 248, 249,
+        250, 251, 252, 253, 254, 255, 256, 257, 258, 259,
+        260, 261, 262, 263, 264, 265, 266, 267, 268, 269,
+        270, 271, 272, 273, 274, 275, 276, 277, 278, 279,
+        280, 281, 282, 283, 284, 285, 286, 287, 288, 289,
+        290, 291, 292, 293, 294, 295, 296, 297, 298, 299,
+        300, 301, 302, 303, 304, 305, 306, 307, 309, 310,
+        311, 312, 313, 314, 315, 316, 317, 318, 319, 320,
+        321, 322, 323, 324, 325, 326, 327, 328, 329, 330,
+        331, 332, 333, 334, 335, 336, 337, 338, 339, 340,
+        341, 342, 343, 344, 345, 346, 347, 348, 349, 350,
+        8035, 8344, 8349, 8350, 8351, 8352, 8354, 9038, 9039,
     };
-    return ids.count(static_cast<int>(player_number)) != 0;
+    return std::binary_search(ids.begin(), ids.end(), player_number);
 }
 
 inline std::unordered_set<std::wstring> ParseSemicolonNameList(const std::string& raw) {
     std::unordered_set<std::wstring> out;
-    std::string current;
-    auto flush = [&]() {
+    std::istringstream stream(raw);
+    std::string token;
+    while (std::getline(stream, token, ';')) {
+        const size_t start = token.find_first_not_of(" \t\r\n");
+        const size_t end = token.find_last_not_of(" \t\r\n");
+        if (start == std::string::npos || end == std::string::npos) continue;
 
-        size_t start = current.find_first_not_of(" \t\r\n");
-        size_t end = current.find_last_not_of(" \t\r\n");
-        if (start != std::string::npos && end != std::string::npos) {
-            std::wstring w = Utf8ToWide(current.substr(start, end - start + 1));
-            for (auto& c : w) c = static_cast<wchar_t>(towlower(c));
-            if (!w.empty()) out.insert(std::move(w));
-        }
-        current.clear();
-    };
-    for (char c : raw) {
-        if (c == ';') {
-            flush();
-        }
-        else {
-            current += c;
-        }
+        std::wstring w = Utf8ToWide(token.substr(start, end - start + 1));
+        std::transform(w.begin(), w.end(), w.begin(), ::towlower);
+        if (!w.empty()) out.insert(std::move(w));
     }
-    flush();
     return out;
 }
 
@@ -422,6 +428,14 @@ private:
         bool is_in_combat = false;
     };
 
+    struct PlacedRect { float x_min, x_max, y_min, y_max; };
+
+    // Reused across frames instead of declared locally each call - clear()
+    // keeps existing capacity, avoiding repeated heap allocation/deallocation
+    // once these settle to a stable size after the first few frames.
+    std::vector<PendingBar> pending_;
+    std::vector<PlacedRect> placed_;
+
     ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8) const {
         if (is_name_only) {
             if (display_utf8.empty()) return ImVec2(0.f, 0.f);
@@ -438,7 +452,7 @@ private:
     // (repeatedly, in case that creates a new conflict further up) until its
     // footprint no longer overlaps any already-placed one. Bars that never
     // conflict with anything keep their natural position untouched.
-    void ResolveStacking(std::vector<PendingBar>& items) const {
+    void ResolveStacking(std::vector<PendingBar>& items) {
         static constexpr float kGap = 2.f;
 
         std::vector<size_t> order(items.size());
@@ -447,9 +461,8 @@ private:
             return items[a].screen.y < items[b].screen.y;
         });
 
-        struct PlacedRect { float x_min, x_max, y_min, y_max; };
-        std::vector<PlacedRect> placed;
-        placed.reserve(items.size());
+        placed_.clear();
+        placed_.reserve(items.size());
 
         for (size_t oi : order) {
             PendingBar& item = items[oi];
@@ -464,7 +477,7 @@ private:
             bool moved = true;
             while (moved) {
                 moved = false;
-                for (const auto& p : placed) {
+                for (const auto& p : placed_) {
                     const float y_min = cur_top;
                     const float y_max = cur_top + item.footprint.y;
                     const bool overlap_x = x_min < p.x_max && x_max > p.x_min;
@@ -478,7 +491,7 @@ private:
 
             item.stack_adjusted = (cur_top != natural_top);
             item.screen.y += (cur_top - natural_top);
-            placed.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
+            placed_.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
         }
     }
 
@@ -491,13 +504,13 @@ private:
         const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
         const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
-        DirectX::XMMATRIX view, view_proj;
+        DirectX::XMMATRIX view_proj;
         float viewport_width, viewport_height;
-        if (!BuildFrameProjection(view, view_proj, viewport_width, viewport_height)) return;
+        if (!BuildFrameProjection(view_proj, viewport_width, viewport_height)) return;
 
         ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 
-        std::vector<PendingBar> pending;
+        pending_.clear();
 
         for (GW::Agent* agent : *agents) {
             if (!agent) continue;
@@ -539,7 +552,7 @@ private:
             if (!WithinRange(living, me)) continue;
 
             ImVec2 screen;
-            if (!WorldToScreen(living, view, view_proj, viewport_width, viewport_height, screen)) continue;
+            if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) continue;
 
             const auto name_lookup = name_cache_.Get(
                 living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
@@ -566,12 +579,12 @@ private:
             }
             pb.footprint = ComputeFootprint(pb.is_name_only, pb.display_utf8);
 
-            pending.push_back(std::move(pb));
+            pending_.push_back(std::move(pb));
         }
 
-        ResolveStacking(pending);
+        ResolveStacking(pending_);
 
-        for (auto& pb : pending) {
+        for (auto& pb : pending_) {
             if (pb.stack_adjusted) {
                 pb.screen.y = stack_y_smoother_.Update(pb.living->agent_id, pb.screen.y, kStackSmoothing);
             }
@@ -580,11 +593,11 @@ private:
             }
         }
 
-        for (const auto& pb : pending) {
+        for (const auto& pb : pending_) {
             if (pb.is_targeted) continue;
             DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false, pb.is_name_only, left_clicked_this_frame, pb.is_in_combat);
         }
-        for (const auto& pb : pending) {
+        for (const auto& pb : pending_) {
             if (!pb.is_targeted) continue;
             DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true, pb.is_name_only, left_clicked_this_frame, pb.is_in_combat);
         }
@@ -617,7 +630,7 @@ private:
         return dist_sq <= (settings_.max_range * settings_.max_range);
     }
 
-    bool BuildFrameProjection(DirectX::XMMATRIX& out_view, DirectX::XMMATRIX& out_view_proj,
+    bool BuildFrameProjection(DirectX::XMMATRIX& out_view_proj,
                               float& out_viewport_width, float& out_viewport_height) const {
         const auto cam = GW::CameraMgr::GetCamera();
         if (!cam) return false;
@@ -628,7 +641,7 @@ private:
         const XMVECTOR look_at = XMVectorSet(cam->look_at_target.x, cam->look_at_target.y, cam->look_at_target.z, 0.f);
         const XMVECTOR up      = XMVectorSet(0.f, 0.f, -1.f, 0.f);
 
-        out_view = XMMatrixLookAtLH(eye_pos, look_at, up);
+        const XMMATRIX view = XMMatrixLookAtLH(eye_pos, look_at, up);
 
         out_viewport_width  = static_cast<float>(GW::Render::GetViewportWidth());
         out_viewport_height = static_cast<float>(GW::Render::GetViewportHeight());
@@ -639,30 +652,33 @@ private:
 
         const XMMATRIX proj = XMMatrixPerspectiveFovLH(fov, aspect, kZNear, kZFar);
 
-        out_view_proj = out_view * proj;
+        out_view_proj = view * proj;
         return true;
     }
 
-    bool WorldToScreen(const GW::AgentLiving* living, const DirectX::XMMATRIX& view,
-                       const DirectX::XMMATRIX& view_proj, float viewport_width, float viewport_height,
-                       ImVec2& out) const {
+    bool WorldToScreen(const GW::AgentLiving* living, const DirectX::XMMATRIX& view_proj,
+                       float viewport_width, float viewport_height, ImVec2& out) const {
         using namespace DirectX;
 
+        // w=1 (a point, not a direction) - XMVector4Transform does not
+        // assume this the way XMVector3TransformCoord does.
         const XMVECTOR world_pos = XMVectorSet(
-            living->pos.x, living->pos.y, living->z + living->height1 * settings_.height_scale + settings_.head_offset_z, 0.f);
+            living->pos.x, living->pos.y, living->z + living->height1 * settings_.height_scale + settings_.head_offset_z, 1.f);
 
-        const XMVECTOR view_pos = XMVector3TransformCoord(world_pos, view);
-        float view_pos_arr[4];
-        XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(view_pos_arr), view_pos);
-        if (view_pos_arr[2] <= kZNear) return false;
+        const XMVECTOR clip_pos = XMVector4Transform(world_pos, view_proj);
+        float clip_arr[4];
+        XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(clip_arr), clip_pos);
 
-        const XMVECTOR clip_pos = XMVector3TransformCoord(world_pos, view_proj);
+        // For any standard perspective projection, W after this transform
+        // equals the view-space Z - the same near-plane check as before,
+        // without a separate view-only transform to get it.
+        if (clip_arr[3] <= kZNear) return false;
 
-        float ndc[4];
-        XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(ndc), clip_pos);
+        const float ndc_x = clip_arr[0] / clip_arr[3];
+        const float ndc_y = clip_arr[1] / clip_arr[3];
 
-        out.x = (ndc[0] * 0.5f + 0.5f) * viewport_width;
-        out.y = (1.f - (ndc[1] * 0.5f + 0.5f)) * viewport_height;
+        out.x = (ndc_x * 0.5f + 0.5f) * viewport_width;
+        out.y = (1.f - (ndc_y * 0.5f + 0.5f)) * viewport_height;
 
         return true;
     }
@@ -688,70 +704,6 @@ private:
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", help);
         }
-    }
-
-    // Matches EnemyWindow.cpp's DrawStatusTriangle technique and colors - small
-    // filled triangles via the draw list, offset sideways per active status so
-    // multiple conditions don't overlap. Enchanted points down, hexed and
-    // conditioned point up, same as the original.
-    void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float center_y, const GW::AgentLiving* living) const {
-        static constexpr ImU32 kEnchantedColor = IM_COL32(224, 253, 94, 255);
-        static constexpr ImU32 kHexedColor = IM_COL32(253, 113, 255, 255);
-        static constexpr ImU32 kConditionedColor = IM_COL32(160, 117, 85, 255);
-        static constexpr float kTriHeight = 8.f;
-        static constexpr float kTriWidth = kTriHeight * 1.3f;
-        static constexpr float kTriSpacing = kTriWidth + 2.f;
-        static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
-        static constexpr float kOutlinePx = 1.0f; // exact pixel width of the visible border
-
-        int count = 0;
-        auto make_triangle = [&](float w, float h, float ox, float oy, bool upsidedown, ImVec2& p1, ImVec2& p2, ImVec2& p3) {
-            if (upsidedown) {
-                p1 = ImVec2(ox, oy);
-                p2 = ImVec2(ox + w, oy);
-                p3 = ImVec2(ox + w / 2.f, oy + h);
-            }
-            else {
-                p1 = ImVec2(ox, oy + h);
-                p2 = ImVec2(ox + w, oy + h);
-                p3 = ImVec2(ox + w / 2.f, oy);
-            }
-        };
-
-        auto draw_tri = [&](ImU32 color, bool upsidedown) {
-            const float x = (right_x - count * kTriSpacing) - kTriWidth;
-            const float y = center_y - kTriHeight / 2.f;
-
-            // Slightly larger black triangle drawn first, acting as the
-            // outline; the real colored triangle is drawn on top, inset by
-            // kOutlinePx, so exactly that many pixels of black show around
-            // the edge - not dependent on stroke anti-aliasing at all.
-            ImVec2 op1, op2, op3;
-            make_triangle(kTriWidth + kOutlinePx * 2.f, kTriHeight + kOutlinePx * 2.f, x - kOutlinePx, y - kOutlinePx, upsidedown, op1, op2, op3);
-            draw_list->AddTriangleFilled(op1, op2, op3, kOutlineColor);
-
-            ImVec2 p1, p2, p3;
-            make_triangle(kTriWidth, kTriHeight, x, y, upsidedown, p1, p2, p3);
-            draw_list->AddTriangleFilled(p1, p2, p3, color);
-
-            ++count;
-        };
-
-        if (living->GetIsEnchanted()) draw_tri(kEnchantedColor, false);
-        if (living->GetIsHexed()) draw_tri(kHexedColor, true);
-        if (living->GetIsConditioned()) draw_tri(kConditionedColor, true);
-    }
-
-    void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, const std::string& text_utf8) const {
-        static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
-        static constexpr float kOutlineOffset = 1.f;
-        const char* text_begin = text_utf8.c_str();
-        const char* text_end = text_begin + text_utf8.size();
-        draw_list->AddText(font, font_size, ImVec2(pos.x - kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
-        draw_list->AddText(font, font_size, ImVec2(pos.x + kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
-        draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y - kOutlineOffset), kOutlineColor, text_begin, text_end);
-        draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y + kOutlineOffset), kOutlineColor, text_begin, text_end);
-        draw_list->AddText(font, font_size, pos, text_color, text_begin, text_end);
     }
 
     void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::string& display_utf8, const ImVec2& text_size, bool left_clicked_this_frame) {
