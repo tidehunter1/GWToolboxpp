@@ -390,6 +390,7 @@ private:
 
     static constexpr float kZNear = 46.875f;
     static constexpr float kZFar  = 48000.f;
+    static constexpr float kStandardSliderWidth = 200.f;
 
     void RefreshOnePriorityBuffer(char* buf, const std::string& raw, std::unordered_set<std::wstring>& names) {
         strncpy_s(buf, kPriorityBufSize, raw.c_str(), kPriorityBufSize - 1);
@@ -821,9 +822,11 @@ private:
     }
 
     void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::unordered_set<std::wstring>& names) {
+        ImGui::PushItemWidth(kStandardSliderWidth);
         ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
         const bool changed = ImGui::InputText(label, buf, kPriorityBufSize);
         ImGui::PopStyleColor();
+        ImGui::PopItemWidth();
         if (changed) {
             raw = buf;
             names = ParseSemicolonNameList(raw);
@@ -843,7 +846,6 @@ private:
         if (ImGui::ColorEdit3("##color_show_enemies", &enemy_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
             settings_.enemy_color = ImGui::ColorConvertFloat4ToU32(enemy_color_vec);
         }
-        ImGui::SameLine();
 
         ImGui::Checkbox("Show friendlies", &settings_.show_friendlies);
         ImGui::SameLine();
@@ -858,23 +860,7 @@ private:
         ImGui::SameLine();
         ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
         ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
-
-        int npc_display = static_cast<int>(std::lround(settings_.npc_health_threshold));
-        int allied_display = static_cast<int>(std::lround(settings_.allied_health_threshold));
-        static constexpr float kPairedSliderWidth = 260.f;
-        ImGui::PushItemWidth(kPairedSliderWidth);
-        if (ImGui::SliderInt("##npc_threshold", &npc_display, 0, 100)) {
-            settings_.npc_health_threshold = static_cast<float>(npc_display);
-        }
         ImGui::SameLine();
-        if (ImGui::SliderInt("##allied_threshold", &allied_display, 0, 100)) {
-            settings_.allied_health_threshold = static_cast<float>(allied_display);
-        }
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::TextUnformatted("NPC & Ally visibility threshold");
-        ShowHelpMarker("0 = off, 100 = on");
-
         ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
         ImGui::SameLine();
         ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
@@ -883,11 +869,26 @@ private:
         }
         ShowHelpMarker("Overrides the NPC visibility threshold slider");
 
+        int thresholds[2] = {
+            static_cast<int>(std::lround(settings_.npc_health_threshold)),
+            static_cast<int>(std::lround(settings_.allied_health_threshold))
+        };
+        ImGui::PushItemWidth(kStandardSliderWidth);
+        if (ImGui::SliderInt2("NPC & Ally visibility threshold", thresholds, 0, 100)) {
+            settings_.npc_health_threshold = static_cast<float>(thresholds[0]);
+            settings_.allied_health_threshold = static_cast<float>(thresholds[1]);
+        }
+        ImGui::PopItemWidth();
+        ShowHelpMarker("0 = off, 100 = on");
+
+        ImGui::PushItemWidth(kStandardSliderWidth);
         if (ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f, "%.0f")) {
             settings_.max_range = std::round(settings_.max_range);
         }
+        ImGui::PopItemWidth();
 
-        ImGui::PushItemWidth(kPairedSliderWidth);
+        const float half_width = (kStandardSliderWidth - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
+        ImGui::PushItemWidth(half_width);
         if (ImGui::SliderFloat("##bar_width", &settings_.bar_width, 50.f, 200.f, "%.0f")) {
             settings_.bar_width = std::round(settings_.bar_width);
         }
