@@ -295,12 +295,14 @@ struct NameplateSettings {
     bool friendly_quest_only = false;
     bool name_only_mode = false;
     bool show_summoned_allies = false;
+    bool show_friendlies = true;
 
     uint32_t enemy_color = IM_COL32(220, 40, 40, 255);
     uint32_t quest_color = IM_COL32(255, 179, 71, 255);
     uint32_t priority1_color = IM_COL32(135, 206, 250, 255);
     uint32_t priority2_color = IM_COL32(255, 105, 180, 255);
     uint32_t priority3_color = IM_COL32(147, 112, 219, 255);
+    uint32_t friendly_color = IM_COL32(0, 255, 152, 255);
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -327,6 +329,8 @@ public:
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
         LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
+        LoadSetting("show_friendlies", settings_.show_friendlies);
+        LoadSetting("friendly_color", settings_.friendly_color);
         LoadSetting("enemy_color", settings_.enemy_color);
         LoadSetting("quest_color", settings_.quest_color);
         LoadSetting("priority1_color", settings_.priority1_color);
@@ -349,6 +353,8 @@ public:
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
         SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
+        SaveSetting("show_friendlies", settings_.show_friendlies);
+        SaveSetting("friendly_color", settings_.friendly_color);
         SaveSetting("enemy_color", settings_.enemy_color);
         SaveSetting("quest_color", settings_.quest_color);
         SaveSetting("priority1_color", settings_.priority1_color);
@@ -609,10 +615,10 @@ private:
             case GW::Constants::Allegiance::Ally_NonAttackable:
             case GW::Constants::Allegiance::Spirit_Pet:
             case GW::Constants::Allegiance::Minion:
-                return true;
+                return settings_.show_friendlies;
             case GW::Constants::Allegiance::Neutral:
             case GW::Constants::Allegiance::Npc_Minipet:
-                return true;
+                return settings_.show_friendlies;
             default:
                 return false;
         }
@@ -794,7 +800,7 @@ private:
             case GW::Constants::Allegiance::Minion:
                 return IM_COL32(40, 200, 60, 255);
             default:
-                return IM_COL32(0, 255, 152, 255);
+                return settings_.friendly_color;
         }
     }
 
@@ -838,26 +844,35 @@ private:
             settings_.enemy_color = ImGui::ColorConvertFloat4ToU32(enemy_color_vec);
         }
 
-        ImGui::Checkbox("Ally name-only mode", &settings_.name_only_mode);
-        ShowHelpMarker("Show Players/Heroes/Henchmen names only");
-        ImGui::Checkbox("Show allied summoned creatures", &settings_.show_summoned_allies);
-        ShowHelpMarker("Shows spirits and minions");
+        ImGui::Checkbox("Show friendlies", &settings_.show_friendlies);
+        ImGui::SameLine();
+        ImVec4 friendly_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.friendly_color);
+        if (ImGui::ColorEdit3("##color_show_friendlies", &friendly_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+            settings_.friendly_color = ImGui::ColorConvertFloat4ToU32(friendly_color_vec);
+        }
+        ShowHelpMarker("All friendly NPCs, summoned creatures, players, heroes, henchmen. Minipets and Henchmen hidden in Outposts");
+        ImGui::SameLine();
+        ImGui::Checkbox("Show outpost names only", &settings_.name_only_mode);
+        ShowHelpMarker("Players, heroes & henchmen names are colored by their profession in outposts only");
+        ImGui::SameLine();
+        ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
+        ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
-        int npc_display = static_cast<int>(std::lround(settings_.npc_health_threshold / 10.f));
-        int allied_display = static_cast<int>(std::lround(settings_.allied_health_threshold / 10.f));
-        static constexpr float kPairedSliderWidth = 100.f;
+        int npc_display = static_cast<int>(std::lround(settings_.npc_health_threshold));
+        int allied_display = static_cast<int>(std::lround(settings_.allied_health_threshold));
+        static constexpr float kPairedSliderWidth = 200.f;
         ImGui::PushItemWidth(kPairedSliderWidth);
-        if (ImGui::SliderInt("##npc_threshold", &npc_display, 0, 10)) {
-            settings_.npc_health_threshold = static_cast<float>(npc_display) * 10.f;
+        if (ImGui::SliderInt("##npc_threshold", &npc_display, 0, 100)) {
+            settings_.npc_health_threshold = static_cast<float>(npc_display);
         }
         ImGui::SameLine();
-        if (ImGui::SliderInt("##allied_threshold", &allied_display, 0, 10)) {
-            settings_.allied_health_threshold = static_cast<float>(allied_display) * 10.f;
+        if (ImGui::SliderInt("##allied_threshold", &allied_display, 0, 100)) {
+            settings_.allied_health_threshold = static_cast<float>(allied_display);
         }
         ImGui::PopItemWidth();
         ImGui::SameLine();
         ImGui::TextUnformatted("NPC & Ally visibility threshold");
-        ShowHelpMarker("10 = always show, 0 = off");
+        ShowHelpMarker("0 = off, 100 = on");
 
         ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
         ImGui::SameLine();
@@ -868,7 +883,7 @@ private:
         ShowHelpMarker("Overrides the NPC visibility threshold slider");
 
         if (ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f, "%.0f")) {
-            settings_.max_range = std::round(settings_.max_range / 100.f) * 100.f;
+            settings_.max_range = std::round(settings_.max_range);
         }
 
         ImGui::PushItemWidth(kPairedSliderWidth);
