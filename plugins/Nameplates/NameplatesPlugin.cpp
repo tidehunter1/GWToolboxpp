@@ -174,6 +174,7 @@ public:
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
+	void Clear() { cache_.clear(); }
 
 private:
 	static constexpr uint64_t kPruneIntervalTicks = 1800;
@@ -230,6 +231,7 @@ public:
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
+	void Clear() { cache_.clear(); }
 
 private:
 	static constexpr size_t kBufferLen = 256;
@@ -355,6 +357,7 @@ private:
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
+	GW::Constants::MapID last_map_id_ = GW::Constants::MapID::None;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -466,6 +469,13 @@ private:
 	}
 
 	void DrawNameplates() {
+		const GW::Constants::MapID current_map_id = GW::Map::GetMapID();
+		if (current_map_id != last_map_id_) {
+			last_map_id_ = current_map_id;
+			name_cache_.Clear();
+			stack_y_smoother_.Clear();
+		}
+
 		GW::AgentArray* agents = GW::Agents::GetAgentArray();
 		if (!agents || !agents->valid()) return;
 
