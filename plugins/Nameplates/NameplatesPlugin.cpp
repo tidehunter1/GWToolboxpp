@@ -179,7 +179,7 @@ public:
 
 private:
 	static constexpr uint64_t kPruneIntervalTicks = 1800;
-	static constexpr uint64_t kContinuityGapTicks = 30;
+	static constexpr uint64_t kContinuityGapTicks = 3;
 	struct Entry {
 		float y = 0.f;
 		bool initialized = false;
