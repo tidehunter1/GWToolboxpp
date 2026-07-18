@@ -34,7 +34,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cwchar>
-#include <cstdio>
 #include <optional>
 #include <cfloat>
 #include <algorithm>
@@ -303,8 +302,6 @@ struct NameplateSettings {
     float max_range = 1500.0f;
     float bar_width = 200.0f;
     float bar_height = 20.0f;
-    float head_offset_z = -59.0f;
-    float height_scale = 0.8f;
 
     std::string priority1_raw;
     std::string priority2_raw;
@@ -315,7 +312,6 @@ struct NameplateSettings {
     bool friendly_quest_only = false;
     bool name_only_mode = false;
     bool show_summoned_allies = false;
-    bool debug_show_anchor_compare = false;
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -334,8 +330,6 @@ public:
         LoadSetting("max_range", settings_.max_range);
         LoadSetting("bar_width", settings_.bar_width);
         LoadSetting("bar_height", settings_.bar_height);
-        LoadSetting("head_offset_z", settings_.head_offset_z);
-        LoadSetting("height_scale", settings_.height_scale);
         LoadSetting("priority1_raw", settings_.priority1_raw);
         LoadSetting("priority2_raw", settings_.priority2_raw);
         LoadSetting("priority3_raw", settings_.priority3_raw);
@@ -344,7 +338,6 @@ public:
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
         LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
-        LoadSetting("debug_show_anchor_compare", settings_.debug_show_anchor_compare);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -354,8 +347,6 @@ public:
         SaveSetting("max_range", settings_.max_range);
         SaveSetting("bar_width", settings_.bar_width);
         SaveSetting("bar_height", settings_.bar_height);
-        SaveSetting("head_offset_z", settings_.head_offset_z);
-        SaveSetting("height_scale", settings_.height_scale);
         SaveSetting("priority1_raw", settings_.priority1_raw);
         SaveSetting("priority2_raw", settings_.priority2_raw);
         SaveSetting("priority3_raw", settings_.priority3_raw);
@@ -364,7 +355,6 @@ public:
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
         SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
-        SaveSetting("debug_show_anchor_compare", settings_.debug_show_anchor_compare);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -620,12 +610,6 @@ private:
             DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true, pb.is_name_only, left_clicked_this_frame, pb.is_in_combat);
         }
 
-        if (settings_.debug_show_anchor_compare) {
-            for (const auto& pb : pending_) {
-                DrawAnchorDebug(draw_list, pb.living, view_proj, viewport_width, viewport_height);
-            }
-        }
-
         name_cache_.MaybePrune();
         stack_y_smoother_.MaybePrune();
     }
@@ -684,10 +668,12 @@ private:
                        float viewport_width, float viewport_height, ImVec2& out) const {
         using namespace DirectX;
 
-        // w=1 (a point, not a direction) - XMVector4Transform does not
-        // assume this the way XMVector3TransformCoord does.
+        // Anchored to the game's own name_tag_z - the same value the client
+        // uses to place its own overhead name/health UI - rather than a
+        // bounding-box heuristic. This tracks correctly per-model without
+        // any manually tuned constant.
         const XMVECTOR world_pos = XMVectorSet(
-            living->pos.x, living->pos.y, living->z + living->height1 * settings_.height_scale + settings_.head_offset_z, 1.f);
+            living->pos.x, living->pos.y, living->name_tag_z, 1.f);
 
         const XMVECTOR clip_pos = XMVector4Transform(world_pos, view_proj);
         float clip_arr[4];
@@ -705,55 +691,6 @@ private:
         out.y = (1.f - (ndc_y * 0.5f + 0.5f)) * viewport_height;
 
         return true;
-    }
-
-    bool ProjectWorldPoint(float world_x, float world_y, float world_z, const DirectX::XMMATRIX& view_proj,
-                           float viewport_width, float viewport_height, ImVec2& out) const {
-        using namespace DirectX;
-        const XMVECTOR world_pos = XMVectorSet(world_x, world_y, world_z, 1.f);
-        const XMVECTOR clip_pos = XMVector4Transform(world_pos, view_proj);
-        float clip_arr[4];
-        XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(clip_arr), clip_pos);
-        if (clip_arr[3] <= kZNear) return false;
-
-        const float ndc_x = clip_arr[0] / clip_arr[3];
-        const float ndc_y = clip_arr[1] / clip_arr[3];
-        out.x = (ndc_x * 0.5f + 0.5f) * viewport_width;
-        out.y = (1.f - (ndc_y * 0.5f + 0.5f)) * viewport_height;
-        return true;
-    }
-
-    // Debug-only: draws both anchor candidates side by side so we can eyeball
-    // (and numerically measure) how far the game's own name_tag_z diverges
-    // from our bounding-box heuristic, per agent/model type. Yellow = current
-    // bbox-based anchor, cyan = name_tag_z anchor, white text = world-unit
-    // delta between them (name_tag_z - current). Purely additive, does not
-    // touch stacking or the real nameplate draw path.
-    void DrawAnchorDebug(ImDrawList* draw_list, const GW::AgentLiving* living, const DirectX::XMMATRIX& view_proj,
-                          float viewport_width, float viewport_height) const {
-        static constexpr ImU32 kCurrentColor = IM_COL32(255, 220, 0, 255);
-        static constexpr ImU32 kTagColor     = IM_COL32(0, 220, 255, 255);
-        static constexpr float kMarkerRadius = 4.f;
-
-        const float bbox_world_z = living->z + living->height1 * settings_.height_scale + settings_.head_offset_z;
-
-        ImVec2 bbox_screen, tag_screen;
-        const bool has_bbox = ProjectWorldPoint(living->pos.x, living->pos.y, bbox_world_z, view_proj, viewport_width, viewport_height, bbox_screen);
-        const bool has_tag  = ProjectWorldPoint(living->pos.x, living->pos.y, living->name_tag_z, view_proj, viewport_width, viewport_height, tag_screen);
-        if (!has_bbox && !has_tag) return;
-
-        if (has_bbox) draw_list->AddCircleFilled(bbox_screen, kMarkerRadius, kCurrentColor);
-        if (has_tag)  draw_list->AddCircleFilled(tag_screen, kMarkerRadius, kTagColor);
-        if (has_bbox && has_tag) draw_list->AddLine(bbox_screen, tag_screen, IM_COL32(255, 255, 255, 120), 1.f);
-
-        if (has_tag) {
-            ImFont* font = ImGui::GetFont();
-            if (font) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "dz: %.1f", living->name_tag_z - bbox_world_z);
-                DrawOutlinedText(draw_list, font, kNameplateFontSize, ImVec2(tag_screen.x + 8.f, tag_screen.y - 8.f), IM_COL32(255, 255, 255, 255), buf);
-            }
-        }
     }
 
     void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living, bool left_clicked_this_frame) const {
@@ -926,8 +863,6 @@ private:
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
         ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 200.f);
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
-        ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
-        ImGui::SliderFloat("Height scale (bounding box)", &settings_.height_scale, 0.1f, 1.5f);
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
@@ -935,10 +870,6 @@ private:
         DrawPriorityInput("Priority 1 (light blue)", kPriority1Color, priority1_buf_, settings_.priority1_raw, priority1_names_);
         DrawPriorityInput("Priority 2 (pink)", kPriority2Color, priority2_buf_, settings_.priority2_raw, priority2_names_);
         DrawPriorityInput("Priority 3 (purple)", kPriority3Color, priority3_buf_, settings_.priority3_raw, priority3_names_);
-
-        ImGui::Separator();
-        ImGui::Checkbox("Debug: compare anchor methods", &settings_.debug_show_anchor_compare);
-        ShowHelpMarker("Yellow dot = current bounding-box anchor. Cyan dot = game's own name_tag_z. White text is the world-unit delta between them (name_tag_z - current) - watch how it changes across different model types (humans, dwarves, giants, mounted/siege units).");
     }
 };
 
