@@ -825,7 +825,7 @@ private:
         ImGui::SameLine();
         ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
         const std::string picker_id = std::string("##color_") + label;
-        if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x)) {
+        if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
             color = ImGui::ColorConvertFloat4ToU32(color_vec);
         }
     }
@@ -834,7 +834,7 @@ private:
         ImGui::Checkbox("Show enemies", &settings_.show_enemies);
         ImGui::SameLine();
         ImVec4 enemy_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.enemy_color);
-        if (ImGui::ColorEdit3("##color_show_enemies", &enemy_color_vec.x)) {
+        if (ImGui::ColorEdit3("##color_show_enemies", &enemy_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
             settings_.enemy_color = ImGui::ColorConvertFloat4ToU32(enemy_color_vec);
         }
 
@@ -845,8 +845,8 @@ private:
 
         int npc_display = static_cast<int>(std::lround(settings_.npc_health_threshold / 10.f));
         int allied_display = static_cast<int>(std::lround(settings_.allied_health_threshold / 10.f));
-        const float threshold_half_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
-        ImGui::PushItemWidth(threshold_half_width);
+        static constexpr float kPairedSliderWidth = 100.f;
+        ImGui::PushItemWidth(kPairedSliderWidth);
         if (ImGui::SliderInt("##npc_threshold", &npc_display, 0, 10)) {
             settings_.npc_health_threshold = static_cast<float>(npc_display) * 10.f;
         }
@@ -862,15 +862,16 @@ private:
         ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
         ImGui::SameLine();
         ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
-        if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x)) {
+        if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
             settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
         }
         ShowHelpMarker("Overrides the NPC visibility threshold slider");
 
-        ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
+        if (ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f, "%.0f")) {
+            settings_.max_range = std::round(settings_.max_range / 100.f) * 100.f;
+        }
 
-        const float barsize_half_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
-        ImGui::PushItemWidth(barsize_half_width);
+        ImGui::PushItemWidth(kPairedSliderWidth);
         if (ImGui::SliderFloat("##bar_width", &settings_.bar_width, 50.f, 200.f, "%.0f")) {
             settings_.bar_width = std::round(settings_.bar_width);
         }
