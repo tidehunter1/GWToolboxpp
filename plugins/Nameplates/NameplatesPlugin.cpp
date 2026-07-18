@@ -856,7 +856,7 @@ private:
         ImGui::SameLine();
         ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
         ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
-        ImGui::SameLine();
+
         ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
         ImGui::SameLine();
         ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
@@ -884,7 +884,7 @@ private:
         if (ImGui::SliderFloat("##bar_width", &settings_.bar_width, 50.f, 200.f, "%.0f")) {
             settings_.bar_width = std::round(settings_.bar_width);
         }
-        ImGui::SameLine();
+        ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
         if (ImGui::SliderFloat("##bar_height", &settings_.bar_height, 15.f, 20.f, "%.0f")) {
             settings_.bar_height = std::round(settings_.bar_height);
         }
