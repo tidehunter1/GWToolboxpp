@@ -29,6 +29,7 @@
 #include <DirectXMath.h>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -58,9 +59,11 @@ inline std::string WideToUtf8(const std::wstring& wide) {
     return out;
 }
 
-inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std::wstring& name, const std::string& full_utf8, float max_width) {
-    const ImVec2 full_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, full_utf8.c_str());
-    if (full_size.x <= max_width) return full_utf8;
+inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std::wstring& name, std::string_view full_utf8, float max_width) {
+    const char* full_begin = full_utf8.data();
+    const char* full_end = full_begin + full_utf8.size();
+    const ImVec2 full_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, full_begin, full_end);
+    if (full_size.x <= max_width) return std::string(full_utf8);
 
     size_t lo = 0, hi = name.size();
     std::string best_utf8 = WideToUtf8(L"...");
@@ -123,10 +126,10 @@ inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float cent
     if (living->GetIsConditioned()) draw_tri(kConditionedColor, true);
 }
 
-inline void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, const std::string& text_utf8) {
+inline void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, std::string_view text_utf8) {
     static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
     static constexpr float kOutlineOffset = 1.f;
-    const char* text_begin = text_utf8.c_str();
+    const char* text_begin = text_utf8.data();
     const char* text_end = text_begin + text_utf8.size();
     draw_list->AddText(font, font_size, ImVec2(pos.x - kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
     draw_list->AddText(font, font_size, ImVec2(pos.x + kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
@@ -137,7 +140,6 @@ inline void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_siz
 
 class StackYSmoother {
 public:
-
     float Update(uint32_t agent_id, float target_y, float alpha) {
         Entry& e = cache_[agent_id];
         e.last_seen_tick = tick_;
@@ -184,11 +186,10 @@ private:
 
 class AgentNameCache {
 public:
-
     struct NameLookup {
-        const std::wstring& lower;
-        const std::wstring& display;
-        const std::string& display_utf8;
+        const std::wstring* lower;
+        const std::wstring* display;
+        const std::string* display_utf8;
     };
 
     NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
@@ -198,6 +199,7 @@ public:
             wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
             entry.buffer[0] = L'\0';
             entry.converted = false;
+            entry.truncated_for_width = -1.f;
             GW::UI::AsyncDecodeStr(enc_name, entry.buffer, kBufferLen);
         }
         if (!entry.converted && entry.buffer[0] != L'\0') {
@@ -207,7 +209,16 @@ public:
             entry.decoded_display_utf8 = WideToUtf8(entry.decoded_display);
             entry.converted = true;
         }
-        return { entry.decoded_lower, entry.decoded_display, entry.decoded_display_utf8 };
+        return { &entry.decoded_lower, &entry.decoded_display, &entry.decoded_display_utf8 };
+    }
+
+    const std::string& GetTruncated(uint32_t agent_id, ImFont* font, float font_size, float max_width) {
+        Entry& entry = cache_[agent_id];
+        if (entry.truncated_for_width != max_width) {
+            entry.truncated_utf8 = TruncateWithEllipsis(font, font_size, entry.decoded_display, entry.decoded_display_utf8, max_width);
+            entry.truncated_for_width = max_width;
+        }
+        return entry.truncated_utf8;
     }
 
     void MaybePrune() {
@@ -236,6 +247,8 @@ private:
         std::wstring decoded_lower;
         std::wstring decoded_display;
         std::string decoded_display_utf8;
+        float truncated_for_width = -1.f;
+        std::string truncated_utf8;
         uint64_t last_seen_tick = 0;
     };
     std::unordered_map<uint32_t, Entry> cache_;
@@ -244,7 +257,6 @@ private:
 };
 
 inline bool IsMinipet(uint16_t player_number) {
-
     static constexpr std::array<uint16_t, 129> ids = {
         230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
         240, 241, 242, 243, 244, 245, 246, 247, 248, 249,
@@ -306,6 +318,13 @@ struct NameplateSettings {
 
 class NameplatesPlugin : public ToolboxPlugin {
 public:
+
+    NameplatesPlugin() {
+        pending_.reserve(256);
+        placed_.reserve(256);
+        order_.reserve(256);
+    }
+
     const char* Name() const override { return "Nameplates"; }
 
     bool* GetVisiblePtr() override { return &visible_; }
@@ -401,7 +420,7 @@ private:
         RefreshOnePriorityBuffer(priority3_buf_, settings_.priority3_raw, priority3_names_);
     }
 
-    std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const {
+    [[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const {
         if (name_lower.empty()) return std::nullopt;
         if (priority1_names_.count(name_lower)) return settings_.priority1_color;
         if (priority2_names_.count(name_lower)) return settings_.priority2_color;
@@ -413,9 +432,9 @@ private:
         GW::AgentLiving* living = nullptr;
         ImVec2 screen{};
         ImVec2 footprint{};
-        std::wstring name_lower;
-        std::wstring display;
-        std::string display_utf8;
+        const std::wstring* name_lower = nullptr;
+        const std::wstring* display = nullptr;
+        const std::string* display_utf8 = nullptr;
         bool is_targeted = false;
         bool is_name_only = false;
         bool stack_adjusted = false;
@@ -428,27 +447,24 @@ private:
     std::vector<PendingBar> pending_;
     std::vector<PlacedRect> placed_;
 
-    ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8) const {
+    std::vector<size_t> order_;
+
+    [[nodiscard]] ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8, ImFont* font) const {
         if (is_name_only) {
-            if (display_utf8.empty()) return ImVec2(0.f, 0.f);
-            ImFont* font = ImGui::GetFont();
-            if (!font) return ImVec2(0.f, 0.f);
-            const float font_size = kNameplateFontSize;
-            return font->CalcTextSizeA(font_size, FLT_MAX, 0.f, display_utf8.c_str());
+            if (display_utf8.empty() || !font) return ImVec2(0.f, 0.f);
+            return font->CalcTextSizeA(kNameplateFontSize, FLT_MAX, 0.f, display_utf8.c_str());
         }
         return ImVec2(settings_.bar_width, settings_.bar_height);
     }
 
     void ResolveStacking(std::vector<PendingBar>& items) {
         static constexpr float kGap = 2.f;
-
         static constexpr float kMaxPushMultiplier = 4.f;
-
         static constexpr float kSortEpsilon = 1.f;
 
-        std::vector<size_t> order(items.size());
-        for (size_t i = 0; i < items.size(); ++i) order[i] = i;
-        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        order_.resize(items.size());
+        for (size_t i = 0; i < items.size(); ++i) order_[i] = i;
+        std::sort(order_.begin(), order_.end(), [&](size_t a, size_t b) {
             const float ya = items[a].screen.y;
             const float yb = items[b].screen.y;
             if (std::fabs(ya - yb) > kSortEpsilon) return ya < yb;
@@ -458,7 +474,7 @@ private:
         placed_.clear();
         placed_.reserve(items.size());
 
-        for (size_t oi : order) {
+        for (size_t oi : order_) {
             PendingBar& item = items[oi];
             if (item.footprint.x <= 0.f || item.footprint.y <= 0.f) continue;
 
@@ -508,8 +524,29 @@ private:
         float viewport_width, viewport_height;
         if (!BuildFrameProjection(view_proj, viewport_width, viewport_height)) return;
 
-        ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
+        ImFont* font = ImGui::GetFont();
 
+        GatherPendingBars(agents, me, target, in_outpost, view_proj, viewport_width, viewport_height, font);
+        ResolveStacking(pending_);
+        ApplyStackSmoothing();
+
+        ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
+        for (const auto& pb : pending_) {
+            if (pb.is_targeted) continue;
+            DrawBar(draw_list, pb, font, left_clicked_this_frame);
+        }
+        for (const auto& pb : pending_) {
+            if (!pb.is_targeted) continue;
+            DrawBar(draw_list, pb, font, left_clicked_this_frame);
+        }
+
+        name_cache_.MaybePrune();
+        stack_y_smoother_.MaybePrune();
+    }
+
+    void GatherPendingBars(GW::AgentArray* agents, GW::AgentLiving* me, GW::AgentLiving* target,
+                            bool in_outpost, const DirectX::XMMATRIX& view_proj,
+                            float viewport_width, float viewport_height, ImFont* font) {
         pending_.clear();
 
         for (GW::Agent* agent : *agents) {
@@ -560,6 +597,7 @@ private:
             PendingBar pb;
             pb.living = living;
             pb.screen = screen;
+            pb.natural_y = screen.y;
             pb.name_lower = name_lookup.lower;
             pb.display = name_lookup.display;
             pb.display_utf8 = name_lookup.display_utf8;
@@ -577,37 +615,21 @@ private:
             else {
                 pb.is_in_combat = false;
             }
-            pb.footprint = ComputeFootprint(pb.is_name_only, pb.display_utf8);
+            pb.footprint = ComputeFootprint(pb.is_name_only, *pb.display_utf8, font);
 
             pending_.push_back(std::move(pb));
         }
+    }
 
-        for (auto& pb : pending_) {
-            pb.natural_y = pb.screen.y;
-        }
-
-        ResolveStacking(pending_);
-
+    void ApplyStackSmoothing() {
         for (auto& pb : pending_) {
             const float target_offset = pb.screen.y - pb.natural_y;
             const float smoothed_offset = stack_y_smoother_.Update(pb.living->agent_id, target_offset, kStackSmoothing);
             pb.screen.y = pb.natural_y + smoothed_offset;
         }
-
-        for (const auto& pb : pending_) {
-            if (pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, false, pb.is_name_only, left_clicked_this_frame, pb.is_in_combat);
-        }
-        for (const auto& pb : pending_) {
-            if (!pb.is_targeted) continue;
-            DrawBar(draw_list, pb.screen, pb.living, pb.name_lower, pb.display, pb.display_utf8, pb.footprint, true, pb.is_name_only, left_clicked_this_frame, pb.is_in_combat);
-        }
-
-        name_cache_.MaybePrune();
-        stack_y_smoother_.MaybePrune();
     }
 
-    bool ShouldShowAllegiance(GW::Constants::Allegiance allegiance) const {
+    [[nodiscard]] bool ShouldShowAllegiance(GW::Constants::Allegiance allegiance) const {
         switch (allegiance) {
             case GW::Constants::Allegiance::Enemy:
                 return settings_.show_enemies;
@@ -623,7 +645,7 @@ private:
         }
     }
 
-    bool WithinRange(const GW::AgentLiving* living, const GW::Agent* me) const {
+    [[nodiscard]] bool WithinRange(const GW::AgentLiving* living, const GW::Agent* me) const {
         if (!me) return true;
         const float dx = living->pos.x - me->pos.x;
         const float dy = living->pos.y - me->pos.y;
@@ -631,7 +653,7 @@ private:
         return dist_sq <= (settings_.max_range * settings_.max_range);
     }
 
-    bool BuildFrameProjection(DirectX::XMMATRIX& out_view_proj,
+    [[nodiscard]] bool BuildFrameProjection(DirectX::XMMATRIX& out_view_proj,
                               float& out_viewport_width, float& out_viewport_height) const {
         const auto cam = GW::CameraMgr::GetCamera();
         if (!cam) return false;
@@ -657,7 +679,7 @@ private:
         return true;
     }
 
-    bool WorldToScreen(const GW::AgentLiving* living, const DirectX::XMMATRIX& view_proj,
+    [[nodiscard]] bool WorldToScreen(const GW::AgentLiving* living, const DirectX::XMMATRIX& view_proj,
                        float viewport_width, float viewport_height, ImVec2& out) const {
         using namespace DirectX;
 
@@ -697,29 +719,27 @@ private:
         }
     }
 
-    void DrawNameOnly(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::string& display_utf8, const ImVec2& text_size, bool left_clicked_this_frame) {
-        if (display_utf8.empty()) return;
+    void DrawNameOnly(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
+        if (!font || pb.display_utf8->empty()) return;
 
-        ImFont* font = ImGui::GetFont();
-        if (!font) return;
         const float font_size = kNameplateFontSize;
+        const float text_x = pb.screen.x - pb.footprint.x / 2.f;
+        const float text_y = pb.screen.y - pb.footprint.y / 2.f;
 
-        const float text_x = screen.x - text_size.x / 2.f;
-        const float text_y = screen.y - text_size.y / 2.f;
+        const ImU32 text_color = ProfessionColor(pb.living->primary);
+        DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, *pb.display_utf8);
 
-        const ImU32 text_color = ProfessionColor(living->primary);
-        DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, display_utf8);
+        DrawStatusTriangles(draw_list, text_x + pb.footprint.x, text_y - 6.f, pb.living);
 
-        DrawStatusTriangles(draw_list, text_x + text_size.x, text_y - 6.f, living);
-
-        CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + text_size.x, text_y + text_size.y), living, left_clicked_this_frame);
+        CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + pb.footprint.x, text_y + pb.footprint.y), pb.living, left_clicked_this_frame);
     }
 
-    void DrawBar(ImDrawList* draw_list, const ImVec2& screen, const GW::AgentLiving* living, const std::wstring& name_lower, const std::wstring& display_name, const std::string& display_utf8, const ImVec2& footprint, bool is_targeted, bool is_name_only, bool left_clicked_this_frame, bool is_in_combat) {
+    void DrawBar(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
+        const GW::AgentLiving* living = pb.living;
         const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
-        if (is_name_only) {
-            DrawNameOnly(draw_list, screen, living, display_utf8, footprint, left_clicked_this_frame);
+        if (pb.is_name_only) {
+            DrawNameOnly(draw_list, pb, font, left_clicked_this_frame);
             return;
         }
 
@@ -729,12 +749,12 @@ private:
         const float bar_width = settings_.bar_width;
         const float bar_height = settings_.bar_height;
 
-        const ImVec2 top_left(screen.x - bar_width / 2.f, screen.y);
+        const ImVec2 top_left(pb.screen.x - bar_width / 2.f, pb.screen.y);
         const ImVec2 bottom_right(top_left.x + bar_width, top_left.y + bar_height);
         const ImVec2 fill_bottom_right(top_left.x + bar_width * hp_pct, bottom_right.y);
 
         ImU32 fill_color;
-        if (const auto priority_color = GetPriorityColor(name_lower)) {
+        if (const auto priority_color = GetPriorityColor(*pb.name_lower)) {
             fill_color = *priority_color;
         }
         else if (living->GetHasQuest()) {
@@ -747,15 +767,11 @@ private:
             fill_color = ColorFor(living->allegiance);
         }
 
-        ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
-        ImVec4 bg_col4;
-        bg_col4.x = fill_col4.x * kBgTintAmount;
-        bg_col4.y = fill_col4.y * kBgTintAmount;
-        bg_col4.z = fill_col4.z * kBgTintAmount;
-        bg_col4.w = kBgOpacity;
+        const ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
+        const ImVec4 bg_col4(fill_col4.x * kBgTintAmount, fill_col4.y * kBgTintAmount, fill_col4.z * kBgTintAmount, kBgOpacity);
         const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
 
-        const ImU32 border_color = is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
+        const ImU32 border_color = pb.is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
 
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
@@ -765,32 +781,28 @@ private:
 
         CheckClickToTarget(top_left, bottom_right, living, left_clicked_this_frame);
 
-        if (!display_name.empty()) {
-            ImFont* font = ImGui::GetFont();
-            if (font) {
-                const float font_size = kNameplateFontSize;
+        if (!pb.display->empty() && font) {
+            const float font_size = kNameplateFontSize;
+            constexpr float kPadding = 6.f;
+            const float max_text_width = bar_width * 0.8f - kPadding;
 
-                constexpr float kPadding = 6.f;
-                const float max_text_width = bar_width * 0.8f - kPadding;
+            if (max_text_width > 0.f) {
+                const std::string& clipped_utf8 = name_cache_.GetTruncated(living->agent_id, font, font_size, max_text_width);
+                const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, clipped_utf8.c_str());
 
-                if (max_text_width > 0.f) {
-                    const std::string clipped_utf8 = TruncateWithEllipsis(font, font_size, display_name, display_utf8, max_text_width);
-                    const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.f, clipped_utf8.c_str());
+                const float text_x = top_left.x + kPadding;
+                const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
 
-                    const float text_x = top_left.x + kPadding;
-                    const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
-
-                    static constexpr ImU32 kNormalTextColor = IM_COL32(255, 255, 255, 255);
-                    static constexpr ImU32 kInCombatTextColor = IM_COL32(255, 190, 116, 255);
-                    const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && is_in_combat;
-                    const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
-                    DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
-                }
+                static constexpr ImU32 kNormalTextColor = IM_COL32(255, 255, 255, 255);
+                static constexpr ImU32 kInCombatTextColor = IM_COL32(255, 190, 116, 255);
+                const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && pb.is_in_combat;
+                const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
+                DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
             }
         }
     }
 
-    ImU32 ColorFor(GW::Constants::Allegiance allegiance) const {
+    [[nodiscard]] ImU32 ColorFor(GW::Constants::Allegiance allegiance) const {
         switch (allegiance) {
             case GW::Constants::Allegiance::Enemy:
                 return settings_.enemy_color;
@@ -803,7 +815,7 @@ private:
         }
     }
 
-    ImU32 ProfessionColor(GW::Constants::ProfessionByte prof) const {
+    [[nodiscard]] ImU32 ProfessionColor(GW::Constants::ProfessionByte prof) const {
         switch (prof) {
             case GW::Constants::ProfessionByte::Warrior:      return IM_COL32(255, 255, 136, 255);
             case GW::Constants::ProfessionByte::Ranger:       return IM_COL32(204, 255, 153, 255);
@@ -849,7 +861,7 @@ private:
         if (ImGui::ColorEdit3("##color_show_friendlies", &friendly_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
             settings_.friendly_color = ImGui::ColorConvertFloat4ToU32(friendly_color_vec);
         }
-        ShowHelpMarker("All friendly Players, heroes, henchmen, NPCs, summoned creatures. Minipets and Henchmen hidden in Outposts");
+        ShowHelpMarker("All friendly NPCs, summoned creatures, players, heroes, henchmen. Minipets and Henchmen hidden in Outposts");
 
         ImGui::Checkbox("Show outpost names only", &settings_.name_only_mode);
         ShowHelpMarker("Show only profession-colored player names in outposts");
