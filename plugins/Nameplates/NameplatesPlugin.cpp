@@ -24,7 +24,6 @@
 #include <GWCA/Managers/GameThreadMgr.h>
 
 #include <ToolboxPlugin.h>
-#include <Utils/FontLoader.h>
 #include <imgui.h>
 
 #include <DirectXMath.h>
@@ -383,7 +382,7 @@ private:
     char priority3_buf_[kPriorityBufSize] = {};
 
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
-    static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
+    static constexpr float kNameplateFontSize = 18.f;
     static constexpr float kStackSmoothing = 0.05f;
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
