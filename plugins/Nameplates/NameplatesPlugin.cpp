@@ -162,8 +162,9 @@ class StackYSmoother {
 public:
 	float Update(uint32_t agent_id, float target_y, float alpha) {
 		Entry& e = cache_[agent_id];
+		const bool is_continuous = e.initialized && (tick_ - e.last_seen_tick) <= kContinuityGapTicks;
 		e.last_seen_tick = tick_;
-		if (!e.initialized) {
+		if (!is_continuous) {
 			e.y = target_y;
 			e.initialized = true;
 		}
@@ -178,6 +179,7 @@ public:
 
 private:
 	static constexpr uint64_t kPruneIntervalTicks = 1800;
+	static constexpr uint64_t kContinuityGapTicks = 30;
 	struct Entry {
 		float y = 0.f;
 		bool initialized = false;
