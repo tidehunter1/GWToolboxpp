@@ -295,6 +295,12 @@ struct NameplateSettings {
     bool friendly_quest_only = false;
     bool name_only_mode = false;
     bool show_summoned_allies = false;
+
+    uint32_t enemy_color = IM_COL32(220, 40, 40, 255);
+    uint32_t quest_color = IM_COL32(255, 179, 71, 255);
+    uint32_t priority1_color = IM_COL32(135, 206, 250, 255);
+    uint32_t priority2_color = IM_COL32(255, 105, 180, 255);
+    uint32_t priority3_color = IM_COL32(147, 112, 219, 255);
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -321,6 +327,11 @@ public:
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
         LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
+        LoadSetting("enemy_color", settings_.enemy_color);
+        LoadSetting("quest_color", settings_.quest_color);
+        LoadSetting("priority1_color", settings_.priority1_color);
+        LoadSetting("priority2_color", settings_.priority2_color);
+        LoadSetting("priority3_color", settings_.priority3_color);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -338,6 +349,11 @@ public:
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
         SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
+        SaveSetting("enemy_color", settings_.enemy_color);
+        SaveSetting("quest_color", settings_.quest_color);
+        SaveSetting("priority1_color", settings_.priority1_color);
+        SaveSetting("priority2_color", settings_.priority2_color);
+        SaveSetting("priority3_color", settings_.priority3_color);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -360,11 +376,7 @@ private:
     char priority2_buf_[kPriorityBufSize] = {};
     char priority3_buf_[kPriorityBufSize] = {};
 
-    static constexpr ImU32 kPriority1Color = IM_COL32(135, 206, 250, 255);
-    static constexpr ImU32 kPriority2Color = IM_COL32(255, 105, 180, 255);
-    static constexpr ImU32 kPriority3Color = IM_COL32(147, 112, 219, 255);
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
-    static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
     static constexpr float kStackSmoothing = 0.05f;
     static constexpr float kBgTintAmount = 0.3f;
@@ -386,9 +398,9 @@ private:
 
     std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const {
         if (name_lower.empty()) return std::nullopt;
-        if (priority1_names_.count(name_lower)) return kPriority1Color;
-        if (priority2_names_.count(name_lower)) return kPriority2Color;
-        if (priority3_names_.count(name_lower)) return kPriority3Color;
+        if (priority1_names_.count(name_lower)) return settings_.priority1_color;
+        if (priority2_names_.count(name_lower)) return settings_.priority2_color;
+        if (priority3_names_.count(name_lower)) return settings_.priority3_color;
         return std::nullopt;
     }
 
@@ -721,7 +733,7 @@ private:
             fill_color = *priority_color;
         }
         else if (living->GetHasQuest()) {
-            fill_color = kQuestColor;
+            fill_color = settings_.quest_color;
         }
         else if (is_ally) {
             fill_color = ProfessionColor(living->primary);
@@ -776,7 +788,7 @@ private:
     ImU32 ColorFor(GW::Constants::Allegiance allegiance) const {
         switch (allegiance) {
             case GW::Constants::Allegiance::Enemy:
-                return IM_COL32(220, 40, 40, 255);
+                return settings_.enemy_color;
             case GW::Constants::Allegiance::Ally_NonAttackable:
             case GW::Constants::Allegiance::Spirit_Pet:
             case GW::Constants::Allegiance::Minion:
@@ -802,7 +814,7 @@ private:
         }
     }
 
-    void DrawPriorityInput(const char* label, ImU32 color, char* buf, std::string& raw, std::unordered_set<std::wstring>& names) {
+    void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::unordered_set<std::wstring>& names) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
         const bool changed = ImGui::InputText(label, buf, kPriorityBufSize);
         ImGui::PopStyleColor();
@@ -810,30 +822,72 @@ private:
             raw = buf;
             names = ParseSemicolonNameList(raw);
         }
+        ImGui::SameLine();
+        ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
+        const std::string picker_id = std::string("##color_") + label;
+        if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x)) {
+            color = ImGui::ColorConvertFloat4ToU32(color_vec);
+        }
     }
 
     void DrawSettingsInternal() {
         ImGui::Checkbox("Show enemies", &settings_.show_enemies);
+        ImGui::SameLine();
+        ImVec4 enemy_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.enemy_color);
+        if (ImGui::ColorEdit3("##color_show_enemies", &enemy_color_vec.x)) {
+            settings_.enemy_color = ImGui::ColorConvertFloat4ToU32(enemy_color_vec);
+        }
+
         ImGui::Checkbox("Ally name-only mode", &settings_.name_only_mode);
         ShowHelpMarker("Show Players/Heroes/Henchmen names only");
         ImGui::Checkbox("Show allied summoned creatures", &settings_.show_summoned_allies);
         ShowHelpMarker("Shows spirits and minions");
-        ImGui::SliderFloat("NPC visibility threshold", &settings_.npc_health_threshold, 0.f, 100.f);
-        ShowHelpMarker("100 = always show");
-        ImGui::SliderFloat("Ally visibility threshold", &settings_.allied_health_threshold, 0.f, 100.f);
-        ShowHelpMarker("Players/Heroes/Henchmen, 100 = always show");
+
+        int npc_display = static_cast<int>(std::lround(settings_.npc_health_threshold / 10.f));
+        int allied_display = static_cast<int>(std::lround(settings_.allied_health_threshold / 10.f));
+        const float threshold_half_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
+        ImGui::PushItemWidth(threshold_half_width);
+        if (ImGui::SliderInt("##npc_threshold", &npc_display, 0, 10)) {
+            settings_.npc_health_threshold = static_cast<float>(npc_display) * 10.f;
+        }
+        ImGui::SameLine();
+        if (ImGui::SliderInt("##allied_threshold", &allied_display, 0, 10)) {
+            settings_.allied_health_threshold = static_cast<float>(allied_display) * 10.f;
+        }
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        ImGui::TextUnformatted("NPC & Ally visibility threshold");
+        ShowHelpMarker("10 = always show, 0 = off");
+
         ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
+        ImGui::SameLine();
+        ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
+        if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x)) {
+            settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
+        }
         ShowHelpMarker("Overrides the NPC visibility threshold slider");
+
         ImGui::SliderFloat("Max range", &settings_.max_range, 500.f, 5000.f);
-        ImGui::SliderFloat("Bar width", &settings_.bar_width, 10.f, 200.f);
-        ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
+
+        const float barsize_half_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
+        ImGui::PushItemWidth(barsize_half_width);
+        if (ImGui::SliderFloat("##bar_width", &settings_.bar_width, 50.f, 200.f, "%.0f")) {
+            settings_.bar_width = std::round(settings_.bar_width);
+        }
+        ImGui::SameLine();
+        if (ImGui::SliderFloat("##bar_height", &settings_.bar_height, 15.f, 20.f, "%.0f")) {
+            settings_.bar_height = std::round(settings_.bar_height);
+        }
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Bar width & height");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
 
-        DrawPriorityInput("Priority 1 (light blue)", kPriority1Color, priority1_buf_, settings_.priority1_raw, priority1_names_);
-        DrawPriorityInput("Priority 2 (pink)", kPriority2Color, priority2_buf_, settings_.priority2_raw, priority2_names_);
-        DrawPriorityInput("Priority 3 (purple)", kPriority3Color, priority3_buf_, settings_.priority3_raw, priority3_names_);
+        DrawPriorityInput("Priority 1", settings_.priority1_color, priority1_buf_, settings_.priority1_raw, priority1_names_);
+        DrawPriorityInput("Priority 2", settings_.priority2_color, priority2_buf_, settings_.priority2_raw, priority2_names_);
+        DrawPriorityInput("Priority 3", settings_.priority3_color, priority3_buf_, settings_.priority3_raw, priority3_names_);
     }
 };
 
