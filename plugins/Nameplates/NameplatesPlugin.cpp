@@ -458,6 +458,12 @@ private:
     // conflict with anything keep their natural position untouched.
     void ResolveStacking(std::vector<PendingBar>& items) {
         static constexpr float kGap = 2.f;
+        // Beyond this many bar-heights of upward displacement, give up and
+        // accept overlap for this bar rather than keep chasing a free slot
+        // further away - a capped, accepted overlap that stays near the
+        // owning unit beats an unbounded push that can drift a nameplate far
+        // from the agent it's labeling during a dense, chained pull.
+        static constexpr float kMaxPushMultiplier = 4.f;
 
         std::vector<size_t> order(items.size());
         for (size_t i = 0; i < items.size(); ++i) order[i] = i;
@@ -476,6 +482,7 @@ private:
             const float x_min = item.screen.x - half_w;
             const float x_max = item.screen.x + half_w;
             const float natural_top = item.is_name_only ? item.screen.y - item.footprint.y / 2.f : item.screen.y;
+            const float max_push = item.footprint.y * kMaxPushMultiplier;
 
             float cur_top = natural_top;
             bool moved = true;
@@ -487,7 +494,14 @@ private:
                     const bool overlap_x = x_min < p.x_max && x_max > p.x_min;
                     const bool overlap_y = y_min < p.y_max && y_max > p.y_min;
                     if (overlap_x && overlap_y) {
-                        cur_top = p.y_min - item.footprint.y - kGap;
+                        const float candidate_top = p.y_min - item.footprint.y - kGap;
+                        if (natural_top - candidate_top > max_push) {
+                            // Pushing further would exceed the cap; stop here
+                            // and accept whatever overlap remains at cur_top.
+                            moved = false;
+                            break;
+                        }
+                        cur_top = candidate_top;
                         moved = true;
                     }
                 }
