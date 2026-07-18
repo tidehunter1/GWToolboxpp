@@ -79,11 +79,56 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
     return best_utf8;
 }
 
-struct HysteresisEntry {
-    float sort_y = 0.f;
-    float visual_y = 0.f;
-    bool initialized = false;
-    uint64_t last_seen_tick = 0;
+class StackYSmoother {
+public:
+    // Eases toward a resolved stacking Y position rather than snapping to it.
+    // Deliberately Y-only: X is never touched, so there's no lag/drag on
+    // horizontal position as the camera moves - only the vertical slot a
+    // unit gets assigned by stacking eases in, rather than jumping instantly
+    // when that assignment changes frame to frame. First sighting of an
+    // agent snaps directly, since there's nothing to ease from yet.
+    float Update(uint32_t agent_id, float target_y, float alpha) {
+        Entry& e = cache_[agent_id];
+        e.last_seen_tick = tick_;
+        if (!e.initialized) {
+            e.y = target_y;
+            e.initialized = true;
+        }
+        else {
+            e.y += (target_y - e.y) * alpha;
+        }
+        return e.y;
+    }
+
+    void Reset(uint32_t agent_id) {
+        cache_.erase(agent_id);
+    }
+
+    void MaybePrune() {
+        ++tick_;
+        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
+        last_prune_tick_ = tick_;
+
+        for (auto it = cache_.begin(); it != cache_.end(); ) {
+            if (tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
+                it = cache_.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+    }
+
+private:
+    static constexpr uint64_t kPruneIntervalTicks = 1800;
+    struct Entry {
+        float y = 0.f;
+        bool initialized = false;
+        uint64_t last_seen_tick = 0;
+    };
+    std::unordered_map<uint32_t, Entry> cache_;
+    uint64_t tick_ = 0;
+    uint64_t last_prune_tick_ = 0;
 };
 
 class AgentNameCache {
@@ -263,11 +308,6 @@ struct NameplateSettings {
     bool friendly_quest_only = false;
     bool name_only_mode = false;
     bool show_summoned_allies = false;
-
-    float stack_hysteresis = 25.0f;
-    float stack_smoothing = 0.15f;
-    float overlap_v = 1.1f; // 1.0 = exactly touching, >1.0 = a proportional gap
-    float overlap_h = 0.8f; // horizontal collision tolerance (<1.0 allows some visual overlap before treated as colliding)
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -296,10 +336,6 @@ public:
         LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
         LoadSetting("name_only_mode", settings_.name_only_mode);
         LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
-        LoadSetting("stack_hysteresis", settings_.stack_hysteresis);
-        LoadSetting("stack_smoothing", settings_.stack_smoothing);
-        LoadSetting("overlap_v", settings_.overlap_v);
-        LoadSetting("overlap_h", settings_.overlap_h);
         RefreshPriorityBuffersAndLists();
     }
 
@@ -319,10 +355,6 @@ public:
         SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
         SaveSetting("name_only_mode", settings_.name_only_mode);
         SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
-        SaveSetting("stack_hysteresis", settings_.stack_hysteresis);
-        SaveSetting("stack_smoothing", settings_.stack_smoothing);
-        SaveSetting("overlap_v", settings_.overlap_v);
-        SaveSetting("overlap_h", settings_.overlap_h);
         ToolboxPlugin::SaveSettings(folder);
     }
 
@@ -337,9 +369,7 @@ private:
     bool visible_ = true;
 
     AgentNameCache name_cache_;
-    std::unordered_map<uint32_t, HysteresisEntry> stacking_cache_;
-    uint64_t stacking_tick_ = 0;
-    uint64_t stacking_last_prune_tick_ = 0;
+    StackYSmoother stack_y_smoother_;
     std::unordered_set<std::wstring> priority1_names_, priority2_names_, priority3_names_;
 
     static constexpr size_t kPriorityBufSize = 512;
@@ -353,6 +383,7 @@ private:
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
     static constexpr ImU32 kQuestColor     = IM_COL32(255, 179, 71, 255);
     static constexpr float kNameplateFontSize = static_cast<float>(FontLoader::FontSize::header2);
+    static constexpr float kStackSmoothing = 0.05f;
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
 
@@ -389,8 +420,6 @@ private:
         bool is_name_only = false;
         bool stack_adjusted = false;
         bool is_in_combat = false;
-        float sort_y = 0.f;
-        float natural_y = 0.f;
     };
 
     ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8) const {
@@ -409,101 +438,47 @@ private:
     // (repeatedly, in case that creates a new conflict further up) until its
     // footprint no longer overlaps any already-placed one. Bars that never
     // conflict with anything keep their natural position untouched.
-    void ResolveStackingHysteresis(std::vector<PendingBar>& items) {
-        static constexpr uint64_t kPruneIntervalTicks = 1800;
-        ++stacking_tick_;
+    void ResolveStacking(std::vector<PendingBar>& items) const {
+        static constexpr float kGap = 2.f;
 
-        // 1. Assign stable sort keys - only updates the key used for
-        // ordering once a unit's natural position has moved more than
-        // settings_.stack_hysteresis pixels from its last committed value,
-        // so small camera-jitter wobble never flips two units' relative order.
-        for (auto& item : items) {
-            const float natural_y = item.is_name_only ? item.screen.y - item.footprint.y / 2.f : item.screen.y;
-            HysteresisEntry& e = stacking_cache_[item.living->agent_id];
-            e.last_seen_tick = stacking_tick_;
-
-            if (!e.initialized) {
-                e.sort_y = natural_y;
-                e.visual_y = natural_y;
-                e.initialized = true;
-            }
-            else if (std::fabs(natural_y - e.sort_y) > settings_.stack_hysteresis) {
-                e.sort_y = natural_y;
-            }
-
-            item.sort_y = e.sort_y;
-            item.natural_y = natural_y;
-        }
-
-        // 2. Stable sort, bottom-to-top - process the lowest-on-screen plate
-        // first, cascading others upward to avoid it.
-        std::stable_sort(items.begin(), items.end(), [](const PendingBar& a, const PendingBar& b) {
-            return a.sort_y > b.sort_y;
+        std::vector<size_t> order(items.size());
+        for (size_t i = 0; i < items.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            return items[a].screen.y < items[b].screen.y;
         });
 
-        // 3. Deterministic hard placement (same guaranteed-no-overlap loop
-        // as before - keep pushing up until genuinely clear), now using
-        // proportional padding instead of a flat pixel gap - the collision
-        // box scales with each plate's own size, so spacing feels
-        // consistent whether a plate is small (name-only mode) or large.
         struct PlacedRect { float x_min, x_max, y_min, y_max; };
         std::vector<PlacedRect> placed;
         placed.reserve(items.size());
 
-        for (auto& item : items) {
+        for (size_t oi : order) {
+            PendingBar& item = items[oi];
             if (item.footprint.x <= 0.f || item.footprint.y <= 0.f) continue;
 
-            const float padded_width = item.footprint.x * settings_.overlap_h;
-            const float padded_height = item.footprint.y * settings_.overlap_v;
-            const float half_w = padded_width / 2.f;
+            const float half_w = item.footprint.x / 2.f;
             const float x_min = item.screen.x - half_w;
             const float x_max = item.screen.x + half_w;
+            const float natural_top = item.is_name_only ? item.screen.y - item.footprint.y / 2.f : item.screen.y;
 
-            float cur_top = item.natural_y;
+            float cur_top = natural_top;
             bool moved = true;
             while (moved) {
                 moved = false;
                 for (const auto& p : placed) {
-                    const float cur_bottom = cur_top + padded_height;
+                    const float y_min = cur_top;
+                    const float y_max = cur_top + item.footprint.y;
                     const bool overlap_x = x_min < p.x_max && x_max > p.x_min;
-                    const bool overlap_y = cur_top < p.y_max && cur_bottom > p.y_min;
+                    const bool overlap_y = y_min < p.y_max && y_max > p.y_min;
                     if (overlap_x && overlap_y) {
-                        cur_top = p.y_min - padded_height;
+                        cur_top = p.y_min - item.footprint.y - kGap;
                         moved = true;
                     }
                 }
             }
 
-            placed.push_back({x_min, x_max, cur_top, cur_top + padded_height});
-            item.stack_adjusted = (cur_top != item.natural_y);
-
-            // 4. Smooth interpolation - only for units actually displaced by
-            // the placement step; units that never conflicted keep their
-            // exact natural position untouched, no drift.
-            HysteresisEntry& e = stacking_cache_[item.living->agent_id];
-            if (item.stack_adjusted) {
-                e.visual_y += (cur_top - e.visual_y) * settings_.stack_smoothing;
-            }
-            else {
-                e.visual_y = cur_top;
-            }
-
-            // e.visual_y/cur_top are in "top" space; DrawNameOnly expects
-            // screen.y to be the vertical CENTER for name-only items (bar
-            // mode already uses top-space directly).
-            item.screen.y = item.is_name_only ? e.visual_y + item.footprint.y / 2.f : e.visual_y;
-        }
-
-        if (stacking_tick_ - stacking_last_prune_tick_ >= kPruneIntervalTicks) {
-            stacking_last_prune_tick_ = stacking_tick_;
-            for (auto it = stacking_cache_.begin(); it != stacking_cache_.end(); ) {
-                if (stacking_tick_ - it->second.last_seen_tick > kPruneIntervalTicks) {
-                    it = stacking_cache_.erase(it);
-                }
-                else {
-                    ++it;
-                }
-            }
+            item.stack_adjusted = (cur_top != natural_top);
+            item.screen.y += (cur_top - natural_top);
+            placed.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
         }
     }
 
@@ -594,7 +569,16 @@ private:
             pending.push_back(std::move(pb));
         }
 
-        ResolveStackingHysteresis(pending);
+        ResolveStacking(pending);
+
+        for (auto& pb : pending) {
+            if (pb.stack_adjusted) {
+                pb.screen.y = stack_y_smoother_.Update(pb.living->agent_id, pb.screen.y, kStackSmoothing);
+            }
+            else {
+                stack_y_smoother_.Reset(pb.living->agent_id);
+            }
+        }
 
         for (const auto& pb : pending) {
             if (pb.is_targeted) continue;
@@ -606,6 +590,7 @@ private:
         }
 
         name_cache_.MaybePrune();
+        stack_y_smoother_.MaybePrune();
     }
 
     bool ShouldShowAllegiance(GW::Constants::Allegiance allegiance) const {
@@ -918,18 +903,6 @@ private:
         ImGui::SliderFloat("Bar height", &settings_.bar_height, 2.f, 20.f);
         ImGui::SliderFloat("Nameplate Axis(Y)", &settings_.head_offset_z, -100.f, 100.f);
         ImGui::SliderFloat("Height scale (bounding box)", &settings_.height_scale, 0.1f, 1.5f);
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Stacking hysteresis (experimental)");
-        ImGui::SliderFloat("Sort hysteresis (px)", &settings_.stack_hysteresis, 0.f, 60.f);
-        ShowHelpMarker("How far a unit must move before it's allowed to swap stacking order with another");
-        ImGui::SliderFloat("Transition smoothing", &settings_.stack_smoothing, 0.05f, 0.5f);
-        ShowHelpMarker("How quickly a displaced plate eases into its new slot - lower is smoother/slower");
-        ImGui::SliderFloat("Vertical overlap tolerance", &settings_.overlap_v, 0.5f, 2.0f);
-        ShowHelpMarker("1.0 = plates exactly touching, higher = proportional gap between them");
-        ImGui::SliderFloat("Horizontal overlap tolerance", &settings_.overlap_h, 0.3f, 1.5f);
-        ShowHelpMarker("Below 1.0 allows some side-by-side overlap before plates are treated as colliding");
-        ShowHelpMarker("Spacing between stacked plates");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
