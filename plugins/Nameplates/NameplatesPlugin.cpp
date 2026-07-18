@@ -163,8 +163,9 @@ public:
 	float Update(uint32_t agent_id, float target_y, float alpha) {
 		Entry& e = cache_[agent_id];
 		const bool is_continuous = e.initialized && (tick_ - e.last_seen_tick) <= kContinuityGapTicks;
+		const bool has_diverged = e.initialized && std::fabs(target_y - e.y) > kMaxOffsetDrift;
 		e.last_seen_tick = tick_;
-		if (!is_continuous) {
+		if (!is_continuous || has_diverged) {
 			e.y = target_y;
 			e.initialized = true;
 		}
@@ -180,6 +181,7 @@ public:
 private:
 	static constexpr uint64_t kPruneIntervalTicks = 1800;
 	static constexpr uint64_t kContinuityGapTicks = 3;
+	static constexpr float kMaxOffsetDrift = 300.f;
 	struct Entry {
 		float y = 0.f;
 		bool initialized = false;
