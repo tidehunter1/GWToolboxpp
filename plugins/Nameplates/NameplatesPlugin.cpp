@@ -50,21 +50,18 @@ inline std::wstring Utf8ToWide(const std::string& utf8) {
     return out;
 }
 
-inline std::string WideToUtf8(const std::wstring& wide) {
-    if (wide.empty()) return {};
-    const int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-    if (len <= 0) return {};
-    std::string out(static_cast<size_t>(len), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), len, nullptr, nullptr);
-    return out;
-}
-
 inline void WideToUtf8Into(const std::wstring& wide, std::string& out) {
     if (wide.empty()) { out.clear(); return; }
     const int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
     if (len <= 0) { out.clear(); return; }
     out.resize(static_cast<size_t>(len));
     WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), len, nullptr, nullptr);
+}
+
+inline std::string WideToUtf8(const std::wstring& wide) {
+    std::string out;
+    WideToUtf8Into(wide, out);
+    return out;
 }
 
 inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std::wstring& name, std::string_view full_utf8, float max_width) {
@@ -146,6 +143,21 @@ inline void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_siz
     draw_list->AddText(font, font_size, pos, text_color, text_begin, text_end);
 }
 
+template<typename CacheMap>
+inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, uint64_t interval) {
+    ++tick;
+    if (tick - last_prune < interval) return;
+    last_prune = tick;
+
+    for (auto it = cache.begin(); it != cache.end(); ) {
+        if (tick - it->second.last_seen_tick >= interval) {
+            it = cache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 class StackYSmoother {
 public:
     float Update(uint32_t agent_id, float target_y, float alpha) {
@@ -161,20 +173,7 @@ public:
         return e.y;
     }
 
-    void MaybePrune() {
-        ++tick_;
-        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
-        last_prune_tick_ = tick_;
-
-        for (auto it = cache_.begin(); it != cache_.end(); ) {
-            if (tick_ - it->second.last_seen_tick >= kPruneIntervalTicks) {
-                it = cache_.erase(it);
-            }
-            else {
-                ++it;
-            }
-        }
-    }
+    void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
 
 private:
     static constexpr uint64_t kPruneIntervalTicks = 1800;
@@ -184,8 +183,7 @@ private:
         uint64_t last_seen_tick = 0;
     };
     std::unordered_map<uint32_t, Entry> cache_;
-    uint64_t tick_ = 0;
-    uint64_t last_prune_tick_ = 0;
+    uint64_t tick_ = 0, last_prune_tick_ = 0;
 };
 
 class AgentNameCache {
@@ -225,20 +223,7 @@ public:
         return entry.truncated_utf8;
     }
 
-    void MaybePrune() {
-        ++tick_;
-        if (tick_ - last_prune_tick_ < kPruneIntervalTicks) return;
-        last_prune_tick_ = tick_;
-
-        for (auto it = cache_.begin(); it != cache_.end(); ) {
-            if (tick_ - it->second.last_seen_tick >= kPruneIntervalTicks) {
-                it = cache_.erase(it);
-            }
-            else {
-                ++it;
-            }
-        }
-    }
+    void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
 
 private:
     static constexpr size_t kBufferLen = 256;
@@ -248,39 +233,28 @@ private:
         wchar_t last_enc[kMaxEncLen] = {};
         wchar_t buffer[kBufferLen] = {};
         bool converted = false;
-        std::wstring decoded_lower;
-        std::wstring decoded_display;
-        std::string decoded_display_utf8;
         float truncated_for_width = -1.f;
-        std::string truncated_utf8;
         uint64_t last_seen_tick = 0;
+        std::wstring decoded_lower, decoded_display;
+        std::string decoded_display_utf8, truncated_utf8;
     };
     std::unordered_map<uint32_t, Entry> cache_;
-    uint64_t tick_ = 0;
-    uint64_t last_prune_tick_ = 0;
+    uint64_t tick_ = 0, last_prune_tick_ = 0;
 };
 
 inline bool IsMinipet(uint16_t player_number) {
     static constexpr std::array<uint16_t, 129> ids = {
-        230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
-        240, 241, 242, 243, 244, 245, 246, 247, 248, 249,
-        250, 251, 252, 253, 254, 255, 256, 257, 258, 259,
-        260, 261, 262, 263, 264, 265, 266, 267, 268, 269,
-        270, 271, 272, 273, 274, 275, 276, 277, 278, 279,
-        280, 281, 282, 283, 284, 285, 286, 287, 288, 289,
-        290, 291, 292, 293, 294, 295, 296, 297, 298, 299,
-        300, 301, 302, 303, 304, 305, 306, 307, 309, 310,
-        311, 312, 313, 314, 315, 316, 317, 318, 319, 320,
-        321, 322, 323, 324, 325, 326, 327, 328, 329, 330,
-        331, 332, 333, 334, 335, 336, 337, 338, 339, 340,
-        341, 342, 343, 344, 345, 346, 347, 348, 349, 350,
-        8035, 8344, 8349, 8350, 8351, 8352, 8354, 9038, 9039,
+        230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259,
+        260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289,
+        290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320,
+        321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350,
+        8035, 8344, 8349, 8350, 8351, 8352, 8354, 9038, 9039
     };
     return std::binary_search(ids.begin(), ids.end(), player_number);
 }
 
-inline std::unordered_set<std::wstring> ParseSemicolonNameList(const std::string& raw) {
-    std::unordered_set<std::wstring> out;
+inline std::vector<std::wstring> ParseSemicolonNameList(const std::string& raw) {
+    std::vector<std::wstring> out;
     std::istringstream stream(raw);
     std::string token;
     while (std::getline(stream, token, ';')) {
@@ -290,39 +264,31 @@ inline std::unordered_set<std::wstring> ParseSemicolonNameList(const std::string
 
         std::wstring w = Utf8ToWide(token.substr(start, end - start + 1));
         std::transform(w.begin(), w.end(), w.begin(), ::towlower);
-        if (!w.empty()) out.insert(std::move(w));
+        if (!w.empty()) out.push_back(std::move(w));
     }
+    std::sort(out.begin(), out.end());
     return out;
 }
 
+struct PriorityConfig {
+    std::string raw;
+    uint32_t color;
+};
+
 struct NameplateSettings {
-    bool show_enemies = true;
-    float max_range = 1500.0f;
-    float bar_width = 200.0f;
-    float bar_height = 20.0f;
+    bool show_enemies = true, friendly_quest_only = false, name_only_mode = false, show_summoned_allies = false, show_friendlies = true;
+    float max_range = 1500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 100.0f, allied_health_threshold = 100.0f;
+    uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
-    std::string priority1_raw;
-    std::string priority2_raw;
-    std::string priority3_raw;
-
-    float npc_health_threshold = 100.0f;
-    float allied_health_threshold = 100.0f;
-    bool friendly_quest_only = false;
-    bool name_only_mode = false;
-    bool show_summoned_allies = false;
-    bool show_friendlies = true;
-
-    uint32_t enemy_color = IM_COL32(220, 40, 40, 255);
-    uint32_t quest_color = IM_COL32(255, 179, 71, 255);
-    uint32_t priority1_color = IM_COL32(135, 206, 250, 255);
-    uint32_t priority2_color = IM_COL32(255, 105, 180, 255);
-    uint32_t priority3_color = IM_COL32(147, 112, 219, 255);
-    uint32_t friendly_color = IM_COL32(0, 255, 152, 255);
+    std::array<PriorityConfig, 3> priorities = {{
+        {"", IM_COL32(135, 206, 250, 255)},
+        {"", IM_COL32(255, 105, 180, 255)},
+        {"", IM_COL32(147, 112, 219, 255)}
+    }};
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
 public:
-
     NameplatesPlugin() {
         pending_.reserve(256);
         placed_.reserve(256);
@@ -338,58 +304,42 @@ public:
 
     void LoadSettings(const wchar_t* folder) override {
         ToolboxPlugin::LoadSettings(folder);
+        #define L_SET(var) LoadSetting(#var, settings_.var)
+        L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height);
+        L_SET(npc_health_threshold); L_SET(allied_health_threshold);
+        L_SET(friendly_quest_only); L_SET(name_only_mode); L_SET(show_summoned_allies);
+        L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); 
         LoadSetting("visible", visible_);
-        LoadSetting("show_enemies", settings_.show_enemies);
-        LoadSetting("max_range", settings_.max_range);
-        LoadSetting("bar_width", settings_.bar_width);
-        LoadSetting("bar_height", settings_.bar_height);
-        LoadSetting("priority1_raw", settings_.priority1_raw);
-        LoadSetting("priority2_raw", settings_.priority2_raw);
-        LoadSetting("priority3_raw", settings_.priority3_raw);
-        LoadSetting("npc_health_threshold", settings_.npc_health_threshold);
-        LoadSetting("allied_health_threshold", settings_.allied_health_threshold);
-        LoadSetting("friendly_quest_only", settings_.friendly_quest_only);
-        LoadSetting("name_only_mode", settings_.name_only_mode);
-        LoadSetting("show_summoned_allies", settings_.show_summoned_allies);
-        LoadSetting("show_friendlies", settings_.show_friendlies);
-        LoadSetting("friendly_color", settings_.friendly_color);
-        LoadSetting("enemy_color", settings_.enemy_color);
-        LoadSetting("quest_color", settings_.quest_color);
-        LoadSetting("priority1_color", settings_.priority1_color);
-        LoadSetting("priority2_color", settings_.priority2_color);
-        LoadSetting("priority3_color", settings_.priority3_color);
+        #undef L_SET
+
+        for (size_t i = 0; i < 3; ++i) {
+            const std::string prefix = "priority" + std::to_string(i + 1);
+            LoadSetting((prefix + "_raw").c_str(), settings_.priorities[i].raw);
+            LoadSetting((prefix + "_color").c_str(), settings_.priorities[i].color);
+        }
         RefreshPriorityBuffersAndLists();
     }
 
     void SaveSettings(const wchar_t* folder) override {
+        #define S_SET(var) SaveSetting(#var, settings_.var)
+        S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height);
+        S_SET(npc_health_threshold); S_SET(allied_health_threshold);
+        S_SET(friendly_quest_only); S_SET(name_only_mode); S_SET(show_summoned_allies);
+        S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
         SaveSetting("visible", visible_);
-        SaveSetting("show_enemies", settings_.show_enemies);
-        SaveSetting("max_range", settings_.max_range);
-        SaveSetting("bar_width", settings_.bar_width);
-        SaveSetting("bar_height", settings_.bar_height);
-        SaveSetting("priority1_raw", settings_.priority1_raw);
-        SaveSetting("priority2_raw", settings_.priority2_raw);
-        SaveSetting("priority3_raw", settings_.priority3_raw);
-        SaveSetting("npc_health_threshold", settings_.npc_health_threshold);
-        SaveSetting("allied_health_threshold", settings_.allied_health_threshold);
-        SaveSetting("friendly_quest_only", settings_.friendly_quest_only);
-        SaveSetting("name_only_mode", settings_.name_only_mode);
-        SaveSetting("show_summoned_allies", settings_.show_summoned_allies);
-        SaveSetting("show_friendlies", settings_.show_friendlies);
-        SaveSetting("friendly_color", settings_.friendly_color);
-        SaveSetting("enemy_color", settings_.enemy_color);
-        SaveSetting("quest_color", settings_.quest_color);
-        SaveSetting("priority1_color", settings_.priority1_color);
-        SaveSetting("priority2_color", settings_.priority2_color);
-        SaveSetting("priority3_color", settings_.priority3_color);
+        #undef S_SET
+
+        for (size_t i = 0; i < 3; ++i) {
+            const std::string prefix = "priority" + std::to_string(i + 1);
+            SaveSetting((prefix + "_raw").c_str(), settings_.priorities[i].raw);
+            SaveSetting((prefix + "_color").c_str(), settings_.priorities[i].color);
+        }
         ToolboxPlugin::SaveSettings(folder);
     }
 
     bool CanTerminate() override { return true; }
 
-    void Draw(IDirect3DDevice9* ) override {
-        DrawNameplates();
-    }
+    void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
 
 private:
     NameplateSettings settings_;
@@ -397,60 +347,52 @@ private:
 
     AgentNameCache name_cache_;
     StackYSmoother stack_y_smoother_;
-    std::unordered_set<std::wstring> priority1_names_, priority2_names_, priority3_names_;
 
-    static constexpr size_t kPriorityBufSize = 512;
-    char priority1_buf_[kPriorityBufSize] = {};
-    char priority2_buf_[kPriorityBufSize] = {};
-    char priority3_buf_[kPriorityBufSize] = {};
+    struct PriorityState {
+        char buf[512] = {};
+        std::vector<std::wstring> names;
+    };
+    std::array<PriorityState, 3> priority_states_;
 
     static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
     static constexpr float kNameplateFontSize = 18.f;
     static constexpr float kStackSmoothing = 0.05f;
     static constexpr float kBgTintAmount = 0.3f;
     static constexpr float kBgOpacity = 1.0f;
-
     static constexpr float kZNear = 46.875f;
     static constexpr float kZFar  = 48000.f;
 
-    void RefreshOnePriorityBuffer(char* buf, const std::string& raw, std::unordered_set<std::wstring>& names) {
-        strncpy_s(buf, kPriorityBufSize, raw.c_str(), kPriorityBufSize - 1);
-        names = ParseSemicolonNameList(raw);
-    }
-
     void RefreshPriorityBuffersAndLists() {
-        RefreshOnePriorityBuffer(priority1_buf_, settings_.priority1_raw, priority1_names_);
-        RefreshOnePriorityBuffer(priority2_buf_, settings_.priority2_raw, priority2_names_);
-        RefreshOnePriorityBuffer(priority3_buf_, settings_.priority3_raw, priority3_names_);
+        for (size_t i = 0; i < 3; ++i) {
+            strncpy_s(priority_states_[i].buf, 512, settings_.priorities[i].raw.c_str(), 511);
+            priority_states_[i].names = ParseSemicolonNameList(settings_.priorities[i].raw);
+        }
     }
 
     [[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const {
         if (name_lower.empty()) return std::nullopt;
-        if (priority1_names_.count(name_lower)) return settings_.priority1_color;
-        if (priority2_names_.count(name_lower)) return settings_.priority2_color;
-        if (priority3_names_.count(name_lower)) return settings_.priority3_color;
+        for (size_t i = 0; i < 3; ++i) {
+            if (std::binary_search(priority_states_[i].names.begin(), priority_states_[i].names.end(), name_lower)) {
+                return settings_.priorities[i].color;
+            }
+        }
         return std::nullopt;
     }
 
     struct PendingBar {
         GW::AgentLiving* living = nullptr;
-        ImVec2 screen{};
-        ImVec2 footprint{};
+        ImVec2 screen{}, footprint{};
         const std::wstring* name_lower = nullptr;
         const std::wstring* display = nullptr;
         const std::string* display_utf8 = nullptr;
-        bool is_targeted = false;
-        bool is_name_only = false;
-        bool stack_adjusted = false;
+        bool is_targeted = false, is_name_only = false, stack_adjusted = false, is_in_combat = false;
         float natural_y = 0.f;
-        bool is_in_combat = false;
     };
 
     struct PlacedRect { float x_min, x_max, y_min, y_max; };
 
     std::vector<PendingBar> pending_;
     std::vector<PlacedRect> placed_;
-
     std::vector<size_t> order_;
 
     [[nodiscard]] ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8, ImFont* font) const {
@@ -535,13 +477,18 @@ private:
         ApplyStackSmoothing();
 
         ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
+        const PendingBar* target_pb = nullptr;
+        
         for (const auto& pb : pending_) {
-            if (pb.is_targeted) continue;
+            if (pb.is_targeted) {
+                target_pb = &pb;
+                continue;
+            }
             DrawBar(draw_list, pb, font, left_clicked_this_frame);
         }
-        for (const auto& pb : pending_) {
-            if (!pb.is_targeted) continue;
-            DrawBar(draw_list, pb, font, left_clicked_this_frame);
+        
+        if (target_pb) {
+            DrawBar(draw_list, *target_pb, font, left_clicked_this_frame);
         }
 
         name_cache_.MaybePrune();
@@ -595,8 +542,7 @@ private:
             ImVec2 screen;
             if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) continue;
 
-            const auto name_lookup = name_cache_.Get(
-                living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
+            const auto name_lookup = name_cache_.Get(living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
 
             PendingBar pb;
             pb.living = living;
@@ -640,7 +586,6 @@ private:
             case GW::Constants::Allegiance::Ally_NonAttackable:
             case GW::Constants::Allegiance::Spirit_Pet:
             case GW::Constants::Allegiance::Minion:
-                return settings_.show_friendlies;
             case GW::Constants::Allegiance::Neutral:
             case GW::Constants::Allegiance::Npc_Minipet:
                 return settings_.show_friendlies;
@@ -653,8 +598,7 @@ private:
         if (!me) return true;
         const float dx = living->pos.x - me->pos.x;
         const float dy = living->pos.y - me->pos.y;
-        const float dist_sq = dx * dx + dy * dy;
-        return dist_sq <= max_range_sq;
+        return (dx * dx + dy * dy) <= max_range_sq;
     }
 
     [[nodiscard]] bool BuildFrameProjection(DirectX::XMMATRIX& out_view_proj,
@@ -663,7 +607,6 @@ private:
         if (!cam) return false;
 
         using namespace DirectX;
-
         const XMVECTOR eye_pos = XMVectorSet(cam->position.x, cam->position.y, cam->position.z, 0.f);
         const XMVECTOR look_at = XMVectorSet(cam->look_at_target.x, cam->look_at_target.y, cam->look_at_target.z, 0.f);
         const XMVECTOR up      = XMVectorSet(0.f, 0.f, -1.f, 0.f);
@@ -676,7 +619,6 @@ private:
 
         const float fov = GW::Render::GetFieldOfView();
         const float aspect = out_viewport_width / out_viewport_height;
-
         const XMMATRIX proj = XMMatrixPerspectiveFovLH(fov, aspect, kZNear, kZFar);
 
         out_view_proj = view * proj;
@@ -687,9 +629,7 @@ private:
                        float viewport_width, float viewport_height, ImVec2& out) const {
         using namespace DirectX;
 
-        const XMVECTOR world_pos = XMVectorSet(
-            living->pos.x, living->pos.y, living->name_tag_z, 1.f);
-
+        const XMVECTOR world_pos = XMVectorSet(living->pos.x, living->pos.y, living->name_tag_z, 1.f);
         const XMVECTOR clip_pos = XMVector4Transform(world_pos, view_proj);
         float clip_arr[4];
         XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(clip_arr), clip_pos);
@@ -697,12 +637,8 @@ private:
         if (clip_arr[3] <= kZNear) return false;
 
         const float inv_w = 1.f / clip_arr[3];
-        const float ndc_x = clip_arr[0] * inv_w;
-        const float ndc_y = clip_arr[1] * inv_w;
-
-        out.x = (ndc_x * 0.5f + 0.5f) * viewport_width;
-        out.y = (1.f - (ndc_y * 0.5f + 0.5f)) * viewport_height;
-
+        out.x = ((clip_arr[0] * inv_w) * 0.5f + 0.5f) * viewport_width;
+        out.y = (1.f - ((clip_arr[1] * inv_w) * 0.5f + 0.5f)) * viewport_height;
         return true;
     }
 
@@ -719,9 +655,7 @@ private:
     void ShowHelpMarker(const char* help) const {
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", help);
-        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
     }
 
     void DrawNameOnly(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
@@ -733,9 +667,7 @@ private:
 
         const ImU32 text_color = ProfessionColor(pb.living->primary);
         DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, *pb.display_utf8);
-
         DrawStatusTriangles(draw_list, text_x + pb.footprint.x, text_y - 6.f, pb.living);
-
         CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + pb.footprint.x, text_y + pb.footprint.y), pb.living, left_clicked_this_frame);
     }
 
@@ -749,7 +681,6 @@ private:
         }
 
         const float hp_pct = std::clamp(living->hp, 0.f, 1.f);
-
         const float bar_width = settings_.bar_width;
         const float bar_height = settings_.bar_height;
 
@@ -758,31 +689,20 @@ private:
         const ImVec2 fill_bottom_right(top_left.x + bar_width * hp_pct, bottom_right.y);
 
         ImU32 fill_color;
-        if (const auto priority_color = GetPriorityColor(*pb.name_lower)) {
-            fill_color = *priority_color;
-        }
-        else if (living->GetHasQuest()) {
-            fill_color = settings_.quest_color;
-        }
-        else if (is_ally) {
-            fill_color = ProfessionColor(living->primary);
-        }
-        else {
-            fill_color = ColorFor(living->allegiance);
-        }
+        if (const auto priority_color = GetPriorityColor(*pb.name_lower)) fill_color = *priority_color;
+        else if (living->GetHasQuest()) fill_color = settings_.quest_color;
+        else if (is_ally) fill_color = ProfessionColor(living->primary);
+        else fill_color = ColorFor(living->allegiance);
 
         const ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
         const ImVec4 bg_col4(fill_col4.x * kBgTintAmount, fill_col4.y * kBgTintAmount, fill_col4.z * kBgTintAmount, kBgOpacity);
         const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
-
         const ImU32 border_color = pb.is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
 
         draw_list->AddRectFilled(top_left, bottom_right, bg_color);
         draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
         draw_list->AddRect(top_left, bottom_right, border_color);
-
         DrawStatusTriangles(draw_list, bottom_right.x - 8.f, top_left.y + bar_height / 2.f, living);
-
         CheckClickToTarget(top_left, bottom_right, living, left_clicked_this_frame);
 
         if (!pb.display->empty() && font) {
@@ -820,24 +740,21 @@ private:
     }
 
     [[nodiscard]] ImU32 ProfessionColor(GW::Constants::ProfessionByte prof) const {
-        switch (prof) {
-            case GW::Constants::ProfessionByte::Warrior:      return IM_COL32(255, 255, 136, 255);
-            case GW::Constants::ProfessionByte::Ranger:       return IM_COL32(204, 255, 153, 255);
-            case GW::Constants::ProfessionByte::Monk:         return IM_COL32(170, 204, 255, 255);
-            case GW::Constants::ProfessionByte::Necromancer:  return IM_COL32(153, 255, 204, 255);
-            case GW::Constants::ProfessionByte::Mesmer:       return IM_COL32(221, 170, 255, 255);
-            case GW::Constants::ProfessionByte::Elementalist: return IM_COL32(255, 187, 187, 255);
-            case GW::Constants::ProfessionByte::Assassin:     return IM_COL32(255, 204, 238, 255);
-            case GW::Constants::ProfessionByte::Ritualist:    return IM_COL32(187, 255, 255, 255);
-            case GW::Constants::ProfessionByte::Paragon:      return IM_COL32(255, 204, 153, 255);
-            case GW::Constants::ProfessionByte::Dervish:      return IM_COL32(221, 221, 255, 255);
-            default:                                          return IM_COL32(221, 221, 221, 255);
-        }
+        static constexpr std::array<ImU32, 11> kColors = {
+            IM_COL32(221, 221, 221, 255), IM_COL32(255, 255, 136, 255),
+            IM_COL32(204, 255, 153, 255), IM_COL32(170, 204, 255, 255),
+            IM_COL32(153, 255, 204, 255), IM_COL32(221, 170, 255, 255),
+            IM_COL32(255, 187, 187, 255), IM_COL32(255, 204, 238, 255),
+            IM_COL32(187, 255, 255, 255), IM_COL32(255, 204, 153, 255),
+            IM_COL32(221, 221, 255, 255)
+        };
+        const size_t index = static_cast<size_t>(prof);
+        return (index < kColors.size()) ? kColors[index] : kColors[0];
     }
 
-    void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::unordered_set<std::wstring>& names) {
+    void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
-        const bool changed = ImGui::InputText(label, buf, kPriorityBufSize);
+        const bool changed = ImGui::InputText(label, buf, 512);
         ImGui::PopStyleColor();
         if (changed) {
             raw = buf;
@@ -911,20 +828,19 @@ private:
         ImGui::Separator();
         ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
 
-        DrawPriorityInput("Priority 1", settings_.priority1_color, priority1_buf_, settings_.priority1_raw, priority1_names_);
-        DrawPriorityInput("Priority 2", settings_.priority2_color, priority2_buf_, settings_.priority2_raw, priority2_names_);
-        DrawPriorityInput("Priority 3", settings_.priority3_color, priority3_buf_, settings_.priority3_raw, priority3_names_);
+        for (size_t i = 0; i < 3; ++i) {
+            const std::string label = "Priority " + std::to_string(i + 1);
+            DrawPriorityInput(label.c_str(), settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
+        }
     }
 };
 
-void NameplatesPlugin::DrawSettings()
-{
+void NameplatesPlugin::DrawSettings() {
     ToolboxPlugin::DrawSettings();
     DrawSettingsInternal();
 }
 
-DLLAPI ToolboxPlugin* ToolboxPluginInstance()
-{
+DLLAPI ToolboxPlugin* ToolboxPluginInstance() {
     static NameplatesPlugin instance;
     return &instance;
 }
