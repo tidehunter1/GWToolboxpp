@@ -849,7 +849,7 @@ private:
         if (ImGui::ColorEdit3("##color_show_friendlies", &friendly_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
             settings_.friendly_color = ImGui::ColorConvertFloat4ToU32(friendly_color_vec);
         }
-        ShowHelpMarker("All friendly NPCs, summoned creatures, players, heroes, henchmen. Minipets and Henchmen hidden in Outposts");
+        ShowHelpMarker("All friendly Players, heroes, henchmen, NPCs, summoned creatures. Minipets and Henchmen hidden in Outposts");
 
         ImGui::Checkbox("Show outpost names only", &settings_.name_only_mode);
         ShowHelpMarker("Show only profession-colored player names in outposts");
