@@ -31,6 +31,7 @@ jobs:
     # Exposed at job level so the release steps can gate on `env.CERTUM_OTP_URI`
     # (secrets can't be referenced directly in an `if:` expression).
     env:
+      BUILD_CONFIG: Debug
       CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
       CERTUM_USERID: ${{ secrets.CERTUM_USERID }}
       CERTUM_CERT_SHA1: ${{ secrets.CERTUM_CERT_SHA1 }}
@@ -110,12 +111,13 @@ jobs:
       # Execute the build.  You can specify a specific target with "--target <NAME>"
       #run: cmake --build . --config RelWithDebInfo
       #run: cmake --build . --target Nameplates --config RelWithDebInfo
-      run: cmake --build . --target Nameplates --config Debug
+      #run: cmake --build . --target Nameplates --config Debug
+      run: cmake --build . --target Nameplates --config ${{ env.BUILD_CONFIG }}
     - name: Save output
       uses: actions/upload-artifact@v4
       with:
-        path: ${{runner.workspace}}/GWToolboxpp/bin/RelWithDebInfo/
-
+        #path: ${{runner.workspace}}/GWToolboxpp/bin/RelWithDebInfo/
+        path: ${{runner.workspace}}/GWToolboxpp/bin/${{ env.BUILD_CONFIG }}/
     - name: Determine release version
       id: version
       if: github.ref == 'refs/heads/master'
