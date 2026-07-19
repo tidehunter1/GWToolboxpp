@@ -283,6 +283,8 @@ struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
 	bool recolor_quest_nametags = true, recolor_professions = false;
 	bool fade_enemies_by_range = true;
+	bool color_nameplate_text_by_combat = true;
+	uint32_t combat_text_color = IM_COL32(255, 190, 116, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
@@ -319,6 +321,7 @@ public:
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color);
 		L_SET(fade_enemies_by_range);
+		L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
@@ -338,6 +341,7 @@ public:
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
 		S_SET(fade_enemies_by_range);
+		S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
@@ -737,9 +741,9 @@ private:
 				const float text_y = top_left.y + (bar_height - text_size.y) / 2.f;
 
 				static constexpr ImU32 kNormalTextColor = IM_COL32(255, 255, 255, 255);
-				static constexpr ImU32 kInCombatTextColor = IM_COL32(255, 190, 116, 255);
-				const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && pb.is_in_combat;
-				const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
+				const bool is_enemy_in_combat = settings_.color_nameplate_text_by_combat
+					&& living->allegiance == GW::Constants::Allegiance::Enemy && pb.is_in_combat;
+				const ImU32 name_text_color = is_enemy_in_combat ? settings_.combat_text_color : kNormalTextColor;
 				DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8, opacity_mult);
 			}
 		}
@@ -872,6 +876,14 @@ private:
 
 		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
 		ShowHelpMarker("Works on Players/Heroes/Henchmen in all areas");
+
+		ImGui::Checkbox("Color nameplate text by combat", &settings_.color_nameplate_text_by_combat);
+		ImGui::SameLine();
+		ImVec4 combat_text_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.combat_text_color);
+		if (ImGui::ColorEdit3("##color_combat_text", &combat_text_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.combat_text_color = ImGui::ColorConvertFloat4ToU32(combat_text_color_vec);
+		}
+		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot(~1000 range) and are moving are also colored this way");
 
 		ImGui::Checkbox("Manage foe/player nametag game setting", &settings_.auto_toggle_show_names);
 		ShowHelpMarker("Manages the 'Menu > Options > General' setting 'Show foe names...', \nOFF in explorable areas, ON in outposts");
