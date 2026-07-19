@@ -879,6 +879,11 @@ private:
 
 	void DrawSettingsInternal() {
 		ImGui::Checkbox("Debug: show stacking offsets", &debug_show_offsets_);
+		ImGui::SameLine();
+		if (ImGui::Button("Clear nameplate caches now")) {
+			name_cache_.Clear();
+			stack_y_smoother_.Clear();
+		}
 		ImGui::Separator();
 
 		ImGui::Checkbox("Show enemies", &settings_.show_enemies);
