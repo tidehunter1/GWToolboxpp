@@ -275,7 +275,7 @@ struct PriorityConfig {
 };
 
 struct NameplateSettings {
-	bool show_enemies = true, friendly_quest_only = false, show_summoned_allies = false, show_friendlies = true;
+	bool show_enemies = true, friendly_quest_only = false, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = false;
 	float max_range = 1500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 100.0f, allied_health_threshold = 100.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
@@ -306,7 +306,7 @@ public:
 		#define L_SET(var) LoadSetting(#var, settings_.var)
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
-		L_SET(friendly_quest_only); L_SET(show_summoned_allies);
+		L_SET(friendly_quest_only); L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); 
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -323,7 +323,7 @@ public:
 		#define S_SET(var) SaveSetting(#var, settings_.var)
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
-		S_SET(friendly_quest_only); S_SET(show_summoned_allies);
+		S_SET(friendly_quest_only); S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -343,6 +343,7 @@ public:
 private:
 	NameplateSettings settings_;
 	bool visible_ = true;
+	std::optional<bool> last_outpost_pref_state_;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -456,6 +457,15 @@ private:
 		GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
 		const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
 		const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+
+		if (settings_.auto_toggle_show_names
+			&& (!last_outpost_pref_state_.has_value() || *last_outpost_pref_state_ != in_outpost)) {
+			last_outpost_pref_state_ = in_outpost;
+			const bool show = in_outpost;
+			GW::GameThread::Enqueue([show] {
+				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, show);
+			});
+		}
 
 		DirectX::XMMATRIX view_proj;
 		float viewport_width, viewport_height;
@@ -758,6 +768,9 @@ private:
 
 		ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
+
+		ImGui::Checkbox("Auto-manage native 'show names' preference", &settings_.auto_toggle_show_names);
+		ShowHelpMarker("Automatically unchecks Guild Wars' own \"Show foe names (in mission) or player names (in towns and outposts)\" option in explorable areas, and rechecks it in outposts. This changes a real game setting, not just this plugin's display.");
 
 		ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
 		ImGui::SameLine();
