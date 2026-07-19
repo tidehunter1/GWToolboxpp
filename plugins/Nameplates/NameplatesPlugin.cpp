@@ -273,7 +273,7 @@ struct PriorityConfig {
 struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
 	bool recolor_quest_nametags = true, recolor_professions = false;
-	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 50.0f, allied_health_threshold = 50.0f;
+	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
 	std::array<PriorityConfig, 3> priorities = {{
@@ -834,17 +834,17 @@ private:
 		}
 		ShowHelpMarker("Works in all areas");
 
-		ImGui::Checkbox("Color allies by profession", &settings_.recolor_professions);
+		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
 		ShowHelpMarker("Works on Players/Heroes/Henchmen in all areas");
 
-		ImGui::Checkbox("Manage foe/player game setting", &settings_.auto_toggle_show_names);
-		ShowHelpMarker("Turns foes off in explorable areas and players on in outposts");
+		ImGui::Checkbox("Manage foe/player nametag game setting", &settings_.auto_toggle_show_names);
+		ShowHelpMarker("Manages the 'Menu > Options > General' setting 'Show foe names...', \nOFF in explorable areas, ON in outposts");
 
 		int thresholds[2] = {
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
 			static_cast<int>(std::lround(settings_.allied_health_threshold))
 		};
-		if (ImGui::SliderInt2("NPC & Ally visibility threshold", thresholds, 0, 100)) {
+		if (ImGui::SliderInt2("NPC & ally visibility threshold", thresholds, 0, 100)) {
 			settings_.npc_health_threshold = static_cast<float>(thresholds[0]);
 			settings_.allied_health_threshold = static_cast<float>(thresholds[1]);
 		}
