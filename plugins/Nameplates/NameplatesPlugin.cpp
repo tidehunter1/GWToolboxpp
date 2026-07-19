@@ -280,7 +280,7 @@ struct PriorityConfig {
 };
 
 struct NameplateSettings {
-	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
+	bool show_enemies = true, show_summoned_allies = false, auto_toggle_show_names = true;
 	bool recolor_quest_nametags = true, recolor_professions = false;
 	bool fade_enemies_by_range = true;
 	bool color_nameplate_text_by_combat = true;
@@ -319,7 +319,7 @@ public:
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
-		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color);
+		L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color);
 		L_SET(fade_enemies_by_range);
 		L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
 		LoadSetting("visible", visible_);
@@ -339,7 +339,7 @@ public:
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
-		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
+		S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
 		S_SET(fade_enemies_by_range);
 		S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
 		SaveSetting("visible", visible_);
@@ -624,7 +624,7 @@ private:
 			case GW::Constants::Allegiance::Minion:
 			case GW::Constants::Allegiance::Neutral:
 			case GW::Constants::Allegiance::Npc_Minipet:
-				return settings_.show_friendlies;
+				return true;
 			default:
 				return false;
 		}
@@ -845,37 +845,28 @@ private:
 	}
 
 	void DrawSettingsInternal() {
-		ImGui::Checkbox("Show enemies", &settings_.show_enemies);
+		ImGui::SeparatorText("Explorable Areas");
+
+		ImGui::Checkbox("Show enemy nameplates", &settings_.show_enemies);
 		ImGui::SameLine();
 		ImVec4 enemy_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.enemy_color);
 		if (ImGui::ColorEdit3("##color_show_enemies", &enemy_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.enemy_color = ImGui::ColorConvertFloat4ToU32(enemy_color_vec);
 		}
 
-		ImGui::Checkbox("Fade enemies by range", &settings_.fade_enemies_by_range);
-		ShowHelpMarker("Steps enemy nameplate opacity down in 25% increments the farther they are:\n0-1000: 100%, 1000-2000: 75%, 2000-3000: 50%, 3000+: 25%.\nYour current target is always shown at full opacity.");
+		ImGui::Checkbox("Fade nameplates based on stepped distance", &settings_.fade_enemies_by_range);
+		ShowHelpMarker("Nameplates fade in steps: \n0-1000 range, 100% opaque \n1000-2000 range, 75% transparency \n2000-3000 range, 50% transparency \n3000 range and above, 25% transparency");
 
-		ImGui::Checkbox("Show friendlies", &settings_.show_friendlies);
-		ImGui::SameLine();
 		ImVec4 friendly_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.friendly_color);
-		if (ImGui::ColorEdit3("##color_show_friendlies", &friendly_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+		if (ImGui::ColorEdit3("##color_friendly", &friendly_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.friendly_color = ImGui::ColorConvertFloat4ToU32(friendly_color_vec);
 		}
-		ShowHelpMarker("All friendly NPCs, summoned creatures, players, heroes, henchmen. Minipets and Henchmen hidden in Outposts");
+		ImGui::SameLine();
+		ImGui::TextUnformatted("Friendly nameplate color");
+		ShowHelpMarker("Set the NPC & ally visibility threshold below to 0 to hide friendly nameplates entirely");
 
 		ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
-
-		ImGui::Checkbox("Color quest-giver nametags", &settings_.recolor_quest_nametags);
-		ImGui::SameLine();
-		ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
-		if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
-		}
-		ShowHelpMarker("Works in all areas");
-
-		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
-		ShowHelpMarker("Works on Players/Heroes/Henchmen in all areas");
 
 		ImGui::Checkbox("Color nameplate text by combat", &settings_.color_nameplate_text_by_combat);
 		ImGui::SameLine();
@@ -884,9 +875,6 @@ private:
 			settings_.combat_text_color = ImGui::ColorConvertFloat4ToU32(combat_text_color_vec);
 		}
 		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot(~1000 range) and are moving are also colored this way");
-
-		ImGui::Checkbox("Manage foe/player nametag game setting", &settings_.auto_toggle_show_names);
-		ShowHelpMarker("Manages the 'Menu > Options > General' setting 'Show foe names...', \nOFF in explorable areas, ON in outposts");
 
 		int thresholds[2] = {
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
@@ -923,6 +911,21 @@ private:
 			const std::string label = "Priority " + std::to_string(i + 1);
 			DrawPriorityInput(label.c_str(), settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
 		}
+
+		ImGui::SeparatorText("All Areas");
+
+		ImGui::Checkbox("Color quest-giver nametags", &settings_.recolor_quest_nametags);
+		ImGui::SameLine();
+		ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
+		if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
+		}
+
+		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
+		ShowHelpMarker("Works on Players/Heroes/Henchmen");
+
+		ImGui::Checkbox("Manage foe/player nametag game setting", &settings_.auto_toggle_show_names);
+		ShowHelpMarker("Manages the 'Menu > Options > General' setting 'Show foe names...', \nOFF in explorable areas, ON in outposts");
 	}
 };
 
