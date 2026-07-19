@@ -34,6 +34,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cwchar>
+#include <cstdio>
 #include <optional>
 #include <cfloat>
 #include <cmath>
@@ -358,6 +359,7 @@ public:
 private:
 	NameplateSettings settings_;
 	bool visible_ = true;
+	bool debug_show_offsets_ = false;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -746,6 +748,12 @@ private:
 				DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
 			}
 		}
+
+		if (debug_show_offsets_ && font) {
+			char buf[32];
+			snprintf(buf, sizeof(buf), "off:%.0f", pb.screen.y - pb.natural_y);
+			DrawOutlinedText(draw_list, font, kNameplateFontSize, ImVec2(bottom_right.x + 4.f, top_left.y), IM_COL32(0, 255, 255, 255), buf);
+		}
 	}
 
 	[[nodiscard]] ImU32 ColorFor(GW::Constants::Allegiance allegiance) const {
@@ -791,6 +799,9 @@ private:
 	}
 
 	void DrawSettingsInternal() {
+		ImGui::Checkbox("Debug: show stacking offsets", &debug_show_offsets_);
+		ImGui::Separator();
+
 		ImGui::Checkbox("Show enemies", &settings_.show_enemies);
 		ImGui::SameLine();
 		ImVec4 enemy_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.enemy_color);
