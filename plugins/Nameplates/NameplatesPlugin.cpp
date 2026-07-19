@@ -83,7 +83,14 @@ inline std::string TruncateWithEllipsis(ImFont* font, float font_size, const std
 	return best_utf8;
 }
 
-inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float center_y, const GW::AgentLiving* living) {
+inline ImU32 ScaleAlpha(ImU32 color, float mult) {
+	if (mult >= 1.f) return color;
+	ImVec4 c = ImGui::ColorConvertU32ToFloat4(color);
+	c.w *= mult;
+	return ImGui::ColorConvertFloat4ToU32(c);
+}
+
+inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float center_y, const GW::AgentLiving* living, float opacity_mult = 1.f) {
 	static constexpr ImU32 kEnchantedColor = IM_COL32(224, 253, 94, 255);
 	static constexpr ImU32 kHexedColor = IM_COL32(253, 113, 255, 255);
 	static constexpr ImU32 kConditionedColor = IM_COL32(160, 117, 85, 255);
@@ -113,11 +120,11 @@ inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float cent
 
 		ImVec2 op1, op2, op3;
 		make_triangle(kTriWidth + kOutlinePx * 2.f, kTriHeight + kOutlinePx * 2.f, x - kOutlinePx, y - kOutlinePx, upsidedown, op1, op2, op3);
-		draw_list->AddTriangleFilled(op1, op2, op3, kOutlineColor);
+		draw_list->AddTriangleFilled(op1, op2, op3, ScaleAlpha(kOutlineColor, opacity_mult));
 
 		ImVec2 p1, p2, p3;
 		make_triangle(kTriWidth, kTriHeight, x, y, upsidedown, p1, p2, p3);
-		draw_list->AddTriangleFilled(p1, p2, p3, color);
+		draw_list->AddTriangleFilled(p1, p2, p3, ScaleAlpha(color, opacity_mult));
 
 		++count;
 	};
@@ -127,15 +134,17 @@ inline void DrawStatusTriangles(ImDrawList* draw_list, float right_x, float cent
 	if (living->GetIsConditioned()) draw_tri(kConditionedColor, true);
 }
 
-inline void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, std::string_view text_utf8) {
+inline void DrawOutlinedText(ImDrawList* draw_list, ImFont* font, float font_size, const ImVec2& pos, ImU32 text_color, std::string_view text_utf8, float opacity_mult = 1.f) {
 	static constexpr ImU32 kOutlineColor = IM_COL32(0, 0, 0, 255);
 	static constexpr float kOutlineOffset = 1.f;
+	const ImU32 outline_color = ScaleAlpha(kOutlineColor, opacity_mult);
+	text_color = ScaleAlpha(text_color, opacity_mult);
 	const char* text_begin = text_utf8.data();
 	const char* text_end = text_begin + text_utf8.size();
-	draw_list->AddText(font, font_size, ImVec2(pos.x - kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
-	draw_list->AddText(font, font_size, ImVec2(pos.x + kOutlineOffset, pos.y), kOutlineColor, text_begin, text_end);
-	draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y - kOutlineOffset), kOutlineColor, text_begin, text_end);
-	draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y + kOutlineOffset), kOutlineColor, text_begin, text_end);
+	draw_list->AddText(font, font_size, ImVec2(pos.x - kOutlineOffset, pos.y), outline_color, text_begin, text_end);
+	draw_list->AddText(font, font_size, ImVec2(pos.x + kOutlineOffset, pos.y), outline_color, text_begin, text_end);
+	draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y - kOutlineOffset), outline_color, text_begin, text_end);
+	draw_list->AddText(font, font_size, ImVec2(pos.x, pos.y + kOutlineOffset), outline_color, text_begin, text_end);
 	draw_list->AddText(font, font_size, pos, text_color, text_begin, text_end);
 }
 
@@ -273,6 +282,7 @@ struct PriorityConfig {
 struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
 	bool recolor_quest_nametags = true, recolor_professions = false;
+	bool fade_enemies_by_range = true;
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
@@ -307,7 +317,8 @@ public:
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
-		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); 
+		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color);
+		L_SET(fade_enemies_by_range);
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
@@ -326,6 +337,7 @@ public:
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
+		S_SET(fade_enemies_by_range);
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
@@ -368,6 +380,18 @@ private:
 	static constexpr float kZNear = 46.875f;
 	static constexpr float kZFar  = 48000.f;
 
+	static constexpr float kFadeRange1Sq = 1000.f * 1000.f;
+	static constexpr float kFadeRange2Sq = 2000.f * 2000.f;
+	static constexpr float kFadeRange3Sq = 3000.f * 3000.f;
+
+	[[nodiscard]] static float GetRangeOpacityMultiplier(float dist_sq) {
+		if (dist_sq < 0.f)              return 1.00f;
+		if (dist_sq <= kFadeRange1Sq)   return 1.00f;
+		if (dist_sq <= kFadeRange2Sq)   return 0.75f;
+		if (dist_sq <= kFadeRange3Sq)   return 0.50f;
+		return 0.25f;
+	}
+
 	void RefreshPriorityBuffersAndLists() {
 		for (size_t i = 0; i < 3; ++i) {
 			strncpy_s(priority_states_[i].buf, 512, settings_.priorities[i].raw.c_str(), 511);
@@ -392,6 +416,7 @@ private:
 		const std::wstring* display = nullptr;
 		bool is_targeted = false, is_in_combat = false;
 		float natural_y = 0.f;
+		float dist_sq_from_me = -1.f;
 	};
 
 	struct PlacedRect { float x_min, x_max, y_min, y_max; };
@@ -523,7 +548,8 @@ private:
 
 			if (living->GetIsDead()) continue;
 			if (me && living->agent_id == me->agent_id) continue;
-			if (!WithinRange(living, me, max_range_sq)) continue;
+			float dist_sq = -1.f;
+			if (!WithinRange(living, me, max_range_sq, dist_sq)) continue;
 			if (IsMinipet(living->player_number)) continue;
 			if (in_outpost) continue;
 
@@ -558,6 +584,7 @@ private:
 			pb.name_lower = name_lookup.lower;
 			pb.display = name_lookup.display;
 			pb.is_targeted = target && living->agent_id == target->agent_id;
+			pb.dist_sq_from_me = dist_sq;
 
 			if (living->GetInCombatStance()) {
 				pb.is_in_combat = true;
@@ -599,11 +626,12 @@ private:
 		}
 	}
 
-	[[nodiscard]] bool WithinRange(const GW::AgentLiving* living, const GW::Agent* me, float max_range_sq) const {
-		if (!me) return true;
+	[[nodiscard]] bool WithinRange(const GW::AgentLiving* living, const GW::Agent* me, float max_range_sq, float& out_dist_sq) const {
+		if (!me) { out_dist_sq = -1.f; return true; }
 		const float dx = living->pos.x - me->pos.x;
 		const float dy = living->pos.y - me->pos.y;
-		return (dx * dx + dy * dy) <= max_range_sq;
+		out_dist_sq = dx * dx + dy * dy;
+		return out_dist_sq <= max_range_sq;
 	}
 
 	[[nodiscard]] bool BuildFrameProjection(DirectX::XMMATRIX& out_view_proj,
@@ -685,10 +713,15 @@ private:
 		const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
 		const ImU32 border_color = pb.is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
 
-		draw_list->AddRectFilled(top_left, bottom_right, bg_color);
-		draw_list->AddRectFilled(top_left, fill_bottom_right, fill_color);
-		draw_list->AddRect(top_left, bottom_right, border_color);
-		DrawStatusTriangles(draw_list, bottom_right.x - 8.f, top_left.y + bar_height / 2.f, living);
+		float opacity_mult = 1.f;
+		if (settings_.fade_enemies_by_range && living->allegiance == GW::Constants::Allegiance::Enemy && !pb.is_targeted) {
+			opacity_mult = GetRangeOpacityMultiplier(pb.dist_sq_from_me);
+		}
+
+		draw_list->AddRectFilled(top_left, bottom_right, ScaleAlpha(bg_color, opacity_mult));
+		draw_list->AddRectFilled(top_left, fill_bottom_right, ScaleAlpha(fill_color, opacity_mult));
+		draw_list->AddRect(top_left, bottom_right, ScaleAlpha(border_color, opacity_mult));
+		DrawStatusTriangles(draw_list, bottom_right.x - 8.f, top_left.y + bar_height / 2.f, living, opacity_mult);
 		CheckClickToTarget(top_left, bottom_right, living, left_clicked_this_frame);
 
 		if (!pb.display->empty() && font) {
@@ -707,7 +740,7 @@ private:
 				static constexpr ImU32 kInCombatTextColor = IM_COL32(255, 190, 116, 255);
 				const bool is_enemy_in_combat = living->allegiance == GW::Constants::Allegiance::Enemy && pb.is_in_combat;
 				const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
-				DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
+				DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8, opacity_mult);
 			}
 		}
 	}
@@ -814,6 +847,9 @@ private:
 		if (ImGui::ColorEdit3("##color_show_enemies", &enemy_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.enemy_color = ImGui::ColorConvertFloat4ToU32(enemy_color_vec);
 		}
+
+		ImGui::Checkbox("Fade enemies by range", &settings_.fade_enemies_by_range);
+		ShowHelpMarker("Steps enemy nameplate opacity down in 25% increments the farther they are:\n0-1000: 100%, 1000-2000: 75%, 2000-3000: 50%, 3000+: 25%.\nYour current target is always shown at full opacity.");
 
 		ImGui::Checkbox("Show friendlies", &settings_.show_friendlies);
 		ImGui::SameLine();
