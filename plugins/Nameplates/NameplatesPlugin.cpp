@@ -272,7 +272,7 @@ struct PriorityConfig {
 
 struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
-	bool recolor_quest_nametags = true, recolor_professions = false, strip_guild_tags = false;
+	bool recolor_quest_nametags = true, recolor_professions = false;
 	float max_range = 1500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 90.0f, allied_health_threshold = 90.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
@@ -306,7 +306,7 @@ public:
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
-		L_SET(recolor_quest_nametags); L_SET(recolor_professions); L_SET(strip_guild_tags);
+		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); 
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -324,7 +324,7 @@ public:
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
-		S_SET(recolor_quest_nametags); S_SET(recolor_professions); S_SET(strip_guild_tags);
+		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -349,7 +349,6 @@ private:
 	std::optional<bool> last_outpost_pref_state_;
 	std::optional<bool> last_recolor_professions_state_;
 	std::optional<bool> last_recolor_quest_state_;
-	std::optional<bool> last_strip_guild_tags_state_;
 	GW::HookEntry nametag_hook_entry_;
 
 	AgentNameCache name_cache_;
@@ -472,24 +471,14 @@ private:
 			});
 		}
 
-		if (last_recolor_professions_state_.has_value()
-			&& *last_recolor_professions_state_ != settings_.recolor_professions) {
-			FlashFoeNames();
-			FlashAllyNames();
-		}
-		last_recolor_professions_state_ = settings_.recolor_professions;
+		FlashOnChange(last_recolor_professions_state_, settings_.recolor_professions, [] {
+			FlashPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
+			FlashPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
+		});
 
-		if (last_recolor_quest_state_.has_value()
-			&& *last_recolor_quest_state_ != settings_.recolor_quest_nametags) {
-			FlashAllyNames();
-		}
-		last_recolor_quest_state_ = settings_.recolor_quest_nametags;
-
-		if (last_strip_guild_tags_state_.has_value()
-			&& *last_strip_guild_tags_state_ != settings_.strip_guild_tags) {
-			FlashFoeNames();
-		}
-		last_strip_guild_tags_state_ = settings_.strip_guild_tags;
+		FlashOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, [] {
+			FlashPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
+		});
 
 		DirectX::XMMATRIX view_proj;
 		float viewport_width, viewport_height;
@@ -750,20 +739,20 @@ private:
 		return (index < kColors.size()) ? kColors[index] : kColors[0];
 	}
 
-	static void FlashFoeNames() {
-		GW::GameThread::Enqueue([] {
-			const bool current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, !current);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, current);
+	static void FlashPreference(GW::UI::FlagPreference pref) {
+		GW::GameThread::Enqueue([pref] {
+			const bool current = GW::UI::GetPreference(pref);
+			GW::UI::SetPreference(pref, !current);
+			GW::UI::SetPreference(pref, current);
 		});
 	}
 
-	static void FlashAllyNames() {
-		GW::GameThread::Enqueue([] {
-			const bool current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, !current);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, current);
-		});
+	template<typename Func>
+	static void FlashOnChange(std::optional<bool>& last_state, bool current_state, Func&& flash) {
+		if (last_state.has_value() && *last_state != current_state) {
+			flash();
+		}
+		last_state = current_state;
 	}
 
 	static void OnAgentNameTag(GW::HookStatus*, GW::UI::UIMessage msgid, void* wParam, void*) {
@@ -774,18 +763,12 @@ private:
 
 	void HandleAgentNameTag(GW::UI::AgentNameTagInfo* tag) const {
 		if (!tag) return;
-		if (!settings_.recolor_quest_nametags && !settings_.recolor_professions && !settings_.strip_guild_tags) return;
+		if (!settings_.recolor_quest_nametags && !settings_.recolor_professions) return;
 
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
 		if (!agent) return;
 		GW::AgentLiving* living = agent->GetAsAgentLiving();
 		if (!living) return;
-
-		if (settings_.strip_guild_tags
-			&& living->IsPlayer()
-			&& GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost) {
-			tag->extra_info_enc = nullptr;
-		}
 
 		if (settings_.recolor_professions
 			&& living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
@@ -843,9 +826,6 @@ private:
 
 		ImGui::Checkbox("Recolor player/hero/henchman nametags by profession", &settings_.recolor_professions);
 		ShowHelpMarker("Recolors the game's own native nametag for players, heroes & henchmen, in all areas, using the same profession colors as ally bars");
-
-		ImGui::Checkbox("Strip guild tags from player nametags in outposts", &settings_.strip_guild_tags);
-		ShowHelpMarker("Experimental: attempts to remove the bracketed guild tag from real players' native nametags in outposts, keeping the name itself visible");
 
 		ImGui::Checkbox("Manage foe/player game setting", &settings_.auto_toggle_show_names);
 		ShowHelpMarker("Turns foes off in explorable areas and players on in outposts");
