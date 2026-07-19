@@ -20,7 +20,6 @@
 #include <GWCA/Managers/RenderMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/MapMgr.h>
-#include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 
 #include <ToolboxPlugin.h>
@@ -34,7 +33,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cwchar>
-#include <cstdio>
 #include <optional>
 #include <cfloat>
 #include <cmath>
@@ -163,10 +161,8 @@ class StackYSmoother {
 public:
 	float Update(uint32_t agent_id, float target_y, float alpha) {
 		Entry& e = cache_[agent_id];
-		const bool is_continuous = e.initialized && (tick_ - e.last_seen_tick) <= kContinuityGapTicks;
-		const bool has_diverged = e.initialized && std::fabs(target_y - e.y) > kMaxOffsetDrift;
 		e.last_seen_tick = tick_;
-		if (!is_continuous || has_diverged) {
+		if (!e.initialized) {
 			e.y = target_y;
 			e.initialized = true;
 		}
@@ -177,12 +173,9 @@ public:
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
-	void Clear() { cache_.clear(); }
 
 private:
 	static constexpr uint64_t kPruneIntervalTicks = 1800;
-	static constexpr uint64_t kContinuityGapTicks = 3;
-	static constexpr float kMaxOffsetDrift = 300.f;
 	struct Entry {
 		float y = 0.f;
 		bool initialized = false;
@@ -202,19 +195,12 @@ public:
 
 	NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
 		Entry& entry = cache_[agent_id];
-		const bool gap = (tick_ - entry.last_seen_tick) > kContinuityGapTicks;
 		entry.last_seen_tick = tick_;
-		const bool enc_changed = enc_name && wcsncmp(entry.last_enc, enc_name, kMaxEncLen - 1) != 0;
-		const bool still_waiting = enc_name && !entry.converted && entry.buffer[0] == L'\0'
-			&& (tick_ - entry.last_decode_attempt_tick) >= kDecodeRetryTicks;
-		if (enc_name && (enc_changed || gap || still_waiting)) {
-			if (enc_changed || gap) {
-				wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
-				entry.buffer[0] = L'\0';
-				entry.converted = false;
-				entry.truncated_for_width = -1.f;
-			}
-			entry.last_decode_attempt_tick = tick_;
+		if (enc_name && wcsncmp(entry.last_enc, enc_name, kMaxEncLen - 1) != 0) {
+			wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
+			entry.buffer[0] = L'\0';
+			entry.converted = false;
+			entry.truncated_for_width = -1.f;
 			GW::UI::AsyncDecodeStr(enc_name, entry.buffer, kBufferLen);
 		}
 		if (!entry.converted && entry.buffer[0] != L'\0') {
@@ -237,21 +223,17 @@ public:
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
-	void Clear() { cache_.clear(); }
 
 private:
 	static constexpr size_t kBufferLen = 256;
 	static constexpr size_t kMaxEncLen = 64;
 	static constexpr uint64_t kPruneIntervalTicks = 1800;
-	static constexpr uint64_t kDecodeRetryTicks = 60;
-	static constexpr uint64_t kContinuityGapTicks = 3;
 	struct Entry {
 		wchar_t last_enc[kMaxEncLen] = {};
 		wchar_t buffer[kBufferLen] = {};
 		bool converted = false;
 		float truncated_for_width = -1.f;
 		uint64_t last_seen_tick = 0;
-		uint64_t last_decode_attempt_tick = 0;
 		std::wstring decoded_lower, decoded_display;
 		std::string decoded_display_utf8, truncated_utf8;
 	};
@@ -293,7 +275,7 @@ struct PriorityConfig {
 };
 
 struct NameplateSettings {
-	bool show_enemies = true, friendly_quest_only = false, name_only_mode = false, show_summoned_allies = false, show_friendlies = true;
+	bool show_enemies = true, friendly_quest_only = false, show_summoned_allies = false, show_friendlies = true;
 	float max_range = 1500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 100.0f, allied_health_threshold = 100.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
@@ -324,7 +306,7 @@ public:
 		#define L_SET(var) LoadSetting(#var, settings_.var)
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
-		L_SET(friendly_quest_only); L_SET(name_only_mode); L_SET(show_summoned_allies);
+		L_SET(friendly_quest_only); L_SET(show_summoned_allies);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); 
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -341,7 +323,7 @@ public:
 		#define S_SET(var) SaveSetting(#var, settings_.var)
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
-		S_SET(friendly_quest_only); S_SET(name_only_mode); S_SET(show_summoned_allies);
+		S_SET(friendly_quest_only); S_SET(show_summoned_allies);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -361,11 +343,9 @@ public:
 private:
 	NameplateSettings settings_;
 	bool visible_ = true;
-	bool debug_show_offsets_ = false;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
-	GW::Constants::MapID last_map_id_ = GW::Constants::MapID::None;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -404,7 +384,7 @@ private:
 		const std::wstring* name_lower = nullptr;
 		const std::wstring* display = nullptr;
 		const std::string* display_utf8 = nullptr;
-		bool is_targeted = false, is_name_only = false, stack_adjusted = false, is_in_combat = false;
+		bool is_targeted = false, stack_adjusted = false, is_in_combat = false;
 		float natural_y = 0.f;
 	};
 
@@ -413,14 +393,6 @@ private:
 	std::vector<PendingBar> pending_;
 	std::vector<PlacedRect> placed_;
 	std::vector<size_t> order_;
-
-	[[nodiscard]] ImVec2 ComputeFootprint(bool is_name_only, const std::string& display_utf8, ImFont* font) const {
-		if (is_name_only) {
-			if (display_utf8.empty() || !font) return ImVec2(0.f, 0.f);
-			return font->CalcTextSizeA(kNameplateFontSize, FLT_MAX, 0.f, display_utf8.c_str());
-		}
-		return ImVec2(settings_.bar_width, settings_.bar_height);
-	}
 
 	void ResolveStacking(std::vector<PendingBar>& items) {
 		static constexpr float kGap = 2.f;
@@ -446,7 +418,7 @@ private:
 			const float half_w = item.footprint.x / 2.f;
 			const float x_min = item.screen.x - half_w;
 			const float x_max = item.screen.x + half_w;
-			const float natural_top = item.is_name_only ? item.screen.y - item.footprint.y / 2.f : item.screen.y;
+			const float natural_top = item.screen.y;
 			const float max_push = item.footprint.y * kMaxPushMultiplier;
 
 			float cur_top = natural_top;
@@ -477,13 +449,6 @@ private:
 	}
 
 	void DrawNameplates() {
-		const GW::Constants::MapID current_map_id = GW::Map::GetMapID();
-		if (current_map_id != last_map_id_) {
-			last_map_id_ = current_map_id;
-			name_cache_.Clear();
-			stack_y_smoother_.Clear();
-		}
-
 		GW::AgentArray* agents = GW::Agents::GetAgentArray();
 		if (!agents || !agents->valid()) return;
 
@@ -497,12 +462,12 @@ private:
 		if (!BuildFrameProjection(view_proj, viewport_width, viewport_height)) return;
 
 		ImFont* font = ImGui::GetFont();
-		ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 
-		GatherPendingBars(agents, me, target, in_outpost, view_proj, viewport_width, viewport_height, font, draw_list);
+		GatherPendingBars(agents, me, target, in_outpost, view_proj, viewport_width, viewport_height);
 		ResolveStacking(pending_);
 		ApplyStackSmoothing();
 
+		ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 		const PendingBar* target_pb = nullptr;
 		
 		for (const auto& pb : pending_) {
@@ -523,89 +488,50 @@ private:
 
 	void GatherPendingBars(GW::AgentArray* agents, GW::AgentLiving* me, GW::AgentLiving* target,
 							bool in_outpost, const DirectX::XMMATRIX& view_proj,
-							float viewport_width, float viewport_height, ImFont* font, ImDrawList* draw_list) {
+							float viewport_width, float viewport_height) {
 		pending_.clear();
 		const float max_range_sq = settings_.max_range * settings_.max_range;
 
 		for (GW::Agent* agent : *agents) {
 			if (!agent) continue;
-			if (!agent->GetIsLivingType()) {
-				if (debug_show_offsets_ && me) {
-					const float dx = agent->pos.x - me->pos.x;
-					const float dy = agent->pos.y - me->pos.y;
-					if (dx * dx + dy * dy <= max_range_sq) {
-						DebugTagFilteredAgent(draw_list, agent, view_proj, viewport_width, viewport_height, font, "NOT_LIVING");
-					}
-				}
-				continue;
-			}
+			if (!agent->GetIsLivingType()) continue;
 
 			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living) {
-				if (debug_show_offsets_ && me) {
-					const float dx = agent->pos.x - me->pos.x;
-					const float dy = agent->pos.y - me->pos.y;
-					if (dx * dx + dy * dy <= max_range_sq) {
-						DebugTagFilteredAgent(draw_list, agent, view_proj, viewport_width, viewport_height, font, "CAST_FAIL");
-					}
-				}
-				continue;
-			}
+			if (!living) continue;
 
-			if (living->GetIsDead()) {
-				if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "DEAD");
-				continue;
-			}
+			if (living->GetIsDead()) continue;
 			if (me && living->agent_id == me->agent_id) continue;
 			if (!WithinRange(living, me, max_range_sq)) continue;
-			if (IsMinipet(living->player_number)) {
-				if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "MINIPET");
-				continue;
+			if (IsMinipet(living->player_number)) continue;
+
+			if (in_outpost) {
+				if (!settings_.friendly_quest_only || !living->GetHasQuest()) continue;
 			}
-			if (!settings_.show_summoned_allies
-				&& (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
-					|| living->allegiance == GW::Constants::Allegiance::Minion)) continue;
+			else {
+				if (!settings_.show_summoned_allies
+					&& (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
+						|| living->allegiance == GW::Constants::Allegiance::Minion)) continue;
 
-			if (!ShouldShowAllegiance(living->allegiance)) {
-				if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "ALLEGIANCE");
-				continue;
-			}
+				if (!ShouldShowAllegiance(living->allegiance)) continue;
 
-			const bool is_npc = living->allegiance == GW::Constants::Allegiance::Neutral
-				|| living->allegiance == GW::Constants::Allegiance::Npc_Minipet;
-			const bool is_allied = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable
-				|| living->allegiance == GW::Constants::Allegiance::Spirit_Pet
-				|| living->allegiance == GW::Constants::Allegiance::Minion;
+				const bool is_npc = living->allegiance == GW::Constants::Allegiance::Neutral
+					|| living->allegiance == GW::Constants::Allegiance::Npc_Minipet;
+				const bool is_allied = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable
+					|| living->allegiance == GW::Constants::Allegiance::Spirit_Pet
+					|| living->allegiance == GW::Constants::Allegiance::Minion;
 
-			if (is_npc) {
-				const bool passes_threshold = (living->hp * 100.f <= settings_.npc_health_threshold);
-				const bool passes_quest = settings_.friendly_quest_only && living->GetHasQuest();
-				if (!passes_threshold && !passes_quest) {
-					if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "THRESHOLD");
-					continue;
+				if (is_npc) {
+					const bool passes_threshold = (living->hp * 100.f <= settings_.npc_health_threshold);
+					const bool passes_quest = settings_.friendly_quest_only && living->GetHasQuest();
+					if (!passes_threshold && !passes_quest) continue;
 				}
-			}
-			else if (is_allied) {
-				const bool is_real_player = living->IsPlayer();
-				const bool always_show_player_in_outpost = in_outpost && is_real_player;
-				if (!always_show_player_in_outpost && living->hp * 100.f > settings_.allied_health_threshold) {
-					if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "THRESHOLD");
-					continue;
-				}
-				if (in_outpost && !is_real_player) {
-					GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
-					if (npc && npc->IsHenchman()) {
-						if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "HENCHMAN");
-						continue;
-					}
+				else if (is_allied) {
+					if (living->hp * 100.f > settings_.allied_health_threshold) continue;
 				}
 			}
 
 			ImVec2 screen;
-			if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) {
-				if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "PROJECT");
-				continue;
-			}
+			if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) continue;
 
 			const auto name_lookup = name_cache_.Get(living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
 
@@ -617,7 +543,6 @@ private:
 			pb.display = name_lookup.display;
 			pb.display_utf8 = name_lookup.display_utf8;
 			pb.is_targeted = target && living->agent_id == target->agent_id;
-			pb.is_name_only = settings_.name_only_mode && in_outpost && living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
 			if (living->GetInCombatStance()) {
 				pb.is_in_combat = true;
@@ -630,7 +555,7 @@ private:
 			else {
 				pb.is_in_combat = false;
 			}
-			pb.footprint = ComputeFootprint(pb.is_name_only, *pb.display_utf8, font);
+			pb.footprint = ImVec2(settings_.bar_width, settings_.bar_height);
 
 			pending_.push_back(std::move(pb));
 		}
@@ -707,46 +632,6 @@ private:
 		return true;
 	}
 
-	void DebugTagFiltered(ImDrawList* draw_list, const GW::AgentLiving* living, const DirectX::XMMATRIX& view_proj,
-						   float viewport_width, float viewport_height, ImFont* font, const char* reason) const {
-		if (!font) return;
-		ImVec2 screen;
-		if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) {
-			using namespace DirectX;
-			const XMVECTOR world_pos = XMVectorSet(living->pos.x, living->pos.y, living->z, 1.f);
-			const XMVECTOR clip_pos = XMVector4Transform(world_pos, view_proj);
-			float clip_arr[4];
-			XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(clip_arr), clip_pos);
-			if (clip_arr[3] <= kZNear) return;
-			const float inv_w = 1.f / clip_arr[3];
-			screen.x = ((clip_arr[0] * inv_w) * 0.5f + 0.5f) * viewport_width;
-			screen.y = (1.f - ((clip_arr[1] * inv_w) * 0.5f + 0.5f)) * viewport_height;
-		}
-		DrawOutlinedText(draw_list, font, kNameplateFontSize, screen, IM_COL32(255, 40, 40, 255), reason);
-	}
-
-	void DebugTagFilteredAgent(ImDrawList* draw_list, const GW::Agent* agent, const DirectX::XMMATRIX& view_proj,
-								float viewport_width, float viewport_height, ImFont* font, const char* reason) const {
-		if (!font || !agent) return;
-		using namespace DirectX;
-		float z = agent->name_tag_z;
-		for (int attempt = 0; attempt < 2; ++attempt) {
-			const XMVECTOR world_pos = XMVectorSet(agent->pos.x, agent->pos.y, z, 1.f);
-			const XMVECTOR clip_pos = XMVector4Transform(world_pos, view_proj);
-			float clip_arr[4];
-			XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(clip_arr), clip_pos);
-			if (clip_arr[3] > kZNear) {
-				const float inv_w = 1.f / clip_arr[3];
-				ImVec2 screen;
-				screen.x = ((clip_arr[0] * inv_w) * 0.5f + 0.5f) * viewport_width;
-				screen.y = (1.f - ((clip_arr[1] * inv_w) * 0.5f + 0.5f)) * viewport_height;
-				DrawOutlinedText(draw_list, font, kNameplateFontSize, screen, IM_COL32(255, 40, 40, 255), reason);
-				return;
-			}
-			z = agent->z;
-		}
-	}
-
 	void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living, bool left_clicked_this_frame) const {
 		if (!left_clicked_this_frame) return;
 		if (ImGui::IsMouseHoveringRect(rect_min, rect_max, false)) {
@@ -763,27 +648,9 @@ private:
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
 	}
 
-	void DrawNameOnly(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
-		if (!font || pb.display_utf8->empty()) return;
-
-		const float font_size = kNameplateFontSize;
-		const float text_x = pb.screen.x - pb.footprint.x / 2.f;
-		const float text_y = pb.screen.y - pb.footprint.y / 2.f;
-
-		const ImU32 text_color = ProfessionColor(pb.living->primary);
-		DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), text_color, *pb.display_utf8);
-		DrawStatusTriangles(draw_list, text_x + pb.footprint.x, text_y - 6.f, pb.living);
-		CheckClickToTarget(ImVec2(text_x, text_y), ImVec2(text_x + pb.footprint.x, text_y + pb.footprint.y), pb.living, left_clicked_this_frame);
-	}
-
 	void DrawBar(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
 		const GW::AgentLiving* living = pb.living;
 		const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
-
-		if (pb.is_name_only) {
-			DrawNameOnly(draw_list, pb, font, left_clicked_this_frame);
-			return;
-		}
 
 		const float hp_pct = std::clamp(living->hp, 0.f, 1.f);
 		const float bar_width = settings_.bar_width;
@@ -828,12 +695,6 @@ private:
 				const ImU32 name_text_color = is_enemy_in_combat ? kInCombatTextColor : kNormalTextColor;
 				DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8);
 			}
-		}
-
-		if (debug_show_offsets_ && font) {
-			char buf[32];
-			snprintf(buf, sizeof(buf), "off:%.0f", pb.screen.y - pb.natural_y);
-			DrawOutlinedText(draw_list, font, kNameplateFontSize, ImVec2(bottom_right.x + 4.f, top_left.y), IM_COL32(0, 255, 255, 255), buf);
 		}
 	}
 
@@ -880,14 +741,6 @@ private:
 	}
 
 	void DrawSettingsInternal() {
-		ImGui::Checkbox("Debug: show stacking offsets", &debug_show_offsets_);
-		ImGui::SameLine();
-		if (ImGui::Button("Clear nameplate caches now")) {
-			name_cache_.Clear();
-			stack_y_smoother_.Clear();
-		}
-		ImGui::Separator();
-
 		ImGui::Checkbox("Show enemies", &settings_.show_enemies);
 		ImGui::SameLine();
 		ImVec4 enemy_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.enemy_color);
@@ -903,9 +756,6 @@ private:
 		}
 		ShowHelpMarker("All friendly NPCs, summoned creatures, players, heroes, henchmen. Minipets and Henchmen hidden in Outposts");
 
-		ImGui::Checkbox("Show outpost names only", &settings_.name_only_mode);
-		ShowHelpMarker("Show only profession-colored player names in outposts");
-		ImGui::SameLine();
 		ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
@@ -915,7 +765,7 @@ private:
 		if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
 		}
-		ShowHelpMarker("Overrides the NPC visibility threshold slider");
+		ShowHelpMarker("In outposts, controls whether quest-givers show at all. Elsewhere, overrides the NPC visibility threshold slider");
 
 		int thresholds[2] = {
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
