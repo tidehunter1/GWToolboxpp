@@ -281,9 +281,7 @@ struct PriorityConfig {
 
 struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
-	bool recolor_quest_nametags = true, recolor_professions = false;
-	bool fade_enemies_by_range = true;
-	bool color_nameplate_text_by_combat = true;
+	bool recolor_quest_nametags = true, recolor_professions = false, fade_enemies_by_range = true, color_nameplate_text_by_combat = true;
 	uint32_t combat_text_color = IM_COL32(255, 190, 116, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
@@ -320,8 +318,7 @@ public:
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color);
-		L_SET(fade_enemies_by_range);
-		L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
+		L_SET(fade_enemies_by_range); L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
@@ -340,8 +337,7 @@ public:
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
-		S_SET(fade_enemies_by_range);
-		S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
+		S_SET(fade_enemies_by_range); S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
@@ -389,7 +385,6 @@ private:
 	static constexpr float kFadeRange3Sq = 3000.f * 3000.f;
 
 	[[nodiscard]] static float GetRangeOpacityMultiplier(float dist_sq) {
-		if (dist_sq < 0.f)              return 1.00f;
 		if (dist_sq <= kFadeRange1Sq)   return 1.00f;
 		if (dist_sq <= kFadeRange2Sq)   return 0.75f;
 		if (dist_sq <= kFadeRange3Sq)   return 0.50f;
@@ -695,6 +690,15 @@ private:
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
 	}
 
+	static void DrawCheckboxWithColor(const char* label, bool& toggle, uint32_t& color, const char* color_id) {
+		ImGui::Checkbox(label, &toggle);
+		ImGui::SameLine();
+		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
+		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			color = ImGui::ColorConvertFloat4ToU32(color_vec);
+		}
+	}
+
 	void DrawBar(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
 		const GW::AgentLiving* living = pb.living;
 		const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
@@ -847,29 +851,13 @@ private:
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Explorable Areas");
 
-		ImGui::Checkbox("Show enemy nameplates", &settings_.show_enemies);
-		ImGui::SameLine();
-		ImVec4 enemy_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.enemy_color);
-		if (ImGui::ColorEdit3("##color_show_enemies", &enemy_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.enemy_color = ImGui::ColorConvertFloat4ToU32(enemy_color_vec);
-		}
-
-		ImGui::Checkbox("Show friendly nameplates", &settings_.show_friendlies);
-		ImGui::SameLine();
-		ImVec4 friendly_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.friendly_color);
-		if (ImGui::ColorEdit3("##color_friendly", &friendly_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.friendly_color = ImGui::ColorConvertFloat4ToU32(friendly_color_vec);
-		}
+		DrawCheckboxWithColor("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
+		DrawCheckboxWithColor("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
 
 		ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
-		ImGui::Checkbox("Color nameplate text by combat status", &settings_.color_nameplate_text_by_combat);
-		ImGui::SameLine();
-		ImVec4 combat_text_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.combat_text_color);
-		if (ImGui::ColorEdit3("##color_combat_text", &combat_text_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.combat_text_color = ImGui::ColorConvertFloat4ToU32(combat_text_color_vec);
-		}
+		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
 		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot(~1000 range) and are moving are also colored this way");
 
 		ImGui::Checkbox("Fade nameplates based on distance", &settings_.fade_enemies_by_range);
@@ -913,12 +901,7 @@ private:
 
 		ImGui::SeparatorText("All Areas");
 
-		ImGui::Checkbox("Color quest-giver nametags", &settings_.recolor_quest_nametags);
-		ImGui::SameLine();
-		ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
-		if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
-		}
+		DrawCheckboxWithColor("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
 
 		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
 		ShowHelpMarker("Works on Players/Heroes/Henchmen");
