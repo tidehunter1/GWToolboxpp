@@ -275,8 +275,8 @@ struct PriorityConfig {
 };
 
 struct NameplateSettings {
-	bool show_enemies = true, friendly_quest_only = false, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = false;
-	float max_range = 1500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 100.0f, allied_health_threshold = 100.0f;
+	bool show_enemies = true, friendly_quest_only = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
+	float max_range = 1500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 90.0f, allied_health_threshold = 90.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
 	std::array<PriorityConfig, 3> priorities = {{
@@ -769,9 +769,6 @@ private:
 		ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
-		ImGui::Checkbox("Auto-manage native 'show names' preference", &settings_.auto_toggle_show_names);
-		ShowHelpMarker("Automatically unchecks Guild Wars' own \"Show foe names (in mission) or player names (in towns and outposts)\" option in explorable areas, and rechecks it in outposts. This changes a real game setting, not just this plugin's display.");
-
 		ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
 		ImGui::SameLine();
 		ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
@@ -779,6 +776,9 @@ private:
 			settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
 		}
 		ShowHelpMarker("In outposts, controls whether quest-givers show at all. Elsewhere, overrides the NPC visibility threshold slider");
+
+		ImGui::Checkbox("Manage foe/player game setting", &settings_.auto_toggle_show_names);
+		ShowHelpMarker("Turns foes off in explorable areas and players on in outposts");
 
 		int thresholds[2] = {
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
