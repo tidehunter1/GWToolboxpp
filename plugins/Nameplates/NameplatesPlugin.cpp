@@ -202,12 +202,13 @@ public:
 
 	NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
 		Entry& entry = cache_[agent_id];
+		const bool gap = (tick_ - entry.last_seen_tick) > kContinuityGapTicks;
 		entry.last_seen_tick = tick_;
 		const bool enc_changed = enc_name && wcsncmp(entry.last_enc, enc_name, kMaxEncLen - 1) != 0;
 		const bool still_waiting = enc_name && !entry.converted && entry.buffer[0] == L'\0'
 			&& (tick_ - entry.last_decode_attempt_tick) >= kDecodeRetryTicks;
-		if (enc_changed || still_waiting) {
-			if (enc_changed) {
+		if (enc_name && (enc_changed || gap || still_waiting)) {
+			if (enc_changed || gap) {
 				wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
 				entry.buffer[0] = L'\0';
 				entry.converted = false;
@@ -243,6 +244,7 @@ private:
 	static constexpr size_t kMaxEncLen = 64;
 	static constexpr uint64_t kPruneIntervalTicks = 1800;
 	static constexpr uint64_t kDecodeRetryTicks = 60;
+	static constexpr uint64_t kContinuityGapTicks = 3;
 	struct Entry {
 		wchar_t last_enc[kMaxEncLen] = {};
 		wchar_t buffer[kBufferLen] = {};
