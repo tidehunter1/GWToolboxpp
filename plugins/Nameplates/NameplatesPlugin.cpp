@@ -29,7 +29,6 @@
 #include <string_view>
 #include <sstream>
 #include <unordered_map>
-#include <unordered_set>
 #include <cwchar>
 #include <optional>
 #include <cfloat>
@@ -188,7 +187,6 @@ public:
 	struct NameLookup {
 		const std::wstring* lower;
 		const std::wstring* display;
-		const std::string* display_utf8;
 	};
 
 	NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
@@ -208,7 +206,7 @@ public:
 			WideToUtf8Into(entry.decoded_display, entry.decoded_display_utf8);
 			entry.converted = true;
 		}
-		return { &entry.decoded_lower, &entry.decoded_display, &entry.decoded_display_utf8 };
+		return { &entry.decoded_lower, &entry.decoded_display };
 	}
 
 	const std::string& GetTruncated(uint32_t agent_id, ImFont* font, float font_size, float max_width) {
@@ -382,8 +380,7 @@ private:
 		ImVec2 screen{}, footprint{};
 		const std::wstring* name_lower = nullptr;
 		const std::wstring* display = nullptr;
-		const std::string* display_utf8 = nullptr;
-		bool is_targeted = false, stack_adjusted = false, is_in_combat = false;
+		bool is_targeted = false, is_in_combat = false;
 		float natural_y = 0.f;
 	};
 
@@ -441,7 +438,6 @@ private:
 				}
 			}
 
-			item.stack_adjusted = (cur_top != natural_top);
 			item.screen.y += (cur_top - natural_top);
 			placed_.push_back({x_min, x_max, cur_top, cur_top + item.footprint.y});
 		}
@@ -549,7 +545,6 @@ private:
 			pb.natural_y = screen.y;
 			pb.name_lower = name_lookup.lower;
 			pb.display = name_lookup.display;
-			pb.display_utf8 = name_lookup.display_utf8;
 			pb.is_targeted = target && living->agent_id == target->agent_id;
 
 			if (living->GetInCombatStance()) {
