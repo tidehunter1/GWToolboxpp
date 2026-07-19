@@ -271,7 +271,8 @@ struct PriorityConfig {
 };
 
 struct NameplateSettings {
-	bool show_enemies = true, friendly_quest_only = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
+	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
+	bool recolor_quest_nametags = true, recolor_outpost_professions = false;
 	float max_range = 1500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 90.0f, allied_health_threshold = 90.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
@@ -288,6 +289,8 @@ public:
 		pending_.reserve(256);
 		placed_.reserve(256);
 		order_.reserve(256);
+		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTag);
+		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
 	}
 
 	const char* Name() const override { return "Nameplates"; }
@@ -302,7 +305,8 @@ public:
 		#define L_SET(var) LoadSetting(#var, settings_.var)
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
-		L_SET(friendly_quest_only); L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
+		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
+		L_SET(recolor_quest_nametags); L_SET(recolor_outpost_professions);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); 
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -319,7 +323,8 @@ public:
 		#define S_SET(var) SaveSetting(#var, settings_.var)
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
-		S_SET(friendly_quest_only); S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
+		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
+		S_SET(recolor_quest_nametags); S_SET(recolor_outpost_professions);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -334,12 +339,15 @@ public:
 
 	bool CanTerminate() override { return true; }
 
+	void Terminate() override { GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_); }
+
 	void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
 
 private:
 	NameplateSettings settings_;
 	bool visible_ = true;
 	std::optional<bool> last_outpost_pref_state_;
+	GW::HookEntry nametag_hook_entry_;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -507,31 +515,25 @@ private:
 			if (me && living->agent_id == me->agent_id) continue;
 			if (!WithinRange(living, me, max_range_sq)) continue;
 			if (IsMinipet(living->player_number)) continue;
+			if (in_outpost) continue;
 
-			if (in_outpost) {
-				if (!settings_.friendly_quest_only || !living->GetHasQuest()) continue;
+			if (!settings_.show_summoned_allies
+				&& (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
+					|| living->allegiance == GW::Constants::Allegiance::Minion)) continue;
+
+			if (!ShouldShowAllegiance(living->allegiance)) continue;
+
+			const bool is_npc = living->allegiance == GW::Constants::Allegiance::Neutral
+				|| living->allegiance == GW::Constants::Allegiance::Npc_Minipet;
+			const bool is_allied = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable
+				|| living->allegiance == GW::Constants::Allegiance::Spirit_Pet
+				|| living->allegiance == GW::Constants::Allegiance::Minion;
+
+			if (is_npc) {
+				if (living->hp * 100.f > settings_.npc_health_threshold) continue;
 			}
-			else {
-				if (!settings_.show_summoned_allies
-					&& (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
-						|| living->allegiance == GW::Constants::Allegiance::Minion)) continue;
-
-				if (!ShouldShowAllegiance(living->allegiance)) continue;
-
-				const bool is_npc = living->allegiance == GW::Constants::Allegiance::Neutral
-					|| living->allegiance == GW::Constants::Allegiance::Npc_Minipet;
-				const bool is_allied = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable
-					|| living->allegiance == GW::Constants::Allegiance::Spirit_Pet
-					|| living->allegiance == GW::Constants::Allegiance::Minion;
-
-				if (is_npc) {
-					const bool passes_threshold = (living->hp * 100.f <= settings_.npc_health_threshold);
-					const bool passes_quest = settings_.friendly_quest_only && living->GetHasQuest();
-					if (!passes_threshold && !passes_quest) continue;
-				}
-				else if (is_allied) {
-					if (living->hp * 100.f > settings_.allied_health_threshold) continue;
-				}
+			else if (is_allied) {
+				if (living->hp * 100.f > settings_.allied_health_threshold) continue;
 			}
 
 			ImVec2 screen;
@@ -665,7 +667,6 @@ private:
 
 		ImU32 fill_color;
 		if (const auto priority_color = GetPriorityColor(*pb.name_lower)) fill_color = *priority_color;
-		else if (living->GetHasQuest()) fill_color = settings_.quest_color;
 		else if (is_ally) fill_color = ProfessionColor(living->primary);
 		else fill_color = ColorFor(living->allegiance);
 
@@ -727,6 +728,33 @@ private:
 		return (index < kColors.size()) ? kColors[index] : kColors[0];
 	}
 
+	static void OnAgentNameTag(GW::HookStatus*, GW::UI::UIMessage msgid, void* wParam, void*) {
+		if (msgid != GW::UI::UIMessage::kShowAgentNameTag && msgid != GW::UI::UIMessage::kSetAgentNameTagAttribs) return;
+		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
+		self->HandleAgentNameTag(static_cast<GW::UI::AgentNameTagInfo*>(wParam));
+	}
+
+	void HandleAgentNameTag(GW::UI::AgentNameTagInfo* tag) const {
+		if (!tag) return;
+		if (!settings_.recolor_quest_nametags && !settings_.recolor_outpost_professions) return;
+
+		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
+		if (!agent) return;
+		GW::AgentLiving* living = agent->GetAsAgentLiving();
+		if (!living) return;
+
+		if (settings_.recolor_outpost_professions
+			&& GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost
+			&& living->IsPlayer()) {
+			tag->text_color = ProfessionColor(living->primary);
+			return;
+		}
+
+		if (settings_.recolor_quest_nametags && living->GetHasQuest()) {
+			tag->text_color = settings_.quest_color;
+		}
+	}
+
 	void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
 		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
 		const bool changed = ImGui::InputText(label, buf, 512);
@@ -762,13 +790,16 @@ private:
 		ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
-		ImGui::Checkbox("Quest-giver visibility override", &settings_.friendly_quest_only);
+		ImGui::Checkbox("Recolor quest-giver nametags", &settings_.recolor_quest_nametags);
 		ImGui::SameLine();
 		ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
 		if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
 		}
-		ShowHelpMarker("In outposts, controls whether quest-givers show at all. Elsewhere, overrides the NPC visibility threshold slider");
+		ShowHelpMarker("Recolors the game's own native nametag for quest-givers, in all areas");
+
+		ImGui::Checkbox("Recolor outpost player nametags by profession", &settings_.recolor_outpost_professions);
+		ShowHelpMarker("Recolors the game's own native nametag for real players in outposts, using the same profession colors as ally bars");
 
 		ImGui::Checkbox("Manage foe/player game setting", &settings_.auto_toggle_show_names);
 		ShowHelpMarker("Turns foes off in explorable areas and players on in outposts");
