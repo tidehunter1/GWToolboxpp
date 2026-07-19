@@ -496,7 +496,7 @@ private:
 		}
 
 		FlashOnChange(last_recolor_professions_state_, settings_.recolor_professions, [] {
-			FlashFoeAndAllyNamesTogether();
+			FlashPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
 		});
 
 		FlashOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, [] {
@@ -787,17 +787,6 @@ private:
 		});
 	}
 
-	static void FlashFoeAndAllyNamesTogether() {
-		GW::GameThread::Enqueue([] {
-			const bool foe = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
-			const bool ally = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, false);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, false);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, foe);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, ally);
-		});
-	}
-
 	template<typename Func>
 	static void FlashOnChange(std::optional<bool>& last_state, bool current_state, Func&& flash) {
 		if (last_state.has_value() && *last_state != current_state) {
@@ -858,7 +847,7 @@ private:
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
 		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
-		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot(~1000 range) and are moving are also colored this way");
+		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
 
 		ImGui::Checkbox("Fade nameplates based on distance", &settings_.fade_enemies_by_range);
 		ShowHelpMarker("Nameplates fade in steps: \n0-1000 range, 100% opaque \n1000-2000 range, 75% transparency \n2000-3000 range, 50% transparency \n3000 range and above, 25% transparency");
