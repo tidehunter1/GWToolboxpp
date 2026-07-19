@@ -495,12 +495,12 @@ private:
 		if (!BuildFrameProjection(view_proj, viewport_width, viewport_height)) return;
 
 		ImFont* font = ImGui::GetFont();
+		ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 
-		GatherPendingBars(agents, me, target, in_outpost, view_proj, viewport_width, viewport_height, font);
+		GatherPendingBars(agents, me, target, in_outpost, view_proj, viewport_width, viewport_height, font, draw_list);
 		ResolveStacking(pending_);
 		ApplyStackSmoothing();
 
-		ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 		const PendingBar* target_pb = nullptr;
 		
 		for (const auto& pb : pending_) {
@@ -521,7 +521,7 @@ private:
 
 	void GatherPendingBars(GW::AgentArray* agents, GW::AgentLiving* me, GW::AgentLiving* target,
 							bool in_outpost, const DirectX::XMMATRIX& view_proj,
-							float viewport_width, float viewport_height, ImFont* font) {
+							float viewport_width, float viewport_height, ImFont* font, ImDrawList* draw_list) {
 		pending_.clear();
 		const float max_range_sq = settings_.max_range * settings_.max_range;
 
@@ -535,12 +535,18 @@ private:
 			if (living->GetIsDead()) continue;
 			if (me && living->agent_id == me->agent_id) continue;
 			if (!WithinRange(living, me, max_range_sq)) continue;
-			if (IsMinipet(living->player_number)) continue;
+			if (IsMinipet(living->player_number)) {
+				if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "MINIPET");
+				continue;
+			}
 			if (!settings_.show_summoned_allies
 				&& (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
 					|| living->allegiance == GW::Constants::Allegiance::Minion)) continue;
 
-			if (!ShouldShowAllegiance(living->allegiance)) continue;
+			if (!ShouldShowAllegiance(living->allegiance)) {
+				if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "ALLEGIANCE");
+				continue;
+			}
 
 			const bool is_npc = living->allegiance == GW::Constants::Allegiance::Neutral
 				|| living->allegiance == GW::Constants::Allegiance::Npc_Minipet;
@@ -551,20 +557,32 @@ private:
 			if (is_npc) {
 				const bool passes_threshold = (living->hp * 100.f <= settings_.npc_health_threshold);
 				const bool passes_quest = settings_.friendly_quest_only && living->GetHasQuest();
-				if (!passes_threshold && !passes_quest) continue;
+				if (!passes_threshold && !passes_quest) {
+					if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "THRESHOLD");
+					continue;
+				}
 			}
 			else if (is_allied) {
 				const bool is_real_player = living->IsPlayer();
 				const bool always_show_player_in_outpost = in_outpost && is_real_player;
-				if (!always_show_player_in_outpost && living->hp * 100.f > settings_.allied_health_threshold) continue;
+				if (!always_show_player_in_outpost && living->hp * 100.f > settings_.allied_health_threshold) {
+					if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "THRESHOLD");
+					continue;
+				}
 				if (in_outpost && !is_real_player) {
 					GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
-					if (npc && npc->IsHenchman()) continue;
+					if (npc && npc->IsHenchman()) {
+						if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "HENCHMAN");
+						continue;
+					}
 				}
 			}
 
 			ImVec2 screen;
-			if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) continue;
+			if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) {
+				if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "PROJECT");
+				continue;
+			}
 
 			const auto name_lookup = name_cache_.Get(living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
 
@@ -664,6 +682,24 @@ private:
 		out.x = ((clip_arr[0] * inv_w) * 0.5f + 0.5f) * viewport_width;
 		out.y = (1.f - ((clip_arr[1] * inv_w) * 0.5f + 0.5f)) * viewport_height;
 		return true;
+	}
+
+	void DebugTagFiltered(ImDrawList* draw_list, const GW::AgentLiving* living, const DirectX::XMMATRIX& view_proj,
+						   float viewport_width, float viewport_height, ImFont* font, const char* reason) const {
+		if (!font) return;
+		ImVec2 screen;
+		if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) {
+			using namespace DirectX;
+			const XMVECTOR world_pos = XMVectorSet(living->pos.x, living->pos.y, living->z, 1.f);
+			const XMVECTOR clip_pos = XMVector4Transform(world_pos, view_proj);
+			float clip_arr[4];
+			XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(clip_arr), clip_pos);
+			if (clip_arr[3] <= kZNear) return;
+			const float inv_w = 1.f / clip_arr[3];
+			screen.x = ((clip_arr[0] * inv_w) * 0.5f + 0.5f) * viewport_width;
+			screen.y = (1.f - ((clip_arr[1] * inv_w) * 0.5f + 0.5f)) * viewport_height;
+		}
+		DrawOutlinedText(draw_list, font, kNameplateFontSize, screen, IM_COL32(255, 40, 40, 255), reason);
 	}
 
 	void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living, bool left_clicked_this_frame) const {
