@@ -10,9 +10,7 @@
 #endif
 #include <Windows.h>
 
-#include <GWCA/GWCA.h>
 #include <GWCA/Constants/Constants.h>
-#include <GWCA/Constants/AgentIDs.h>
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/Camera.h>
 #include <GWCA/Managers/AgentMgr.h>
