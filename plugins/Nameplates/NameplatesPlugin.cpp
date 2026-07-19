@@ -282,9 +282,10 @@ struct PriorityConfig {
 struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
 	bool recolor_quest_nametags = true, recolor_professions = false, fade_enemies_by_range = true, color_nameplate_text_by_combat = true;
-	uint32_t combat_text_color = IM_COL32(255, 190, 116, 255);
+	uint32_t combat_text_color = IM_COL32(255, 255, 0, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
+	uint32_t target_border_color = IM_COL32(255, 255, 0, 255);
 
 	std::array<PriorityConfig, 3> priorities = {{
 		{"", IM_COL32(135, 206, 250, 255)},
@@ -317,7 +318,7 @@ public:
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
-		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color);
+		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color);
 		L_SET(fade_enemies_by_range); L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -336,7 +337,7 @@ public:
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
-		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color);
+		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color);
 		S_SET(fade_enemies_by_range); S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -361,6 +362,7 @@ private:
 	std::optional<bool> last_outpost_pref_state_;
 	std::optional<bool> last_recolor_professions_state_;
 	std::optional<bool> last_recolor_quest_state_;
+	std::optional<bool> last_show_enemies_state_;
 	GW::HookEntry nametag_hook_entry_;
 
 	AgentNameCache name_cache_;
@@ -372,7 +374,6 @@ private:
 	};
 	std::array<PriorityState, 3> priority_states_;
 
-	static constexpr ImU32 kTargetColor    = IM_COL32(255, 220, 0, 255);
 	static constexpr float kNameplateFontSize = 18.f;
 	static constexpr float kStackSmoothing = 0.05f;
 	static constexpr float kBgTintAmount = 0.3f;
@@ -494,6 +495,13 @@ private:
 				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, show);
 			});
 		}
+
+		if (last_show_enemies_state_.has_value() && *last_show_enemies_state_ && !settings_.show_enemies) {
+			GW::GameThread::Enqueue([] {
+				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, true);
+			});
+		}
+		last_show_enemies_state_ = settings_.show_enemies;
 
 		FlashOnChange(last_recolor_professions_state_, settings_.recolor_professions, [] {
 			FlashPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
@@ -701,7 +709,6 @@ private:
 
 	void DrawBar(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
 		const GW::AgentLiving* living = pb.living;
-		const bool is_ally = living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable;
 
 		const float hp_pct = std::clamp(living->hp, 0.f, 1.f);
 		const float bar_width = settings_.bar_width;
@@ -713,13 +720,12 @@ private:
 
 		ImU32 fill_color;
 		if (const auto priority_color = GetPriorityColor(*pb.name_lower)) fill_color = *priority_color;
-		else if (is_ally) fill_color = ProfessionColor(living->primary);
 		else fill_color = ColorFor(living->allegiance);
 
 		const ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
 		const ImVec4 bg_col4(fill_col4.x * kBgTintAmount, fill_col4.y * kBgTintAmount, fill_col4.z * kBgTintAmount, kBgOpacity);
 		const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
-		const ImU32 border_color = pb.is_targeted ? kTargetColor : IM_COL32(0, 0, 0, 180);
+		const ImU32 border_color = pb.is_targeted ? settings_.target_border_color : IM_COL32(0, 0, 0, 180);
 
 		float opacity_mult = 1.f;
 		if (settings_.fade_enemies_by_range && living->allegiance == GW::Constants::Allegiance::Enemy && !pb.is_targeted) {
@@ -757,7 +763,6 @@ private:
 		switch (allegiance) {
 			case GW::Constants::Allegiance::Enemy:
 				return settings_.enemy_color;
-			case GW::Constants::Allegiance::Ally_NonAttackable:
 			case GW::Constants::Allegiance::Spirit_Pet:
 			case GW::Constants::Allegiance::Minion:
 				return IM_COL32(40, 200, 60, 255);
@@ -842,6 +847,13 @@ private:
 
 		DrawCheckboxWithColor("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
 		DrawCheckboxWithColor("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
+
+		ImGui::TextUnformatted("Color target nameplate border");
+		ImGui::SameLine();
+		ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
+		if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
+		}
 
 		ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
