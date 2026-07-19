@@ -273,7 +273,7 @@ struct PriorityConfig {
 struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
 	bool recolor_quest_nametags = true, recolor_professions = false;
-	float max_range = 1500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 90.0f, allied_health_threshold = 90.0f;
+	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 50.0f, allied_health_threshold = 50.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 
 	std::array<PriorityConfig, 3> priorities = {{
@@ -472,8 +472,7 @@ private:
 		}
 
 		FlashOnChange(last_recolor_professions_state_, settings_.recolor_professions, [] {
-			FlashPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
-			FlashPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			FlashFoeAndAllyNamesTogether();
 		});
 
 		FlashOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, [] {
@@ -747,6 +746,17 @@ private:
 		});
 	}
 
+	static void FlashFoeAndAllyNamesTogether() {
+		GW::GameThread::Enqueue([] {
+			const bool foe = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
+			const bool ally = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, false);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, false);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, foe);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, ally);
+		});
+	}
+
 	template<typename Func>
 	static void FlashOnChange(std::optional<bool>& last_state, bool current_state, Func&& flash) {
 		if (last_state.has_value() && *last_state != current_state) {
@@ -816,16 +826,16 @@ private:
 		ImGui::Checkbox("Show summoned allies", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
-		ImGui::Checkbox("Recolor quest-giver nametags", &settings_.recolor_quest_nametags);
+		ImGui::Checkbox("Color quest-giver nametags", &settings_.recolor_quest_nametags);
 		ImGui::SameLine();
 		ImVec4 quest_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.quest_color);
 		if (ImGui::ColorEdit3("##color_quest", &quest_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.quest_color = ImGui::ColorConvertFloat4ToU32(quest_color_vec);
 		}
-		ShowHelpMarker("Recolors the game's own native nametag for quest-givers, in all areas");
+		ShowHelpMarker("Works in all areas");
 
-		ImGui::Checkbox("Recolor player/hero/henchman nametags by profession", &settings_.recolor_professions);
-		ShowHelpMarker("Recolors the game's own native nametag for players, heroes & henchmen, in all areas, using the same profession colors as ally bars");
+		ImGui::Checkbox("Color allies by profession", &settings_.recolor_professions);
+		ShowHelpMarker("Works on Players/Heroes/Henchmen in all areas");
 
 		ImGui::Checkbox("Manage foe/player game setting", &settings_.auto_toggle_show_names);
 		ShowHelpMarker("Turns foes off in explorable areas and players on in outposts");
@@ -858,7 +868,8 @@ private:
 		ImGui::TextUnformatted("Bar width & height");
 
 		ImGui::Separator();
-		ImGui::TextUnformatted("Priority name coloring (semicolon-separated, e.g. \"Angry Hog; Angry Bat\")");
+		ImGui::TextUnformatted("Priority nameplate coloring");
+		ShowHelpMarker("Semicolon-separated. e.g. \"Charr Shaman; Keeper of Souls\"");
 
 		for (size_t i = 0; i < 3; ++i) {
 			const std::string label = "Priority " + std::to_string(i + 1);
