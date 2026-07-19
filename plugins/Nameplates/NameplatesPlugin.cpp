@@ -527,12 +527,33 @@ private:
 
 		for (GW::Agent* agent : *agents) {
 			if (!agent) continue;
-			if (!agent->GetIsLivingType()) continue;
+			if (!agent->GetIsLivingType()) {
+				if (debug_show_offsets_ && me) {
+					const float dx = agent->pos.x - me->pos.x;
+					const float dy = agent->pos.y - me->pos.y;
+					if (dx * dx + dy * dy <= max_range_sq) {
+						DebugTagFilteredAgent(draw_list, agent, view_proj, viewport_width, viewport_height, font, "NOT_LIVING");
+					}
+				}
+				continue;
+			}
 
 			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living) continue;
+			if (!living) {
+				if (debug_show_offsets_ && me) {
+					const float dx = agent->pos.x - me->pos.x;
+					const float dy = agent->pos.y - me->pos.y;
+					if (dx * dx + dy * dy <= max_range_sq) {
+						DebugTagFilteredAgent(draw_list, agent, view_proj, viewport_width, viewport_height, font, "CAST_FAIL");
+					}
+				}
+				continue;
+			}
 
-			if (living->GetIsDead()) continue;
+			if (living->GetIsDead()) {
+				if (debug_show_offsets_) DebugTagFiltered(draw_list, living, view_proj, viewport_width, viewport_height, font, "DEAD");
+				continue;
+			}
 			if (me && living->agent_id == me->agent_id) continue;
 			if (!WithinRange(living, me, max_range_sq)) continue;
 			if (IsMinipet(living->player_number)) {
@@ -700,6 +721,28 @@ private:
 			screen.y = (1.f - ((clip_arr[1] * inv_w) * 0.5f + 0.5f)) * viewport_height;
 		}
 		DrawOutlinedText(draw_list, font, kNameplateFontSize, screen, IM_COL32(255, 40, 40, 255), reason);
+	}
+
+	void DebugTagFilteredAgent(ImDrawList* draw_list, const GW::Agent* agent, const DirectX::XMMATRIX& view_proj,
+								float viewport_width, float viewport_height, ImFont* font, const char* reason) const {
+		if (!font || !agent) return;
+		using namespace DirectX;
+		float z = agent->name_tag_z;
+		for (int attempt = 0; attempt < 2; ++attempt) {
+			const XMVECTOR world_pos = XMVectorSet(agent->pos.x, agent->pos.y, z, 1.f);
+			const XMVECTOR clip_pos = XMVector4Transform(world_pos, view_proj);
+			float clip_arr[4];
+			XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(clip_arr), clip_pos);
+			if (clip_arr[3] > kZNear) {
+				const float inv_w = 1.f / clip_arr[3];
+				ImVec2 screen;
+				screen.x = ((clip_arr[0] * inv_w) * 0.5f + 0.5f) * viewport_width;
+				screen.y = (1.f - ((clip_arr[1] * inv_w) * 0.5f + 0.5f)) * viewport_height;
+				DrawOutlinedText(draw_list, font, kNameplateFontSize, screen, IM_COL32(255, 40, 40, 255), reason);
+				return;
+			}
+			z = agent->z;
+		}
 	}
 
 	void CheckClickToTarget(const ImVec2& rect_min, const ImVec2& rect_max, const GW::AgentLiving* living, bool left_clicked_this_frame) const {
