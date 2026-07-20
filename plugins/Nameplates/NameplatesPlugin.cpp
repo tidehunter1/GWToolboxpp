@@ -498,6 +498,12 @@ private:
 	static constexpr float kStackSmoothing = 0.05f;
 	static constexpr float kBgTintAmount = 0.3f;
 	static constexpr float kBgOpacity = 1.0f;
+
+	[[nodiscard]] static ImU32 TintedBackground(ImU32 color) {
+		const ImVec4 c4 = ImGui::ColorConvertU32ToFloat4(color);
+		const ImVec4 bg4(c4.x * kBgTintAmount, c4.y * kBgTintAmount, c4.z * kBgTintAmount, kBgOpacity);
+		return ImGui::ColorConvertFloat4ToU32(bg4);
+	}
 	static constexpr float kZNear = 46.875f;
 	static constexpr float kZFar  = 48000.f;
 
@@ -847,9 +853,7 @@ private:
 		if (priority_color) fill_color = *priority_color;
 		else fill_color = ColorFor(living->allegiance);
 
-		const ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
-		const ImVec4 bg_col4(fill_col4.x * kBgTintAmount, fill_col4.y * kBgTintAmount, fill_col4.z * kBgTintAmount, kBgOpacity);
-		const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
+		const ImU32 bg_color = TintedBackground(fill_color);
 		const ImU32 border_color = pb.is_targeted ? settings_.target_border_color : settings_.border_color;
 
 		float opacity_mult = 1.f;
@@ -888,20 +892,21 @@ private:
 		}
 	}
 
-	[[nodiscard]] bool CastBarIsVisible(uint32_t agent_id) {
-		const CastStateCache::CastState* cast = cast_cache_.Find(agent_id);
+	[[nodiscard]] static bool IsCastBarVisible(const CastStateCache::CastState* cast, ULONGLONG now) {
 		if (!cast) return false;
 		if (cast->casting) return true;
-		return cast->ended_at_ms != 0 && (GetTickCount64() - cast->ended_at_ms) < kCastLingerMs;
+		return cast->ended_at_ms != 0 && (now - cast->ended_at_ms) < kCastLingerMs;
+	}
+
+	[[nodiscard]] bool CastBarIsVisible(uint32_t agent_id) {
+		return IsCastBarVisible(cast_cache_.Find(agent_id), GetTickCount64());
 	}
 
 	void DrawCastBar(ImDrawList* draw_list, const ImVec2& nameplate_top_left, float bar_width, float nameplate_bottom_y, uint32_t agent_id, float opacity_mult, ImFont* font) {
 		const CastStateCache::CastState* cast = cast_cache_.Find(agent_id);
-		if (!cast) return;
-
 		const ULONGLONG now = GetTickCount64();
-		const bool lingering = !cast->casting && cast->ended_at_ms != 0 && (now - cast->ended_at_ms) < kCastLingerMs;
-		if (!cast->casting && !lingering) return;
+		if (!IsCastBarVisible(cast, now)) return;
+		const bool lingering = !cast->casting;
 		const bool flashing = lingering && cast->was_cancelled;
 
 		const float height = settings_.castbar_height;
@@ -910,9 +915,7 @@ private:
 		const ImVec2 bar_bottom_right(top_left.x + bar_width, top_left.y + height);
 		const ImVec2 bar_top_left(icon_bottom_right.x, top_left.y);
 
-		const ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(settings_.castbar_fill_color);
-		const ImVec4 castbar_bg_col4(fill_col4.x * kBgTintAmount, fill_col4.y * kBgTintAmount, fill_col4.z * kBgTintAmount, kBgOpacity);
-		const ImU32 castbar_bg_color = ImGui::ColorConvertFloat4ToU32(castbar_bg_col4);
+		const ImU32 castbar_bg_color = TintedBackground(settings_.castbar_fill_color);
 
 		draw_list->AddRectFilled(top_left, bar_bottom_right, ScaleAlpha(castbar_bg_color, opacity_mult));
 
