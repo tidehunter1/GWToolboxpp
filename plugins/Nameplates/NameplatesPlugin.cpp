@@ -13,12 +13,14 @@
 #include <GWCA/Constants/Constants.h>
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/Camera.h>
+#include <GWCA/GameEntities/Skill.h>
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/CameraMgr.h>
 #include <GWCA/Managers/RenderMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
+#include <GWCA/Managers/SkillbarMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -300,6 +302,38 @@ private:
 	uint64_t tick_ = 0, last_prune_tick_ = 0;
 };
 
+class SkillNameCache {
+public:
+	const std::string& Get(GW::Constants::SkillID skill_id) {
+		Entry& entry = cache_[skill_id];
+		if (!entry.requested) {
+			entry.requested = true;
+			const GW::Skill* skill = GW::SkillbarMgr::GetSkillConstantData(skill_id);
+			if (skill && skill->name) {
+				wchar_t enc_buf[16] = {};
+				if (GW::UI::UInt32ToEncStr(skill->name, enc_buf, 16)) {
+					GW::UI::AsyncDecodeStr(enc_buf, entry.buffer, kBufferLen);
+				}
+			}
+		}
+		if (!entry.converted && entry.buffer[0] != L'\0') {
+			WideToUtf8Into(std::wstring(entry.buffer), entry.utf8);
+			entry.converted = true;
+		}
+		return entry.utf8;
+	}
+
+private:
+	static constexpr size_t kBufferLen = 128;
+	struct Entry {
+		bool requested = false;
+		bool converted = false;
+		wchar_t buffer[kBufferLen] = {};
+		std::string utf8;
+	};
+	std::unordered_map<GW::Constants::SkillID, Entry> cache_;
+};
+
 inline bool IsMinipet(uint16_t player_number) {
 	static constexpr std::array<uint16_t, 129> ids = {
 		230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259,
@@ -346,7 +380,6 @@ struct NameplateSettings {
 	bool show_priority_castbars = true;
 	float castbar_height = 16.0f;
 	uint32_t castbar_fill_color = IM_COL32(255, 140, 0, 255);
-	uint32_t castbar_bg_color = IM_COL32(20, 20, 20, 220);
 	uint32_t castbar_cancelled_color = IM_COL32(255, 0, 0, 255);
 
 	std::array<PriorityConfig, 3> priorities = {{
@@ -390,7 +423,7 @@ public:
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color); L_SET(border_color);
-		L_SET(show_priority_castbars); L_SET(castbar_height); L_SET(castbar_fill_color); L_SET(castbar_bg_color); L_SET(castbar_cancelled_color);
+		L_SET(show_priority_castbars); L_SET(castbar_height); L_SET(castbar_fill_color); L_SET(castbar_cancelled_color);
 		L_SET(fade_enemies_by_range); L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -410,7 +443,7 @@ public:
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color); S_SET(border_color);
-		S_SET(show_priority_castbars); S_SET(castbar_height); S_SET(castbar_fill_color); S_SET(castbar_bg_color); S_SET(castbar_cancelled_color);
+		S_SET(show_priority_castbars); S_SET(castbar_height); S_SET(castbar_fill_color); S_SET(castbar_cancelled_color);
 		S_SET(fade_enemies_by_range); S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -448,6 +481,7 @@ private:
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
 	CastStateCache cast_cache_;
+	SkillNameCache skill_name_cache_;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -843,7 +877,7 @@ private:
 		}
 
 		if (settings_.show_priority_castbars && priority_color) {
-			DrawCastBar(draw_list, top_left, bar_width, bottom_right.y, living->agent_id, opacity_mult);
+			DrawCastBar(draw_list, top_left, bar_width, bottom_right.y, living->agent_id, opacity_mult, font);
 		}
 	}
 
@@ -855,7 +889,7 @@ private:
 		return cast->cancelled_at_ms != 0 && (GetTickCount64() - cast->cancelled_at_ms) < kFlashDurationMs;
 	}
 
-	void DrawCastBar(ImDrawList* draw_list, const ImVec2& nameplate_top_left, float bar_width, float nameplate_bottom_y, uint32_t agent_id, float opacity_mult) {
+	void DrawCastBar(ImDrawList* draw_list, const ImVec2& nameplate_top_left, float bar_width, float nameplate_bottom_y, uint32_t agent_id, float opacity_mult, ImFont* font) {
 		const CastStateCache::CastState* cast = cast_cache_.Find(agent_id);
 		if (!cast) return;
 
@@ -868,8 +902,13 @@ private:
 		const ImVec2 top_left(nameplate_top_left.x, nameplate_bottom_y);
 		const ImVec2 icon_bottom_right(top_left.x + height, top_left.y + height);
 		const ImVec2 bar_bottom_right(top_left.x + bar_width, top_left.y + height);
+		const ImVec2 bar_top_left(icon_bottom_right.x, top_left.y);
 
-		draw_list->AddRectFilled(top_left, bar_bottom_right, ScaleAlpha(settings_.castbar_bg_color, opacity_mult));
+		const ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(settings_.castbar_fill_color);
+		const ImVec4 castbar_bg_col4(fill_col4.x * kBgTintAmount, fill_col4.y * kBgTintAmount, fill_col4.z * kBgTintAmount, kBgOpacity);
+		const ImU32 castbar_bg_color = ImGui::ColorConvertFloat4ToU32(castbar_bg_col4);
+
+		draw_list->AddRectFilled(top_left, bar_bottom_right, ScaleAlpha(castbar_bg_color, opacity_mult));
 
 		if (get_skill_image_) {
 			IDirect3DTexture9** texture = get_skill_image_(cast->skill_id);
@@ -881,13 +920,22 @@ private:
 		if (cast->casting && cast->cast_time_ms > 0.f) {
 			const float elapsed = static_cast<float>(now - cast->cast_start_ms);
 			const float pct = std::clamp(elapsed / cast->cast_time_ms, 0.f, 1.f);
-			const ImVec2 fill_top_left(icon_bottom_right.x, top_left.y);
-			const ImVec2 fill_bottom_right(icon_bottom_right.x + (bar_width - height) * pct, top_left.y + height);
-			draw_list->AddRectFilled(fill_top_left, fill_bottom_right, ScaleAlpha(settings_.castbar_fill_color, opacity_mult));
+			const ImVec2 fill_bottom_right(bar_top_left.x + (bar_width - height) * pct, top_left.y + height);
+			draw_list->AddRectFilled(bar_top_left, fill_bottom_right, ScaleAlpha(settings_.castbar_fill_color, opacity_mult));
+		}
+
+		if (font) {
+			const std::string& skill_name = skill_name_cache_.Get(cast->skill_id);
+			if (!skill_name.empty()) {
+				const float text_font_size = height * 0.8f;
+				draw_list->PushClipRect(bar_top_left, bar_bottom_right, true);
+				DrawOutlinedText(draw_list, font, text_font_size, ImVec2(bar_top_left.x + 3.f, top_left.y + (height - text_font_size) / 2.f), IM_COL32(255, 255, 255, 255), skill_name, opacity_mult);
+				draw_list->PopClipRect();
+			}
 		}
 
 		if (flashing) {
-			draw_list->AddRectFilled(top_left, bar_bottom_right, ScaleAlpha(settings_.castbar_cancelled_color, opacity_mult));
+			draw_list->AddRectFilled(bar_top_left, bar_bottom_right, ScaleAlpha(settings_.castbar_cancelled_color, opacity_mult * 0.5f));
 		}
 
 		draw_list->AddRect(top_left, bar_bottom_right, ScaleAlpha(IM_COL32(0, 0, 0, 180), opacity_mult), 0.f, 0, 1.f);
@@ -1088,13 +1136,6 @@ private:
 			}
 			ImGui::SameLine();
 			ImGui::TextUnformatted("Cast bar fill color");
-
-			ImVec4 castbar_bg_vec = ImGui::ColorConvertU32ToFloat4(settings_.castbar_bg_color);
-			if (ImGui::ColorEdit3("##color_castbar_bg", &castbar_bg_vec.x, ImGuiColorEditFlags_NoInputs)) {
-				settings_.castbar_bg_color = ImGui::ColorConvertFloat4ToU32(castbar_bg_vec);
-			}
-			ImGui::SameLine();
-			ImGui::TextUnformatted("Cast bar background color");
 
 			ImVec4 castbar_cancelled_vec = ImGui::ColorConvertU32ToFloat4(settings_.castbar_cancelled_color);
 			if (ImGui::ColorEdit3("##color_castbar_cancelled", &castbar_cancelled_vec.x, ImGuiColorEditFlags_NoInputs)) {
