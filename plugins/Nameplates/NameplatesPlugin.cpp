@@ -935,7 +935,7 @@ private:
 		}
 
 		if (flashing) {
-			draw_list->AddRectFilled(bar_top_left, bar_bottom_right, ScaleAlpha(settings_.castbar_cancelled_color, opacity_mult * 0.5f));
+			draw_list->AddRectFilled(bar_top_left, bar_bottom_right, ScaleAlpha(settings_.castbar_cancelled_color, opacity_mult * 0.25f));
 		}
 
 		draw_list->AddRect(top_left, bar_bottom_right, ScaleAlpha(IM_COL32(0, 0, 0, 180), opacity_mult), 0.f, 0, 1.f);
