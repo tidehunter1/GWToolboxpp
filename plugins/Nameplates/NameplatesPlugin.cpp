@@ -284,8 +284,10 @@ struct NameplateSettings {
 	bool recolor_quest_nametags = true, recolor_professions = false, fade_enemies_by_range = true, color_nameplate_text_by_combat = true;
 	uint32_t combat_text_color = IM_COL32(255, 255, 0, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
+	float border_thickness = 1.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 	uint32_t target_border_color = IM_COL32(255, 255, 0, 255);
+	uint32_t border_color = IM_COL32(0, 0, 0, 180);
 
 	std::array<PriorityConfig, 3> priorities = {{
 		{"", IM_COL32(135, 206, 250, 255)},
@@ -314,11 +316,11 @@ public:
 	void LoadSettings(const wchar_t* folder) override {
 		ToolboxPlugin::LoadSettings(folder);
 		#define L_SET(var) LoadSetting(#var, settings_.var)
-		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height);
+		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height); L_SET(border_thickness);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
-		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color);
+		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color); L_SET(border_color);
 		L_SET(fade_enemies_by_range); L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -333,11 +335,11 @@ public:
 
 	void SaveSettings(const wchar_t* folder) override {
 		#define S_SET(var) SaveSetting(#var, settings_.var)
-		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height);
+		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height); S_SET(border_thickness);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
-		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color);
+		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color); S_SET(border_color);
 		S_SET(fade_enemies_by_range); S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -381,15 +383,13 @@ private:
 	static constexpr float kZNear = 46.875f;
 	static constexpr float kZFar  = 48000.f;
 
-	static constexpr float kFadeRange1Sq = 1000.f * 1000.f;
-	static constexpr float kFadeRange2Sq = 2000.f * 2000.f;
-	static constexpr float kFadeRange3Sq = 3000.f * 3000.f;
+	static constexpr float kFadeRange1Sq = 1500.f * 1500.f;
+	static constexpr float kFadeRange2Sq = 2500.f * 2500.f;
 
 	[[nodiscard]] static float GetRangeOpacityMultiplier(float dist_sq) {
 		if (dist_sq <= kFadeRange1Sq)   return 1.00f;
 		if (dist_sq <= kFadeRange2Sq)   return 0.75f;
-		if (dist_sq <= kFadeRange3Sq)   return 0.50f;
-		return 0.25f;
+		return 0.50f;
 	}
 
 	void RefreshPriorityBuffersAndLists() {
@@ -725,7 +725,7 @@ private:
 		const ImVec4 fill_col4 = ImGui::ColorConvertU32ToFloat4(fill_color);
 		const ImVec4 bg_col4(fill_col4.x * kBgTintAmount, fill_col4.y * kBgTintAmount, fill_col4.z * kBgTintAmount, kBgOpacity);
 		const ImU32 bg_color = ImGui::ColorConvertFloat4ToU32(bg_col4);
-		const ImU32 border_color = pb.is_targeted ? settings_.target_border_color : IM_COL32(0, 0, 0, 180);
+		const ImU32 border_color = pb.is_targeted ? settings_.target_border_color : settings_.border_color;
 
 		float opacity_mult = 1.f;
 		if (settings_.fade_enemies_by_range && living->allegiance == GW::Constants::Allegiance::Enemy && !pb.is_targeted) {
@@ -734,7 +734,7 @@ private:
 
 		draw_list->AddRectFilled(top_left, bottom_right, ScaleAlpha(bg_color, opacity_mult));
 		draw_list->AddRectFilled(top_left, fill_bottom_right, ScaleAlpha(fill_color, opacity_mult));
-		draw_list->AddRect(top_left, bottom_right, ScaleAlpha(border_color, opacity_mult));
+		draw_list->AddRect(top_left, bottom_right, ScaleAlpha(border_color, opacity_mult), 0.f, 0, settings_.border_thickness);
 		DrawStatusTriangles(draw_list, bottom_right.x - 8.f, top_left.y + bar_height / 2.f, living, opacity_mult);
 		CheckClickToTarget(top_left, bottom_right, living, left_clicked_this_frame);
 
@@ -848,21 +848,31 @@ private:
 		DrawCheckboxWithColor("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
 		DrawCheckboxWithColor("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
 
-		ImGui::TextUnformatted("Color target nameplate border");
-		ImGui::SameLine();
-		ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
-		if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
-		}
-
 		ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
 		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
 		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
 
-		ImGui::Checkbox("Fade nameplates based on distance", &settings_.fade_enemies_by_range);
-		ShowHelpMarker("Nameplates fade in steps: \n0-1000 range, 100% opaque \n1000-2000 range, 75% transparency \n2000-3000 range, 50% transparency \n3000 range and above, 25% transparency");
+		ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
+		ShowHelpMarker("Nameplates fade in steps: \n0-1500 range, 100% opaque \n1500-2500 range, 75% transparency \n2500 range and above, 50% transparency");
+
+		ImGui::SetNextItemWidth(120.f);
+		ImGui::SliderFloat("##border_thickness", &settings_.border_thickness, 1.0f, 3.0f, "%.1f");
+		ImGui::SameLine();
+		ImGui::TextUnformatted("Border thickness");
+		ImGui::SameLine();
+		ImVec4 border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.border_color);
+		if (ImGui::ColorEdit3("##color_border", &border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.border_color = ImGui::ColorConvertFloat4ToU32(border_color_vec);
+		}
+		ImGui::SameLine();
+		ImGui::TextUnformatted("Target border color");
+		ImGui::SameLine();
+		ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
+		if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
+		}
 
 		int thresholds[2] = {
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
@@ -880,11 +890,11 @@ private:
 
 		const float half_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
 		ImGui::PushItemWidth(half_width);
-		if (ImGui::SliderFloat("##bar_width", &settings_.bar_width, 50.f, 200.f, "%.0f")) {
+		if (ImGui::SliderFloat("##bar_width", &settings_.bar_width, 50.f, 300.f, "%.0f")) {
 			settings_.bar_width = std::round(settings_.bar_width);
 		}
 		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
-		if (ImGui::SliderFloat("##bar_height", &settings_.bar_height, 15.f, 20.f, "%.0f")) {
+		if (ImGui::SliderFloat("##bar_height", &settings_.bar_height, 15.f, 30.f, "%.0f")) {
 			settings_.bar_height = std::round(settings_.bar_height);
 		}
 		ImGui::PopItemWidth();
