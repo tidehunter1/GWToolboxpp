@@ -851,13 +851,14 @@ private:
 		ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
-		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
-		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
-
 		ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
 		ShowHelpMarker("Nameplates fade in steps: \n0-1500 range, 100% opaque \n1500-2500 range, 75% transparency \n2500 range and above, 50% transparency");
 
-		ImGui::SetNextItemWidth(120.f);
+		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
+		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
+
+		const float border_thickness_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
+		ImGui::SetNextItemWidth(border_thickness_width);
 		ImGui::SliderFloat("##border_thickness", &settings_.border_thickness, 1.0f, 3.0f, "%.1f");
 		ImGui::SameLine();
 		ImGui::TextUnformatted("Border thickness");
