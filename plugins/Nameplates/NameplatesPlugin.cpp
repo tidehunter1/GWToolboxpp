@@ -21,16 +21,16 @@
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/SkillbarMgr.h>
-#include <GWCA/Utilities/Hooker.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
 
-#include <d3d9.h>
+struct IDirect3DTexture9;
 
 #include <DirectXMath.h>
 #include <vector>
 #include <string>
+#include <fstream>
 #include <string_view>
 #include <sstream>
 #include <unordered_map>
@@ -340,98 +340,61 @@ private:
 	std::unordered_map<GW::Constants::SkillID, Entry> cache_;
 };
 
-inline uint32_t TexmodCrc32(const void* data, size_t bytes) {
-	static uint32_t table[256];
-	static bool table_ready = false;
-	if (!table_ready) {
-		for (uint32_t i = 0; i < 256; ++i) {
-			uint32_t c = i;
-			for (int bit = 0; bit < 8; ++bit) {
-				c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
-			}
-			table[i] = c;
-		}
-		table_ready = true;
-	}
-	uint32_t crc = 0xFFFFFFFFu;
-	const auto* p = static_cast<const uint8_t*>(data);
-	for (size_t i = 0; i < bytes; ++i) {
-		crc = table[(crc ^ p[i]) & 0xFFu] ^ (crc >> 8);
-	}
-	return crc;
-}
+#pragma pack(push, 1)
+struct DdsPixelFormat {
+	uint32_t size;
+	uint32_t flags;
+	uint32_t four_cc;
+	uint32_t rgb_bit_count;
+	uint32_t r_mask;
+	uint32_t g_mask;
+	uint32_t b_mask;
+	uint32_t a_mask;
+};
+struct DdsHeader {
+	uint32_t magic;
+	uint32_t size;
+	uint32_t flags;
+	uint32_t height;
+	uint32_t width;
+	uint32_t pitch_or_linear_size;
+	uint32_t depth;
+	uint32_t mip_map_count;
+	uint32_t reserved1[11];
+	DdsPixelFormat pixel_format;
+	uint32_t caps;
+	uint32_t caps2;
+	uint32_t caps3;
+	uint32_t caps4;
+	uint32_t reserved2;
+};
+#pragma pack(pop)
+static_assert(sizeof(DdsHeader) == 128, "DdsHeader must be exactly 128 bytes to match the DDS spec");
 
-inline UINT TexmodDxtBlockBytes(D3DFORMAT format) {
-	switch (format) {
-		case D3DFMT_DXT1: return 8;
-		case D3DFMT_DXT2:
-		case D3DFMT_DXT3:
-		case D3DFMT_DXT4:
-		case D3DFMT_DXT5: return 16;
-		default: return 0;
-	}
-}
+inline std::vector<uint8_t> BuildTransparentDds() {
+	DdsHeader header{};
+	header.magic = 0x20534444u;
+	header.size = 124;
+	header.flags = 0x1u | 0x2u | 0x4u | 0x8u | 0x1000u;
+	header.height = 1;
+	header.width = 1;
+	header.pitch_or_linear_size = 4;
+	header.pixel_format.size = 32;
+	header.pixel_format.flags = 0x1u | 0x40u;
+	header.pixel_format.rgb_bit_count = 32;
+	header.pixel_format.r_mask = 0x00FF0000u;
+	header.pixel_format.g_mask = 0x0000FF00u;
+	header.pixel_format.b_mask = 0x000000FFu;
+	header.pixel_format.a_mask = 0xFF000000u;
+	header.caps = 0x1000u;
 
-inline int TexmodBitsPerPixel(D3DFORMAT format) {
-	switch (format) {
-		case D3DFMT_A8R8G8B8: case D3DFMT_X8R8G8B8: case D3DFMT_A8B8G8R8: case D3DFMT_X8B8G8R8:
-		case D3DFMT_G16R16: case D3DFMT_A2R10G10B10: case D3DFMT_A2B10G10R10:
-			return 32;
-		case D3DFMT_R8G8B8:
-			return 24;
-		case D3DFMT_R5G6B5: case D3DFMT_X1R5G5B5: case D3DFMT_A1R5G5B5: case D3DFMT_A4R4G4B4:
-		case D3DFMT_X4R4G4B4: case D3DFMT_A8R3G3B2: case D3DFMT_A8L8: case D3DFMT_L16:
-		case D3DFMT_D16_LOCKABLE: case D3DFMT_D16: case D3DFMT_D15S1:
-			return 16;
-		case D3DFMT_A8: case D3DFMT_L8: case D3DFMT_P8: case D3DFMT_R3G3B2: case D3DFMT_A4L4:
-			return 8;
-		case D3DFMT_DXT1:
-			return 4;
-		case D3DFMT_DXT2: case D3DFMT_DXT3: case D3DFMT_DXT4: case D3DFMT_DXT5:
-			return 8;
-		default:
-			return 32;
-	}
-}
-
-inline uint32_t ComputeTexmodHash(IDirect3DTexture9* texture) {
-	if (!texture) return 0;
-
-	D3DSURFACE_DESC desc;
-	if (FAILED(texture->GetLevelDesc(0, &desc))) return 0;
-
-	D3DLOCKED_RECT locked;
-	if (FAILED(texture->LockRect(0, &locked, nullptr, D3DLOCK_READONLY)) || !locked.pBits || locked.Pitch <= 0) {
-		return 0;
-	}
-	const auto* bits = static_cast<const uint8_t*>(locked.pBits);
-	const size_t pitch = static_cast<size_t>(locked.Pitch);
-
-	uint32_t hash = 0;
-	if (const UINT block = TexmodDxtBlockBytes(desc.Format)) {
-		const size_t blocks_wide = (desc.Width + 3) / 4;
-		const size_t blocks_high = (desc.Height + 3) / 4;
-		const size_t total_size = blocks_wide * blocks_high * block;
-		if (total_size && total_size <= pitch * blocks_high) {
-			std::vector<uint8_t> compact(total_size);
-			memcpy(compact.data(), bits, total_size);
-			hash = TexmodCrc32(compact.data(), compact.size());
-		}
-	}
-	else {
-		const int bpp = TexmodBitsPerPixel(desc.Format);
-		const size_t row_size = bpp ? static_cast<size_t>(desc.Width) * (bpp / 8) : 0;
-		if (row_size && desc.Height && row_size <= pitch) {
-			std::vector<uint8_t> compact(static_cast<size_t>(desc.Height) * row_size);
-			for (UINT row = 0; row < desc.Height; ++row) {
-				memcpy(compact.data() + row * row_size, bits + row * pitch, row_size);
-			}
-			hash = TexmodCrc32(compact.data(), compact.size());
-		}
-	}
-
-	texture->UnlockRect(0);
-	return hash;
+	std::vector<uint8_t> out(sizeof(DdsHeader) + 4);
+	memcpy(out.data(), &header, sizeof(DdsHeader));
+	out[sizeof(DdsHeader) + 0] = 0;
+	out[sizeof(DdsHeader) + 1] = 0;
+	out[sizeof(DdsHeader) + 2] = 0;
+	out[sizeof(DdsHeader) + 3] = 0;
+	return out;
 }
 
 inline bool IsMinipet(uint16_t player_number) {
@@ -563,8 +526,9 @@ public:
 	void Terminate() override {
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&cast_hook_entry_);
-		if (create_texture_func_) {
-			GW::Hook::RemoveHook(reinterpret_cast<void*>(create_texture_func_));
+		if (gmod_remove_file_ && healthbar_dds_files_added_) {
+			gmod_remove_file_(healthbar_dds_path1_.c_str());
+			gmod_remove_file_(healthbar_dds_path2_.c_str());
 		}
 	}
 
@@ -577,19 +541,21 @@ private:
 	std::optional<bool> last_recolor_professions_state_;
 	std::optional<bool> last_recolor_quest_state_;
 	std::optional<bool> last_show_enemies_state_;
+	std::optional<bool> last_hide_healthbar_state_;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry cast_hook_entry_;
 
 	using GetSkillImageFn = IDirect3DTexture9** (__cdecl*)(GW::Constants::SkillID);
 	GetSkillImageFn get_skill_image_ = nullptr;
 
-	static constexpr uint32_t kTargetHealthbarHash = 0x0B19B995u;
-	static constexpr uint32_t kTargetIndicatorHash = 0xD9B07004u;
-
-	using CreateTextureFn = HRESULT(WINAPI*)(IDirect3DDevice9*, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9**, HANDLE*);
-	CreateTextureFn create_texture_func_ = nullptr;
-	CreateTextureFn create_texture_ret_ = nullptr;
-	IDirect3DTexture9* last_created_texture_ = nullptr;
+	using GModAddFileFn = int(__cdecl*)(const wchar_t*);
+	using GModRemoveFileFn = int(__cdecl*)(const wchar_t*);
+	GModAddFileFn gmod_add_file_ = nullptr;
+	GModRemoveFileFn gmod_remove_file_ = nullptr;
+	bool healthbar_dds_files_written_ = false;
+	bool healthbar_dds_files_added_ = false;
+	std::wstring healthbar_dds_path1_;
+	std::wstring healthbar_dds_path2_;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -714,8 +680,14 @@ private:
 
 	void DrawNameplates() {
 		if (settings_.hide_enemy_native_healthbar) {
-			EnsureTextureHookInstalled();
+			EnsureHealthbarTexturesBlocked();
 		}
+		else if (last_hide_healthbar_state_.value_or(false) && gmod_remove_file_ && healthbar_dds_files_added_) {
+			gmod_remove_file_(healthbar_dds_path1_.c_str());
+			gmod_remove_file_(healthbar_dds_path2_.c_str());
+			healthbar_dds_files_added_ = false;
+		}
+		last_hide_healthbar_state_ = settings_.hide_enemy_native_healthbar;
 
 		GW::AgentArray* agents = GW::Agents::GetAgentArray();
 		if (!agents || !agents->valid()) return;
@@ -1163,52 +1135,42 @@ private:
 		cast_cache_.OnStartedCast(agent_id, skill_id, duration * 1000.f);
 	}
 
-	void EnsureTextureHookInstalled() {
-		if (create_texture_func_) return;
-		IDirect3DDevice9* device = GW::Render::GetDevice();
-		if (!device) return;
-		uintptr_t* vtable = *reinterpret_cast<uintptr_t**>(device);
-		constexpr int kCreateTextureIndex = 23;
-		create_texture_func_ = reinterpret_cast<CreateTextureFn>(vtable[kCreateTextureIndex]);
-		GW::Hook::CreateHook(reinterpret_cast<void**>(&create_texture_func_), OnD3D9CreateTexture, reinterpret_cast<void**>(&create_texture_ret_));
-		GW::Hook::EnableHooks(reinterpret_cast<void*>(create_texture_func_));
+	[[nodiscard]] std::wstring PluginDirectory() const {
+		wchar_t buf[MAX_PATH] = {};
+		if (!GetModuleFileNameW(plugin_handle, buf, MAX_PATH)) return L"";
+		std::wstring path(buf);
+		const size_t slash = path.find_last_of(L"\\/");
+		return slash == std::wstring::npos ? L"" : path.substr(0, slash + 1);
 	}
 
-	static void NukeTextureInPlace(IDirect3DTexture9* texture) {
-		D3DSURFACE_DESC desc;
-		if (FAILED(texture->GetLevelDesc(0, &desc))) return;
-		D3DLOCKED_RECT locked;
-		if (FAILED(texture->LockRect(0, &locked, nullptr, 0)) || !locked.pBits || locked.Pitch <= 0) return;
-		auto* bits = static_cast<uint8_t*>(locked.pBits);
-		for (UINT row = 0; row < desc.Height; ++row) {
-			memset(bits + row * static_cast<size_t>(locked.Pitch), 0, static_cast<size_t>(locked.Pitch));
-		}
-		texture->UnlockRect(0);
-	}
-
-	static HRESULT WINAPI OnD3D9CreateTexture(IDirect3DDevice9* device, UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format, D3DPOOL pool, IDirect3DTexture9** out_texture, HANDLE* shared_handle) {
-		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
-		GW::Hook::EnterHook();
-		const HRESULT result = self->create_texture_ret_(device, width, height, levels, usage, format, pool, out_texture, shared_handle);
-
-		if (auto tex = self->last_created_texture_) {
-			self->last_created_texture_ = nullptr;
-			if (self->settings_.hide_enemy_native_healthbar) {
-				const uint32_t hash = ComputeTexmodHash(tex);
-				if (hash == kTargetHealthbarHash || hash == kTargetIndicatorHash) {
-					NukeTextureInPlace(tex);
-				}
+	void EnsureHealthbarTexturesBlocked() {
+		if (!healthbar_dds_files_written_) {
+			const std::wstring dir = PluginDirectory();
+			if (dir.empty()) return;
+			healthbar_dds_path1_ = dir + L"GW.EXE_0x0B19B995-1.dds";
+			healthbar_dds_path2_ = dir + L"GW.EXE_0xD9B07004-1.dds";
+			const std::vector<uint8_t> dds = BuildTransparentDds();
+			for (const std::wstring& path : {healthbar_dds_path1_, healthbar_dds_path2_}) {
+				std::ofstream out(path, std::ios::binary | std::ios::trunc);
+				if (!out) return;
+				out.write(reinterpret_cast<const char*>(dds.data()), static_cast<std::streamsize>(dds.size()));
 			}
-			tex->Release();
+			healthbar_dds_files_written_ = true;
 		}
 
-		if (SUCCEEDED(result) && out_texture && *out_texture && pool != D3DPOOL_DEFAULT) {
-			self->last_created_texture_ = *out_texture;
-			self->last_created_texture_->AddRef();
+		if (!gmod_add_file_) {
+			HMODULE gmod = GetModuleHandleW(L"gMod.dll");
+			if (!gmod) return;
+			gmod_add_file_ = reinterpret_cast<GModAddFileFn>(GetProcAddress(gmod, "AddFile"));
+			gmod_remove_file_ = reinterpret_cast<GModRemoveFileFn>(GetProcAddress(gmod, "RemoveFile"));
+			if (!gmod_add_file_) return;
 		}
 
-		GW::Hook::LeaveHook();
-		return result;
+		if (!healthbar_dds_files_added_) {
+			gmod_add_file_(healthbar_dds_path1_.c_str());
+			gmod_add_file_(healthbar_dds_path2_.c_str());
+			healthbar_dds_files_added_ = true;
+		}
 	}
 
 	void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
@@ -1335,7 +1297,7 @@ private:
 		ShowHelpMarker("Experimental: blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
 
 		ImGui::Checkbox("Hide enemy overhead health bar & target indicator", &settings_.hide_enemy_native_healthbar);
-		ShowHelpMarker("Experimental: identifies the two textures the game uses for the overhead health bar and the animated target arrow by content hash, and blanks them in place. Costs a small amount of FPS while new textures are loading in, since every loaded texture has to be hashed to find them.");
+		ShowHelpMarker("Experimental: writes two transparent replacement textures for the overhead health bar and target arrow, and loads them through GWToolbox's 'gMod/uMod/Texmod' module. Requires that module to stay enabled - if it's off, this has no effect.");
 	}
 };
 
