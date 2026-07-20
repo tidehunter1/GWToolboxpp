@@ -375,6 +375,7 @@ struct PriorityConfig {
 struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
 	bool recolor_quest_nametags = true, recolor_professions = false, fade_enemies_by_range = true, color_nameplate_text_by_combat = true;
+	bool hide_enemy_native_nametags = true;
 	uint32_t combat_text_color = IM_COL32(255, 255, 0, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
 	float border_thickness = 1.0f;
@@ -426,7 +427,7 @@ public:
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height); L_SET(border_thickness);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
-		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
+		L_SET(recolor_quest_nametags); L_SET(recolor_professions); L_SET(hide_enemy_native_nametags);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color); L_SET(border_color);
 		L_SET(show_priority_castbars); L_SET(castbar_height); L_SET(castbar_fill_color); L_SET(castbar_cancelled_color);
 		L_SET(fade_enemies_by_range); L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
@@ -446,7 +447,7 @@ public:
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height); S_SET(border_thickness);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
-		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
+		S_SET(recolor_quest_nametags); S_SET(recolor_professions); S_SET(hide_enemy_native_nametags);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color); S_SET(border_color);
 		S_SET(show_priority_castbars); S_SET(castbar_height); S_SET(castbar_fill_color); S_SET(castbar_cancelled_color);
 		S_SET(fade_enemies_by_range); S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
@@ -992,19 +993,25 @@ private:
 		last_state = current_state;
 	}
 
-	static void OnAgentNameTag(GW::HookStatus*, GW::UI::UIMessage msgid, void* wParam, void*) {
+	static void OnAgentNameTag(GW::HookStatus* status, GW::UI::UIMessage msgid, void* wParam, void*) {
 		if (msgid != GW::UI::UIMessage::kShowAgentNameTag && msgid != GW::UI::UIMessage::kSetAgentNameTagAttribs) return;
 		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
-		self->HandleAgentNameTag(static_cast<GW::UI::AgentNameTagInfo*>(wParam));
+		self->HandleAgentNameTag(status, static_cast<GW::UI::AgentNameTagInfo*>(wParam));
 	}
 
-	void HandleAgentNameTag(GW::UI::AgentNameTagInfo* tag) const {
+	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) const {
 		if (!tag) return;
-		if (!settings_.recolor_quest_nametags && !settings_.recolor_professions) return;
 
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
-		if (!agent) return;
-		GW::AgentLiving* living = agent->GetAsAgentLiving();
+		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
+
+		if (settings_.hide_enemy_native_nametags && status && living
+			&& living->allegiance == GW::Constants::Allegiance::Enemy) {
+			status->blocked = true;
+			return;
+		}
+
+		if (!settings_.recolor_quest_nametags && !settings_.recolor_professions) return;
 		if (!living) return;
 
 		if (settings_.recolor_professions
@@ -1164,6 +1171,9 @@ private:
 
 		ImGui::Checkbox("Manage foe/player nametag game setting", &settings_.auto_toggle_show_names);
 		ShowHelpMarker("Manages the 'Menu > Options > General' setting 'Show foe names...', \nOFF in explorable areas, ON in outposts");
+
+		ImGui::Checkbox("Hide enemy native nametag", &settings_.hide_enemy_native_nametags);
+		ShowHelpMarker("Experimental: blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
 	}
 };
 
