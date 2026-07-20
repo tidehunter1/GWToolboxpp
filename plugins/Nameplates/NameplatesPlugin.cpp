@@ -257,7 +257,8 @@ public:
 		ULONGLONG cast_start_ms = 0;
 		float cast_time_ms = 0.f;
 		bool casting = false;
-		ULONGLONG cancelled_at_ms = 0;
+		bool was_cancelled = false;
+		ULONGLONG ended_at_ms = 0;
 	};
 
 	const CastState* Find(uint32_t agent_id) {
@@ -274,20 +275,24 @@ public:
 		e.state.cast_start_ms = GetTickCount64();
 		e.state.cast_time_ms = duration_ms;
 		e.state.casting = true;
-		e.state.cancelled_at_ms = 0;
+		e.state.was_cancelled = false;
+		e.state.ended_at_ms = 0;
 	}
 
 	void OnCompleted(uint32_t agent_id, GW::Constants::SkillID skill_id) {
 		auto it = cache_.find(agent_id);
 		if (it == cache_.end() || it->second.state.skill_id != skill_id) return;
 		it->second.state.casting = false;
+		it->second.state.was_cancelled = false;
+		it->second.state.ended_at_ms = GetTickCount64();
 	}
 
 	void OnCancelled(uint32_t agent_id, GW::Constants::SkillID skill_id) {
 		auto it = cache_.find(agent_id);
 		if (it == cache_.end() || it->second.state.skill_id != skill_id) return;
 		it->second.state.casting = false;
-		it->second.state.cancelled_at_ms = GetTickCount64();
+		it->second.state.was_cancelled = true;
+		it->second.state.ended_at_ms = GetTickCount64();
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
@@ -495,6 +500,8 @@ private:
 	static constexpr float kBgOpacity = 1.0f;
 	static constexpr float kZNear = 46.875f;
 	static constexpr float kZFar  = 48000.f;
+
+	static constexpr ULONGLONG kCastLingerMs = 2000;
 
 	static constexpr float kFadeRange1Sq = 1500.f * 1500.f;
 	static constexpr float kFadeRange2Sq = 2500.f * 2500.f;
@@ -885,8 +892,7 @@ private:
 		const CastStateCache::CastState* cast = cast_cache_.Find(agent_id);
 		if (!cast) return false;
 		if (cast->casting) return true;
-		static constexpr ULONGLONG kFlashDurationMs = 400;
-		return cast->cancelled_at_ms != 0 && (GetTickCount64() - cast->cancelled_at_ms) < kFlashDurationMs;
+		return cast->ended_at_ms != 0 && (GetTickCount64() - cast->ended_at_ms) < kCastLingerMs;
 	}
 
 	void DrawCastBar(ImDrawList* draw_list, const ImVec2& nameplate_top_left, float bar_width, float nameplate_bottom_y, uint32_t agent_id, float opacity_mult, ImFont* font) {
@@ -894,9 +900,9 @@ private:
 		if (!cast) return;
 
 		const ULONGLONG now = GetTickCount64();
-		static constexpr ULONGLONG kFlashDurationMs = 400;
-		const bool flashing = cast->cancelled_at_ms != 0 && (now - cast->cancelled_at_ms) < kFlashDurationMs;
-		if (!cast->casting && !flashing) return;
+		const bool lingering = !cast->casting && cast->ended_at_ms != 0 && (now - cast->ended_at_ms) < kCastLingerMs;
+		if (!cast->casting && !lingering) return;
+		const bool flashing = lingering && cast->was_cancelled;
 
 		const float height = settings_.castbar_height;
 		const ImVec2 top_left(nameplate_top_left.x, nameplate_bottom_y);
@@ -917,8 +923,9 @@ private:
 			}
 		}
 
-		if (cast->casting && cast->cast_time_ms > 0.f) {
-			const float elapsed = static_cast<float>(now - cast->cast_start_ms);
+		if (cast->cast_time_ms > 0.f) {
+			const ULONGLONG reference_time = cast->casting ? now : cast->ended_at_ms;
+			const float elapsed = static_cast<float>(reference_time - cast->cast_start_ms);
 			const float pct = std::clamp(elapsed / cast->cast_time_ms, 0.f, 1.f);
 			const ImVec2 fill_bottom_right(bar_top_left.x + (bar_width - height) * pct, top_left.y + height);
 			draw_list->AddRectFilled(bar_top_left, fill_bottom_right, ScaleAlpha(settings_.castbar_fill_color, opacity_mult));
