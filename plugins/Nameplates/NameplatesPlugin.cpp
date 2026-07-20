@@ -21,12 +21,11 @@
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/SkillbarMgr.h>
-#include <GWCA/Utilities/Hooker.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
 
-#include <d3d9.h>
+struct IDirect3DTexture9;
 
 #include <DirectXMath.h>
 #include <vector>
@@ -340,90 +339,6 @@ private:
 	std::unordered_map<GW::Constants::SkillID, Entry> cache_;
 };
 
-inline uint32_t TexmodCrc32(const void* data, size_t bytes) {
-	static uint32_t table[256];
-	static bool table_ready = false;
-	if (!table_ready) {
-		for (uint32_t i = 0; i < 256; ++i) {
-			uint32_t c = i;
-			for (int bit = 0; bit < 8; ++bit) {
-				c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
-			}
-			table[i] = c;
-		}
-		table_ready = true;
-	}
-	uint32_t crc = 0xFFFFFFFFu;
-	const auto* p = static_cast<const uint8_t*>(data);
-	for (size_t i = 0; i < bytes; ++i) {
-		crc = table[(crc ^ p[i]) & 0xFFu] ^ (crc >> 8);
-	}
-	return crc;
-}
-
-inline UINT TexmodDxtBlockBytes(D3DFORMAT format) {
-	switch (format) {
-		case D3DFMT_DXT1: return 8;
-		case D3DFMT_DXT2:
-		case D3DFMT_DXT3:
-		case D3DFMT_DXT4:
-		case D3DFMT_DXT5: return 16;
-		default: return 0;
-	}
-}
-
-inline int TexmodBitsPerPixel(D3DFORMAT format) {
-	switch (format) {
-		case D3DFMT_A8R8G8B8: case D3DFMT_X8R8G8B8: case D3DFMT_A8B8G8R8: case D3DFMT_X8B8G8R8:
-		case D3DFMT_G16R16: case D3DFMT_A2R10G10B10: case D3DFMT_A2B10G10R10:
-			return 32;
-		case D3DFMT_R8G8B8:
-			return 24;
-		case D3DFMT_R5G6B5: case D3DFMT_X1R5G5B5: case D3DFMT_A1R5G5B5: case D3DFMT_A4R4G4B4:
-		case D3DFMT_X4R4G4B4: case D3DFMT_A8R3G3B2: case D3DFMT_A8L8: case D3DFMT_L16:
-		case D3DFMT_D16_LOCKABLE: case D3DFMT_D16: case D3DFMT_D15S1:
-			return 16;
-		case D3DFMT_A8: case D3DFMT_L8: case D3DFMT_P8: case D3DFMT_R3G3B2: case D3DFMT_A4L4:
-			return 8;
-		case D3DFMT_DXT1:
-			return 4;
-		case D3DFMT_DXT2: case D3DFMT_DXT3: case D3DFMT_DXT4: case D3DFMT_DXT5:
-			return 8;
-		default:
-			return 32;
-	}
-}
-
-inline uint32_t ComputeTexmodHashFromLockedRect(const D3DLOCKED_RECT& locked, const D3DSURFACE_DESC& desc) {
-	if (!locked.pBits || locked.Pitch <= 0) return 0;
-	const auto* bits = static_cast<const uint8_t*>(locked.pBits);
-	const size_t pitch = static_cast<size_t>(locked.Pitch);
-
-	uint32_t hash = 0;
-	if (const UINT block = TexmodDxtBlockBytes(desc.Format)) {
-		const size_t blocks_wide = (desc.Width + 3) / 4;
-		const size_t blocks_high = (desc.Height + 3) / 4;
-		const size_t total_size = blocks_wide * blocks_high * block;
-		if (total_size && total_size <= pitch * blocks_high) {
-			std::vector<uint8_t> compact(total_size);
-			memcpy(compact.data(), bits, total_size);
-			hash = TexmodCrc32(compact.data(), compact.size());
-		}
-	}
-	else {
-		const int bpp = TexmodBitsPerPixel(desc.Format);
-		const size_t row_size = bpp ? static_cast<size_t>(desc.Width) * (bpp / 8) : 0;
-		if (row_size && desc.Height && row_size <= pitch) {
-			std::vector<uint8_t> compact(static_cast<size_t>(desc.Height) * row_size);
-			for (UINT row = 0; row < desc.Height; ++row) {
-				memcpy(compact.data() + row * row_size, bits + row * pitch, row_size);
-			}
-			hash = TexmodCrc32(compact.data(), compact.size());
-		}
-	}
-	return hash;
-}
-
 inline bool IsMinipet(uint16_t player_number) {
 	static constexpr std::array<uint16_t, 129> ids = {
 		230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259,
@@ -461,7 +376,6 @@ struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
 	bool recolor_quest_nametags = true, recolor_professions = false, fade_enemies_by_range = true, color_nameplate_text_by_combat = true;
 	bool hide_enemy_native_nametags = true;
-	bool hide_enemy_native_healthbar = true;
 	uint32_t combat_text_color = IM_COL32(255, 255, 0, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
 	float border_thickness = 1.0f;
@@ -513,7 +427,7 @@ public:
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height); L_SET(border_thickness);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
-		L_SET(recolor_quest_nametags); L_SET(recolor_professions); L_SET(hide_enemy_native_nametags); L_SET(hide_enemy_native_healthbar);
+		L_SET(recolor_quest_nametags); L_SET(recolor_professions); L_SET(hide_enemy_native_nametags);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color); L_SET(border_color);
 		L_SET(show_priority_castbars); L_SET(castbar_height); L_SET(castbar_fill_color); L_SET(castbar_cancelled_color);
 		L_SET(fade_enemies_by_range); L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
@@ -533,7 +447,7 @@ public:
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height); S_SET(border_thickness);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
 		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
-		S_SET(recolor_quest_nametags); S_SET(recolor_professions); S_SET(hide_enemy_native_nametags); S_SET(hide_enemy_native_healthbar);
+		S_SET(recolor_quest_nametags); S_SET(recolor_professions); S_SET(hide_enemy_native_nametags);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color); S_SET(border_color);
 		S_SET(show_priority_castbars); S_SET(castbar_height); S_SET(castbar_fill_color); S_SET(castbar_cancelled_color);
 		S_SET(fade_enemies_by_range); S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
@@ -553,12 +467,6 @@ public:
 	void Terminate() override {
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&cast_hook_entry_);
-		if (texture_lockrect_func_) {
-			GW::Hook::RemoveHook(reinterpret_cast<void*>(texture_lockrect_func_));
-		}
-		if (texture_unlockrect_func_) {
-			GW::Hook::RemoveHook(reinterpret_cast<void*>(texture_unlockrect_func_));
-		}
 	}
 
 	void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
@@ -575,18 +483,6 @@ private:
 
 	using GetSkillImageFn = IDirect3DTexture9** (__cdecl*)(GW::Constants::SkillID);
 	GetSkillImageFn get_skill_image_ = nullptr;
-
-	static constexpr uint32_t kTargetHealthbarHash = 0x0B19B995u;
-	static constexpr uint32_t kTargetIndicatorHash = 0xD9B07004u;
-
-	using LockRectFn = HRESULT(WINAPI*)(IDirect3DTexture9*, UINT, D3DLOCKED_RECT*, const RECT*, DWORD);
-	using UnlockRectFn = HRESULT(WINAPI*)(IDirect3DTexture9*, UINT);
-	LockRectFn texture_lockrect_func_ = nullptr;
-	LockRectFn texture_lockrect_ret_ = nullptr;
-	UnlockRectFn texture_unlockrect_func_ = nullptr;
-	UnlockRectFn texture_unlockrect_ret_ = nullptr;
-	std::unordered_map<IDirect3DTexture9*, D3DLOCKED_RECT> locked_rects_;
-	int healthbar_textures_nuked_ = 0;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -710,10 +606,6 @@ private:
 	}
 
 	void DrawNameplates() {
-		if (settings_.hide_enemy_native_healthbar) {
-			EnsureTextureVtableHooksInstalled();
-		}
-
 		GW::AgentArray* agents = GW::Agents::GetAgentArray();
 		if (!agents || !agents->valid()) return;
 
@@ -1160,63 +1052,6 @@ private:
 		cast_cache_.OnStartedCast(agent_id, skill_id, duration * 1000.f);
 	}
 
-	void EnsureTextureVtableHooksInstalled() {
-		if (texture_lockrect_func_) return;
-		IDirect3DDevice9* device = GW::Render::GetDevice();
-		if (!device) return;
-
-		IDirect3DTexture9* temp_texture = nullptr;
-		if (FAILED(device->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &temp_texture, nullptr)) || !temp_texture) {
-			return;
-		}
-		uintptr_t* vtable = *reinterpret_cast<uintptr_t**>(temp_texture);
-		constexpr int kLockRectIndex = 19;
-		constexpr int kUnlockRectIndex = 20;
-		texture_lockrect_func_ = reinterpret_cast<LockRectFn>(vtable[kLockRectIndex]);
-		texture_unlockrect_func_ = reinterpret_cast<UnlockRectFn>(vtable[kUnlockRectIndex]);
-		GW::Hook::CreateHook(reinterpret_cast<void**>(&texture_lockrect_func_), OnTextureLockRect, reinterpret_cast<void**>(&texture_lockrect_ret_));
-		GW::Hook::CreateHook(reinterpret_cast<void**>(&texture_unlockrect_func_), OnTextureUnlockRect, reinterpret_cast<void**>(&texture_unlockrect_ret_));
-		GW::Hook::EnableHooks(reinterpret_cast<void*>(texture_lockrect_func_));
-		GW::Hook::EnableHooks(reinterpret_cast<void*>(texture_unlockrect_func_));
-		temp_texture->Release();
-	}
-
-	static HRESULT WINAPI OnTextureLockRect(IDirect3DTexture9* texture, UINT level, D3DLOCKED_RECT* out_rect, const RECT* rect, DWORD flags) {
-		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
-		GW::Hook::EnterHook();
-		const HRESULT hr = self->texture_lockrect_ret_(texture, level, out_rect, rect, flags);
-		if (SUCCEEDED(hr) && level == 0 && out_rect) {
-			self->locked_rects_[texture] = *out_rect;
-		}
-		GW::Hook::LeaveHook();
-		return hr;
-	}
-
-	static HRESULT WINAPI OnTextureUnlockRect(IDirect3DTexture9* texture, UINT level) {
-		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
-		GW::Hook::EnterHook();
-		if (level == 0 && self->settings_.hide_enemy_native_healthbar) {
-			const auto it = self->locked_rects_.find(texture);
-			if (it != self->locked_rects_.end()) {
-				D3DSURFACE_DESC desc;
-				if (SUCCEEDED(texture->GetLevelDesc(0, &desc)) && it->second.pBits && it->second.Pitch > 0) {
-					const uint32_t hash = ComputeTexmodHashFromLockedRect(it->second, desc);
-					if (hash == kTargetHealthbarHash || hash == kTargetIndicatorHash) {
-						auto* bits = static_cast<uint8_t*>(it->second.pBits);
-						for (UINT row = 0; row < desc.Height; ++row) {
-							memset(bits + row * static_cast<size_t>(it->second.Pitch), 0, static_cast<size_t>(it->second.Pitch));
-						}
-						++self->healthbar_textures_nuked_;
-					}
-				}
-				self->locked_rects_.erase(it);
-			}
-		}
-		const HRESULT hr = self->texture_unlockrect_ret_(texture, level);
-		GW::Hook::LeaveHook();
-		return hr;
-	}
-
 	void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
 		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
 		const bool changed = ImGui::InputText(label, buf, 512);
@@ -1339,18 +1174,6 @@ private:
 
 		ImGui::Checkbox("Hide enemy native nametag", &settings_.hide_enemy_native_nametags);
 		ShowHelpMarker("Experimental: blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
-
-		ImGui::Checkbox("Hide enemy overhead health bar & target indicator", &settings_.hide_enemy_native_healthbar);
-		ShowHelpMarker("Experimental: hooks the game's own texture Lock/Unlock calls to identify the overhead health bar and target arrow by content hash, and blanks them the moment they're written. Applies globally, not just to nameplates.");
-
-		if (settings_.hide_enemy_native_healthbar) {
-			if (!texture_lockrect_func_) {
-				ImGui::TextDisabled("Status: waiting to install texture hooks");
-			}
-			else {
-				ImGui::Text("Status: hooks installed, %d texture(s) blanked this session", healthbar_textures_nuked_);
-			}
-		}
 	}
 };
 
