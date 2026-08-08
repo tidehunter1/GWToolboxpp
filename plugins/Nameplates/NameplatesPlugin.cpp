@@ -13,7 +13,6 @@
 #include <GWCA/Constants/Constants.h>
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/Camera.h>
-#include <GWCA/GameEntities/Skill.h>
 #include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/CameraMgr.h>
@@ -21,12 +20,9 @@
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
-#include <GWCA/Managers/SkillbarMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
-
-struct IDirect3DTexture9;
 
 #include <DirectXMath.h>
 #include <vector>
@@ -251,95 +247,6 @@ private:
 	uint64_t tick_ = 0, last_prune_tick_ = 0;
 };
 
-class CastStateCache {
-public:
-	struct CastState {
-		GW::Constants::SkillID skill_id = GW::Constants::SkillID::No_Skill;
-		ULONGLONG cast_start_ms = 0;
-		float cast_time_ms = 0.f;
-		bool casting = false;
-		bool was_cancelled = false;
-		ULONGLONG ended_at_ms = 0;
-	};
-
-	const CastState* Find(uint32_t agent_id) {
-		auto it = cache_.find(agent_id);
-		if (it == cache_.end()) return nullptr;
-		it->second.last_seen_tick = tick_;
-		return &it->second.state;
-	}
-
-	void OnStartedCast(uint32_t agent_id, GW::Constants::SkillID skill_id, float duration_ms) {
-		Entry& e = cache_[agent_id];
-		e.last_seen_tick = tick_;
-		e.state.skill_id = skill_id;
-		e.state.cast_start_ms = GetTickCount64();
-		e.state.cast_time_ms = duration_ms;
-		e.state.casting = true;
-		e.state.was_cancelled = false;
-		e.state.ended_at_ms = 0;
-	}
-
-	void OnCompleted(uint32_t agent_id, GW::Constants::SkillID skill_id) {
-		auto it = cache_.find(agent_id);
-		if (it == cache_.end() || it->second.state.skill_id != skill_id) return;
-		it->second.state.casting = false;
-		it->second.state.was_cancelled = false;
-		it->second.state.ended_at_ms = GetTickCount64();
-	}
-
-	void OnCancelled(uint32_t agent_id, GW::Constants::SkillID skill_id) {
-		auto it = cache_.find(agent_id);
-		if (it == cache_.end() || it->second.state.skill_id != skill_id) return;
-		it->second.state.casting = false;
-		it->second.state.was_cancelled = true;
-		it->second.state.ended_at_ms = GetTickCount64();
-	}
-
-	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
-
-private:
-	static constexpr uint64_t kPruneIntervalTicks = 1800;
-	struct Entry {
-		CastState state;
-		uint64_t last_seen_tick = 0;
-	};
-	std::unordered_map<uint32_t, Entry> cache_;
-	uint64_t tick_ = 0, last_prune_tick_ = 0;
-};
-
-class SkillNameCache {
-public:
-	const std::string& Get(GW::Constants::SkillID skill_id) {
-		Entry& entry = cache_[skill_id];
-		if (!entry.requested) {
-			entry.requested = true;
-			const GW::Skill* skill = GW::SkillbarMgr::GetSkillConstantData(skill_id);
-			if (skill && skill->name) {
-				wchar_t enc_buf[16] = {};
-				if (GW::UI::UInt32ToEncStr(skill->name, enc_buf, 16)) {
-					GW::UI::AsyncDecodeStr(enc_buf, entry.buffer, kBufferLen);
-				}
-			}
-		}
-		if (!entry.converted && entry.buffer[0] != L'\0') {
-			WideToUtf8Into(std::wstring(entry.buffer), entry.utf8);
-			entry.converted = true;
-		}
-		return entry.utf8;
-	}
-
-private:
-	static constexpr size_t kBufferLen = 128;
-	struct Entry {
-		bool requested = false;
-		bool converted = false;
-		wchar_t buffer[kBufferLen] = {};
-		std::string utf8;
-	};
-	std::unordered_map<GW::Constants::SkillID, Entry> cache_;
-};
-
 inline bool IsMinipet(uint16_t player_number) {
 	static constexpr std::array<uint16_t, 129> ids = {
 		230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259,
@@ -373,10 +280,16 @@ struct PriorityConfig {
 	uint32_t color;
 };
 
+struct ProfessionColorConfig {
+	bool enabled = true;
+	uint32_t color = IM_COL32(221, 221, 221, 255);
+};
+
 struct NameplateSettings {
-	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true, auto_toggle_show_names = true;
+	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true;
 	bool recolor_quest_nametags = true, recolor_professions = false, fade_enemies_by_range = true, color_nameplate_text_by_combat = true;
 	bool hide_enemy_native_nametags = true;
+	bool recolor_enemy_nameplates_by_profession = false;
 	uint32_t combat_text_color = IM_COL32(255, 255, 0, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
 	float border_thickness = 1.0f;
@@ -384,10 +297,22 @@ struct NameplateSettings {
 	uint32_t target_border_color = IM_COL32(255, 255, 0, 255);
 	uint32_t border_color = IM_COL32(0, 0, 0, 180);
 
-	bool show_priority_castbars = true;
-	float castbar_height = 16.0f;
-	uint32_t castbar_fill_color = IM_COL32(255, 140, 0, 255);
-	uint32_t castbar_cancelled_color = IM_COL32(255, 0, 0, 255);
+	bool color_by_boss = false;
+	uint32_t boss_color = IM_COL32(255, 215, 0, 255);
+
+	std::array<ProfessionColorConfig, 11> profession_colors = {{
+		{false, IM_COL32(221, 221, 221, 255)},
+		{true, IM_COL32(255, 255, 136, 255)},
+		{true, IM_COL32(204, 255, 153, 255)},
+		{true, IM_COL32(170, 204, 255, 255)},
+		{true, IM_COL32(153, 255, 204, 255)},
+		{true, IM_COL32(221, 170, 255, 255)},
+		{true, IM_COL32(255, 187, 187, 255)},
+		{true, IM_COL32(255, 204, 238, 255)},
+		{true, IM_COL32(187, 255, 255, 255)},
+		{true, IM_COL32(255, 204, 153, 255)},
+		{true, IM_COL32(221, 221, 255, 255)}
+	}};
 
 	std::array<PriorityConfig, 3> priorities = {{
 		{"", IM_COL32(135, 206, 250, 255)},
@@ -404,15 +329,6 @@ public:
 		order_.reserve(256);
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
-		GW::UI::RegisterUIMessageCallback(&cast_hook_entry_, GW::UI::UIMessage::kAgentSkillStartedCast, OnSkillCastMessage);
-		GW::UI::RegisterUIMessageCallback(&cast_hook_entry_, GW::UI::UIMessage::kAgentSkillActivated, OnSkillCastMessage);
-		GW::UI::RegisterUIMessageCallback(&cast_hook_entry_, GW::UI::UIMessage::kAgentSkillActivatedInstantly, OnSkillCastMessage);
-		GW::UI::RegisterUIMessageCallback(&cast_hook_entry_, GW::UI::UIMessage::kAgentSkillCancelled, OnSkillCastMessage);
-	}
-
-	void Initialize(ImGuiContext* ctx, ImGuiAllocFns allocator_fns, HMODULE toolbox_dll) override {
-		ToolboxPlugin::Initialize(ctx, allocator_fns, toolbox_dll);
-		get_skill_image_ = reinterpret_cast<GetSkillImageFn>(GetProcAddress(toolbox_handle, "GetSkillImage"));
 	}
 
 	const char* Name() const override { return "Nameplates"; }
@@ -427,10 +343,11 @@ public:
 		#define L_SET(var) LoadSetting(#var, settings_.var)
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height); L_SET(border_thickness);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
-		L_SET(show_summoned_allies); L_SET(auto_toggle_show_names);
+		L_SET(show_summoned_allies);
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions); L_SET(hide_enemy_native_nametags);
+		L_SET(recolor_enemy_nameplates_by_profession);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color); L_SET(border_color);
-		L_SET(show_priority_castbars); L_SET(castbar_height); L_SET(castbar_fill_color); L_SET(castbar_cancelled_color);
+		L_SET(color_by_boss); L_SET(boss_color);
 		L_SET(fade_enemies_by_range); L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -440,6 +357,11 @@ public:
 			LoadSetting((prefix + "_raw").c_str(), settings_.priorities[i].raw);
 			LoadSetting((prefix + "_color").c_str(), settings_.priorities[i].color);
 		}
+		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
+			const std::string prefix = "profession" + std::to_string(i);
+			LoadSetting((prefix + "_enabled").c_str(), settings_.profession_colors[i].enabled);
+			LoadSetting((prefix + "_color").c_str(), settings_.profession_colors[i].color);
+		}
 		RefreshPriorityBuffersAndLists();
 	}
 
@@ -447,10 +369,11 @@ public:
 		#define S_SET(var) SaveSetting(#var, settings_.var)
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height); S_SET(border_thickness);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
-		S_SET(show_summoned_allies); S_SET(auto_toggle_show_names);
+		S_SET(show_summoned_allies);
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions); S_SET(hide_enemy_native_nametags);
+		S_SET(recolor_enemy_nameplates_by_profession);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color); S_SET(border_color);
-		S_SET(show_priority_castbars); S_SET(castbar_height); S_SET(castbar_fill_color); S_SET(castbar_cancelled_color);
+		S_SET(color_by_boss); S_SET(boss_color);
 		S_SET(fade_enemies_by_range); S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -460,6 +383,11 @@ public:
 			SaveSetting((prefix + "_raw").c_str(), settings_.priorities[i].raw);
 			SaveSetting((prefix + "_color").c_str(), settings_.priorities[i].color);
 		}
+		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
+			const std::string prefix = "profession" + std::to_string(i);
+			SaveSetting((prefix + "_enabled").c_str(), settings_.profession_colors[i].enabled);
+			SaveSetting((prefix + "_color").c_str(), settings_.profession_colors[i].color);
+		}
 		ToolboxPlugin::SaveSettings(folder);
 	}
 
@@ -467,7 +395,6 @@ public:
 
 	void Terminate() override {
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
-		GW::UI::RemoveUIMessageCallback(&cast_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
@@ -475,22 +402,13 @@ public:
 private:
 	NameplateSettings settings_;
 	bool visible_ = true;
-	std::optional<bool> last_outpost_pref_state_;
 	std::optional<bool> last_recolor_professions_state_;
 	std::optional<bool> last_recolor_quest_state_;
 	std::optional<bool> last_show_enemies_state_;
 	GW::HookEntry nametag_hook_entry_;
-	GW::HookEntry cast_hook_entry_;
-
-	using GetSkillImageFn = IDirect3DTexture9** (__cdecl*)(GW::Constants::SkillID);
-	GetSkillImageFn get_skill_image_ = nullptr;
-
-	bool debug_show_target_profession_ = false;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
-	CastStateCache cast_cache_;
-	SkillNameCache skill_name_cache_;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -510,8 +428,6 @@ private:
 	}
 	static constexpr float kZNear = 46.875f;
 	static constexpr float kZFar  = 48000.f;
-
-	static constexpr ULONGLONG kCastLingerMs = 2000;
 
 	static constexpr float kFadeRange1Sq = 1500.f * 1500.f;
 	static constexpr float kFadeRange2Sq = 2500.f * 2500.f;
@@ -617,15 +533,6 @@ private:
 		const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
 		const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
-		if (settings_.auto_toggle_show_names
-			&& (!last_outpost_pref_state_.has_value() || *last_outpost_pref_state_ != in_outpost)) {
-			last_outpost_pref_state_ = in_outpost;
-			const bool show = in_outpost;
-			GW::GameThread::Enqueue([show] {
-				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, show);
-			});
-		}
-
 		if (last_show_enemies_state_.has_value() && *last_show_enemies_state_ && !settings_.show_enemies) {
 			GW::GameThread::Enqueue([] {
 				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, true);
@@ -668,7 +575,6 @@ private:
 
 		name_cache_.MaybePrune();
 		stack_y_smoother_.MaybePrune();
-		cast_cache_.MaybePrune();
 	}
 
 	void GatherPendingBars(GW::AgentArray* agents, GW::AgentLiving* me, GW::AgentLiving* target,
@@ -736,9 +642,6 @@ private:
 				pb.is_in_combat = false;
 			}
 			pb.footprint = ImVec2(settings_.bar_width, settings_.bar_height);
-			if (settings_.show_priority_castbars && CastBarIsVisible(living->agent_id)) {
-				pb.footprint.y += settings_.castbar_height;
-			}
 
 			pending_.push_back(std::move(pb));
 		}
@@ -854,8 +757,19 @@ private:
 
 		const auto priority_color = GetPriorityColor(*pb.name_lower);
 		ImU32 fill_color;
-		if (priority_color) fill_color = *priority_color;
-		else fill_color = ColorFor(living->allegiance);
+		if (priority_color) {
+			fill_color = *priority_color;
+		}
+		else if (settings_.color_by_boss && living->GetHasBossGlow()) {
+			fill_color = settings_.boss_color;
+		}
+		else {
+			std::optional<ImU32> profession_fill_color;
+			if (settings_.recolor_enemy_nameplates_by_profession && living->allegiance == GW::Constants::Allegiance::Enemy) {
+				profession_fill_color = TryGetProfessionColor(GetAgentProfession(living));
+			}
+			fill_color = profession_fill_color ? *profession_fill_color : ColorFor(living->allegiance);
+		}
 
 		const ImU32 bg_color = TintedBackground(fill_color);
 		const ImU32 border_color = pb.is_targeted ? settings_.target_border_color : settings_.border_color;
@@ -890,69 +804,6 @@ private:
 				DrawOutlinedText(draw_list, font, font_size, ImVec2(text_x, text_y), name_text_color, clipped_utf8, opacity_mult);
 			}
 		}
-
-		if (settings_.show_priority_castbars && priority_color) {
-			DrawCastBar(draw_list, top_left, bar_width, bottom_right.y, living->agent_id, opacity_mult, font);
-		}
-	}
-
-	[[nodiscard]] static bool IsCastBarVisible(const CastStateCache::CastState* cast, ULONGLONG now) {
-		if (!cast) return false;
-		if (cast->casting) return true;
-		return cast->ended_at_ms != 0 && (now - cast->ended_at_ms) < kCastLingerMs;
-	}
-
-	[[nodiscard]] bool CastBarIsVisible(uint32_t agent_id) {
-		return IsCastBarVisible(cast_cache_.Find(agent_id), GetTickCount64());
-	}
-
-	void DrawCastBar(ImDrawList* draw_list, const ImVec2& nameplate_top_left, float bar_width, float nameplate_bottom_y, uint32_t agent_id, float opacity_mult, ImFont* font) {
-		const CastStateCache::CastState* cast = cast_cache_.Find(agent_id);
-		const ULONGLONG now = GetTickCount64();
-		if (!IsCastBarVisible(cast, now)) return;
-		const bool lingering = !cast->casting;
-		const bool flashing = lingering && cast->was_cancelled;
-
-		const float height = settings_.castbar_height;
-		const ImVec2 top_left(nameplate_top_left.x, nameplate_bottom_y);
-		const ImVec2 icon_bottom_right(top_left.x + height, top_left.y + height);
-		const ImVec2 bar_bottom_right(top_left.x + bar_width, top_left.y + height);
-		const ImVec2 bar_top_left(icon_bottom_right.x, top_left.y);
-
-		const ImU32 castbar_bg_color = TintedBackground(settings_.castbar_fill_color);
-
-		draw_list->AddRectFilled(top_left, bar_bottom_right, ScaleAlpha(castbar_bg_color, opacity_mult));
-
-		if (get_skill_image_) {
-			IDirect3DTexture9** texture = get_skill_image_(cast->skill_id);
-			if (texture && *texture) {
-				draw_list->AddImage(*texture, top_left, icon_bottom_right);
-			}
-		}
-
-		if (cast->cast_time_ms > 0.f) {
-			const ULONGLONG reference_time = cast->casting ? now : cast->ended_at_ms;
-			const float elapsed = static_cast<float>(reference_time - cast->cast_start_ms);
-			const float pct = std::clamp(elapsed / cast->cast_time_ms, 0.f, 1.f);
-			const ImVec2 fill_bottom_right(bar_top_left.x + (bar_width - height) * pct, top_left.y + height);
-			draw_list->AddRectFilled(bar_top_left, fill_bottom_right, ScaleAlpha(settings_.castbar_fill_color, opacity_mult));
-		}
-
-		if (font) {
-			const std::string& skill_name = skill_name_cache_.Get(cast->skill_id);
-			if (!skill_name.empty()) {
-				const float text_font_size = height * 0.8f;
-				draw_list->PushClipRect(bar_top_left, bar_bottom_right, true);
-				DrawOutlinedText(draw_list, font, text_font_size, ImVec2(bar_top_left.x + 3.f, top_left.y + (height - text_font_size) / 2.f), IM_COL32(255, 255, 255, 255), skill_name, opacity_mult);
-				draw_list->PopClipRect();
-			}
-		}
-
-		if (flashing) {
-			draw_list->AddRectFilled(bar_top_left, bar_bottom_right, ScaleAlpha(settings_.castbar_cancelled_color, opacity_mult * 0.25f));
-		}
-
-		draw_list->AddRect(top_left, bar_bottom_right, ScaleAlpha(IM_COL32(0, 0, 0, 180), opacity_mult), 0.f, 0, 1.f);
 	}
 
 	[[nodiscard]] ImU32 ColorFor(GW::Constants::Allegiance allegiance) const {
@@ -967,17 +818,17 @@ private:
 		}
 	}
 
-	[[nodiscard]] ImU32 ProfessionColor(GW::Constants::ProfessionByte prof) const {
-		static constexpr std::array<ImU32, 11> kColors = {
-			IM_COL32(221, 221, 221, 255), IM_COL32(255, 255, 136, 255),
-			IM_COL32(204, 255, 153, 255), IM_COL32(170, 204, 255, 255),
-			IM_COL32(153, 255, 204, 255), IM_COL32(221, 170, 255, 255),
-			IM_COL32(255, 187, 187, 255), IM_COL32(255, 204, 238, 255),
-			IM_COL32(187, 255, 255, 255), IM_COL32(255, 204, 153, 255),
-			IM_COL32(221, 221, 255, 255)
-		};
+	[[nodiscard]] static GW::Constants::ProfessionByte GetAgentProfession(const GW::AgentLiving* living) {
+		if (living->primary != GW::Constants::ProfessionByte::None) return living->primary;
+		const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
+		return npc ? static_cast<GW::Constants::ProfessionByte>(npc->primary) : GW::Constants::ProfessionByte::None;
+	}
+
+	[[nodiscard]] std::optional<ImU32> TryGetProfessionColor(GW::Constants::ProfessionByte prof) const {
 		const size_t index = static_cast<size_t>(prof);
-		return (index < kColors.size()) ? kColors[index] : kColors[0];
+		if (index == 0 || index >= settings_.profession_colors.size()) return std::nullopt;
+		const auto& cfg = settings_.profession_colors[index];
+		return cfg.enabled ? std::optional<ImU32>(cfg.color) : std::nullopt;
 	}
 
 	static void FlashPreference(GW::UI::FlagPreference pref) {
@@ -1014,45 +865,28 @@ private:
 			return;
 		}
 
-		if (!settings_.recolor_quest_nametags && !settings_.recolor_professions) return;
+		if (!settings_.recolor_quest_nametags && !settings_.recolor_professions && !settings_.recolor_enemy_nameplates_by_profession) return;
 		if (!living) return;
 
 		if (settings_.recolor_professions
 			&& living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
-			tag->text_color = ProfessionColor(living->primary);
+			if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
+				tag->text_color = *color;
+			}
 			return;
+		}
+
+		if (settings_.recolor_enemy_nameplates_by_profession
+			&& living->allegiance == GW::Constants::Allegiance::Enemy) {
+			if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
+				tag->text_color = *color;
+				return;
+			}
 		}
 
 		if (settings_.recolor_quest_nametags && living->GetHasQuest()) {
 			tag->text_color = settings_.quest_color;
 		}
-	}
-
-	static void OnSkillCastMessage(GW::HookStatus*, GW::UI::UIMessage msgid, void* wParam, void*) {
-		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
-		switch (msgid) {
-			case GW::UI::UIMessage::kAgentSkillStartedCast: {
-				const auto packet = static_cast<GW::UI::UIPacket::kAgentSkillStartedCast*>(wParam);
-				self->HandleSkillStartedCast(packet->agent_id, packet->skill_id, packet->duration);
-			} break;
-			case GW::UI::UIMessage::kAgentSkillActivated:
-			case GW::UI::UIMessage::kAgentSkillActivatedInstantly: {
-				const auto packet = static_cast<GW::UI::UIPacket::kAgentSkillPacket*>(wParam);
-				self->cast_cache_.OnCompleted(packet->agent_id, packet->skill_id);
-			} break;
-			case GW::UI::UIMessage::kAgentSkillCancelled: {
-				const auto packet = static_cast<GW::UI::UIPacket::kAgentSkillPacket*>(wParam);
-				self->cast_cache_.OnCancelled(packet->agent_id, packet->skill_id);
-			} break;
-			default: break;
-		}
-	}
-
-	void HandleSkillStartedCast(uint32_t agent_id, GW::Constants::SkillID skill_id, float duration) {
-		if (!settings_.show_priority_castbars) return;
-		const auto name_lookup = name_cache_.Get(agent_id, GW::Agents::GetAgentEncName(agent_id));
-		if (!GetPriorityColor(*name_lookup.lower)) return;
-		cast_cache_.OnStartedCast(agent_id, skill_id, duration * 1000.f);
 	}
 
 	void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
@@ -1068,40 +902,6 @@ private:
 		const std::string picker_id = std::string("##color_") + label;
 		if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			color = ImGui::ColorConvertFloat4ToU32(color_vec);
-		}
-	}
-
-	void DrawTargetProfessionSkillbarDebug() {
-		GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
-		if (!target) {
-			ImGui::TextDisabled("No target selected");
-			return;
-		}
-
-		ImGui::Text("Target agent id: %u, allegiance: %d", target->agent_id, static_cast<int>(target->allegiance));
-
-		GW::Constants::ProfessionByte prof = target->primary;
-		const char* source = "live agent";
-		if (prof == GW::Constants::ProfessionByte::None) {
-			const GW::NPC* npc = GW::Agents::GetNPCByID(target->player_number);
-			if (npc) {
-				prof = static_cast<GW::Constants::ProfessionByte>(npc->primary);
-				source = "NPC lookup fallback";
-			}
-			else {
-				source = "unavailable (no live profession, no NPC entry)";
-			}
-		}
-		ImGui::Text("Profession: %s (source: %s)", GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(prof)), source);
-
-		GW::Skillbar* skillbar = GW::SkillbarMgr::GetSkillbar(target->agent_id);
-		if (!skillbar || !skillbar->IsValid()) {
-			ImGui::TextDisabled("Skillbar: not available");
-			return;
-		}
-		ImGui::Text("Skillbar (agent %u):", skillbar->agent_id);
-		for (int i = 0; i < 8; ++i) {
-			ImGui::Text("  Slot %d: skill id %u", i, static_cast<uint32_t>(skillbar->skills[i].skill_id));
 		}
 	}
 
@@ -1174,49 +974,52 @@ private:
 			DrawPriorityInput(label.c_str(), settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
 		}
 
-		ImGui::Checkbox("Show cast bars for priority targets", &settings_.show_priority_castbars);
-		ShowHelpMarker("Only agents matching a priority slot above get a cast bar, to avoid clutter when many enemies cast at once");
-
-		if (settings_.show_priority_castbars) {
-			if (ImGui::SliderFloat("##castbar_height", &settings_.castbar_height, 10.f, 24.f, "%.0f")) {
-				settings_.castbar_height = std::round(settings_.castbar_height);
-			}
-			ImGui::SameLine();
-			ImGui::TextUnformatted("Cast bar height");
-
-			ImVec4 castbar_fill_vec = ImGui::ColorConvertU32ToFloat4(settings_.castbar_fill_color);
-			if (ImGui::ColorEdit3("##color_castbar_fill", &castbar_fill_vec.x, ImGuiColorEditFlags_NoInputs)) {
-				settings_.castbar_fill_color = ImGui::ColorConvertFloat4ToU32(castbar_fill_vec);
-			}
-			ImGui::SameLine();
-			ImGui::TextUnformatted("Cast bar fill color");
-
-			ImVec4 castbar_cancelled_vec = ImGui::ColorConvertU32ToFloat4(settings_.castbar_cancelled_color);
-			if (ImGui::ColorEdit3("##color_castbar_cancelled", &castbar_cancelled_vec.x, ImGuiColorEditFlags_NoInputs)) {
-				settings_.castbar_cancelled_color = ImGui::ColorConvertFloat4ToU32(castbar_cancelled_vec);
-			}
-			ImGui::SameLine();
-			ImGui::TextUnformatted("Cast bar cancelled flash color");
-		}
+		DrawCheckboxWithColor("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
+		ShowHelpMarker("Overrides other nameplate coloring (except Priority) for agents with the boss glow");
 
 		ImGui::SeparatorText("All Areas");
 
 		DrawCheckboxWithColor("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
 
 		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
-		ShowHelpMarker("Works on Players/Heroes/Henchmen");
-
-		ImGui::Checkbox("Manage foe/player nametag game setting", &settings_.auto_toggle_show_names);
-		ShowHelpMarker("Manages the 'Menu > Options > General' setting 'Show foe names...', \nOFF in explorable areas, ON in outposts");
+		ImGui::SameLine();
+		ImGui::Checkbox("Color enemy nameplates by profession", &settings_.recolor_enemy_nameplates_by_profession);
+		ShowHelpMarker("Works on Players/Heroes/Henchmen (nametags) and enemy nameplates. Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
 		ImGui::Checkbox("Hide enemy native nametag", &settings_.hide_enemy_native_nametags);
-		ShowHelpMarker("Experimental: blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
+		ShowHelpMarker("Blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
 
-		ImGui::SeparatorText("Debug");
-		ImGui::Checkbox("Show target profession & skillbar", &debug_show_target_profession_);
-		ShowHelpMarker("Diagnostic only. Prints your current target's profession and equipped skill IDs, to test whether this data is available before they've cast anything.");
-		if (debug_show_target_profession_) {
-			DrawTargetProfessionSkillbarDebug();
+		ImGui::TextUnformatted("Profession colors");
+		ShowHelpMarker("Used by 'Color ally nametags by profession' and 'Color enemy nameplates by profession' above. Defaults match the classic ally-nametag profession colors.");
+
+		static constexpr std::array<std::pair<GW::Constants::ProfessionByte, const char*>, 5> kProfessionRow1 = {{
+			{GW::Constants::ProfessionByte::Warrior, "Warrior"},
+			{GW::Constants::ProfessionByte::Ranger, "Ranger"},
+			{GW::Constants::ProfessionByte::Assassin, "Assassin"},
+			{GW::Constants::ProfessionByte::Dervish, "Dervish"},
+			{GW::Constants::ProfessionByte::Paragon, "Paragon"}
+		}};
+		static constexpr std::array<std::pair<GW::Constants::ProfessionByte, const char*>, 5> kProfessionRow2 = {{
+			{GW::Constants::ProfessionByte::Monk, "Monk"},
+			{GW::Constants::ProfessionByte::Mesmer, "Mesmer"},
+			{GW::Constants::ProfessionByte::Elementalist, "Elementalist"},
+			{GW::Constants::ProfessionByte::Necromancer, "Necromancer"},
+			{GW::Constants::ProfessionByte::Ritualist, "Ritualist"}
+		}};
+
+		for (const auto* row : {&kProfessionRow1, &kProfessionRow2}) {
+			for (size_t i = 0; i < row->size(); ++i) {
+				const size_t index = static_cast<size_t>((*row)[i].first);
+				ImGui::PushID(static_cast<int>(index));
+				ImGui::Checkbox((*row)[i].second, &settings_.profession_colors[index].enabled);
+				ImGui::SameLine();
+				ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(settings_.profession_colors[index].color);
+				if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+					settings_.profession_colors[index].color = ImGui::ColorConvertFloat4ToU32(color_vec);
+				}
+				ImGui::PopID();
+				if (i + 1 < row->size()) ImGui::SameLine();
+			}
 		}
 	}
 };
