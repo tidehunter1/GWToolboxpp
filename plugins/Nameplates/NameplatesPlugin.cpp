@@ -744,6 +744,16 @@ private:
 		}
 	}
 
+	static void DrawColorSwatchLabeled(const char* label, uint32_t& color) {
+		ImGui::TextUnformatted(label);
+		ImGui::SameLine();
+		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
+		const std::string picker_id = std::string("##color_") + label;
+		if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			color = ImGui::ColorConvertFloat4ToU32(color_vec);
+		}
+	}
+
 	void DrawBar(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
 		const GW::AgentLiving* living = pb.living;
 
@@ -890,14 +900,15 @@ private:
 	}
 
 	void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
-		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
-		const bool changed = ImGui::InputText(label, buf, 512);
-		ImGui::PopStyleColor();
+		ImGui::TextColored(ImColor(color).Value, "%s", label);
+		ImGui::TableNextColumn();
+		const std::string input_id = std::string("##input_") + label;
+		const bool changed = ImGui::InputText(input_id.c_str(), buf, 512);
 		if (changed) {
 			raw = buf;
 			names = ParseSemicolonNameList(raw);
 		}
-		ImGui::SameLine();
+		ImGui::TableNextColumn();
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
 		const std::string picker_id = std::string("##color_") + label;
 		if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
@@ -905,38 +916,76 @@ private:
 		}
 	}
 
+	[[nodiscard]] static float ComputeLabelSwatchColumnWidth(const std::initializer_list<const char*>& labels) {
+		const ImGuiStyle& style = ImGui::GetStyle();
+		float max_text_width = 0.f;
+		for (const char* label : labels) {
+			max_text_width = std::max(max_text_width, ImGui::CalcTextSize(label).x);
+		}
+		const float checkbox_box = ImGui::GetFrameHeight();
+		const float swatch_box = ImGui::GetFrameHeight();
+		return checkbox_box + style.ItemInnerSpacing.x + max_text_width + style.ItemSpacing.x + swatch_box + 34.f;
+	}
+
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Explorable Areas");
 
-		DrawCheckboxWithColor("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
-		DrawCheckboxWithColor("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
+		const float checkbox_col_width = ComputeLabelSwatchColumnWidth({
+			"Show enemy nameplates", "Show friendly nameplates",
+			"Color nameplate text by combat status", "Color quest-giver nametags",
+			"Color ally nametags by profession", "Color enemy nameplates by profession",
+			"Hide enemy native nametag", "Color by boss"
+		});
 
-		ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
-		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
+		if (ImGui::BeginTable("##explorable_toggles", 2, ImGuiTableFlags_SizingFixedFit)) {
+			ImGui::TableSetupColumn("##col0", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
+			ImGui::TableSetupColumn("##col1", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
 
-		ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
-		ShowHelpMarker("Nameplates fade in steps: \n0-1500 range, 100% opaque \n1500-2500 range, 75% transparency \n2500 range and above, 50% transparency");
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			DrawCheckboxWithColor("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
+			ImGui::TableNextColumn();
+			DrawCheckboxWithColor("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
 
-		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
-		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TableNextColumn();
+			ImGui::Indent();
+			ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
+			ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
+			ImGui::Unindent();
 
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
+			ShowHelpMarker("Nameplates fade in steps: \n0-1500 range, 100% opaque \n1500-2500 range, 75% transparency \n2500 range and above, 50% transparency \nApplies to enemy nameplates only");
+
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
+			ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
+
+			ImGui::EndTable();
+		}
+
+		ImGui::Spacing();
 		const float border_thickness_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
 		ImGui::SetNextItemWidth(border_thickness_width);
-		ImGui::SliderFloat("##border_thickness", &settings_.border_thickness, 1.0f, 3.0f, "%.1f");
-		ImGui::SameLine();
-		ImGui::TextUnformatted("Border thickness");
-		ImGui::SameLine();
-		ImVec4 border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.border_color);
-		if (ImGui::ColorEdit3("##color_border", &border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.border_color = ImGui::ColorConvertFloat4ToU32(border_color_vec);
+		ImGui::SliderFloat("Border thickness", &settings_.border_thickness, 1.0f, 3.0f, "%.1f");
+
+		if (ImGui::BeginTable("##border_colors", 2, ImGuiTableFlags_SizingFixedFit)) {
+			ImGui::TableSetupColumn("##col0", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
+			ImGui::TableSetupColumn("##col1", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
+
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			DrawColorSwatchLabeled("Border color", settings_.border_color);
+			ImGui::TableNextColumn();
+			DrawColorSwatchLabeled("Target border color", settings_.target_border_color);
+
+			ImGui::EndTable();
 		}
-		ImGui::SameLine();
-		ImGui::TextUnformatted("Target border color");
-		ImGui::SameLine();
-		ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
-		if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
-		}
+		ImGui::Spacing();
 
 		int thresholds[2] = {
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
@@ -965,30 +1014,68 @@ private:
 		ImGui::SameLine();
 		ImGui::TextUnformatted("Bar width & height");
 
+		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::TextUnformatted("Priority nameplate coloring");
 		ShowHelpMarker("Semicolon-separated. e.g. \"Charr Shaman; Keeper of Souls\"");
 
-		for (size_t i = 0; i < 3; ++i) {
-			const std::string label = "Priority " + std::to_string(i + 1);
-			DrawPriorityInput(label.c_str(), settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
+		const float priority_label_width = ImGui::CalcTextSize("Priority 3").x + ImGui::GetStyle().ItemInnerSpacing.x * 2.f;
+		const float priority_swatch_width = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
+
+		if (ImGui::BeginTable("##priority_inputs", 3, ImGuiTableFlags_SizingFixedFit)) {
+			ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, priority_label_width);
+			ImGui::TableSetupColumn("##input", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("##swatch", ImGuiTableColumnFlags_WidthFixed, priority_swatch_width);
+
+			for (size_t i = 0; i < 3; ++i) {
+				const std::string label = "Priority " + std::to_string(i + 1);
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				DrawPriorityInput(label.c_str(), settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
+			}
+
+			ImGui::EndTable();
 		}
 
-		DrawCheckboxWithColor("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
-		ShowHelpMarker("Overrides other nameplate coloring (except Priority) for agents with the boss glow");
+		ImGui::Spacing();
+		if (ImGui::BeginTable("##boss_color", 2, ImGuiTableFlags_SizingFixedFit)) {
+			ImGui::TableSetupColumn("##col0", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
+			ImGui::TableSetupColumn("##col1", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
+
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			DrawCheckboxWithColor("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
+			ShowHelpMarker("Overrides other nameplate coloring (except Priority) for agents with the boss glow");
+
+			ImGui::EndTable();
+		}
 
 		ImGui::SeparatorText("All Areas");
 
-		DrawCheckboxWithColor("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
+		if (ImGui::BeginTable("##all_areas_toggles", 2, ImGuiTableFlags_SizingFixedFit)) {
+			ImGui::TableSetupColumn("##col0", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
+			ImGui::TableSetupColumn("##col1", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
 
-		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
-		ImGui::SameLine();
-		ImGui::Checkbox("Color enemy nameplates by profession", &settings_.recolor_enemy_nameplates_by_profession);
-		ShowHelpMarker("Works on Players/Heroes/Henchmen (nametags) and enemy nameplates. Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			DrawCheckboxWithColor("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
 
-		ImGui::Checkbox("Hide enemy native nametag", &settings_.hide_enemy_native_nametags);
-		ShowHelpMarker("Blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
+			ImGui::TableNextColumn();
+			ImGui::Checkbox("Color enemy nameplates by profession", &settings_.recolor_enemy_nameplates_by_profession);
+			ShowHelpMarker("Works on Players/Heroes/Henchmen (nametags) and enemy nameplates. Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Checkbox("Hide enemy native nametag", &settings_.hide_enemy_native_nametags);
+			ShowHelpMarker("Blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
+
+			ImGui::EndTable();
+		}
+
+		ImGui::Indent();
 		ImGui::TextUnformatted("Profession colors");
 		ShowHelpMarker("Used by 'Color ally nametags by profession' and 'Color enemy nameplates by profession' above. Defaults match the classic ally-nametag profession colors.");
 
@@ -1007,20 +1094,32 @@ private:
 			{GW::Constants::ProfessionByte::Ritualist, "Ritualist"}
 		}};
 
-		for (const auto* row : {&kProfessionRow1, &kProfessionRow2}) {
-			for (size_t i = 0; i < row->size(); ++i) {
-				const size_t index = static_cast<size_t>((*row)[i].first);
-				ImGui::PushID(static_cast<int>(index));
-				ImGui::Checkbox((*row)[i].second, &settings_.profession_colors[index].enabled);
-				ImGui::SameLine();
-				ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(settings_.profession_colors[index].color);
-				if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-					settings_.profession_colors[index].color = ImGui::ColorConvertFloat4ToU32(color_vec);
-				}
-				ImGui::PopID();
-				if (i + 1 < row->size()) ImGui::SameLine();
+		const float profession_col_width = ComputeLabelSwatchColumnWidth({"Warrior", "Ranger", "Assassin", "Dervish", "Paragon", "Monk", "Mesmer", "Elementalist", "Necromancer", "Ritualist"});
+
+		if (ImGui::BeginTable("##profession_colors", 5, ImGuiTableFlags_SizingFixedFit)) {
+			for (int c = 0; c < 5; ++c) {
+				ImGui::TableSetupColumn("##pcol", ImGuiTableColumnFlags_WidthFixed, profession_col_width);
 			}
+
+			for (const auto* row : {&kProfessionRow1, &kProfessionRow2}) {
+				ImGui::TableNextRow();
+				for (size_t i = 0; i < row->size(); ++i) {
+					const size_t index = static_cast<size_t>((*row)[i].first);
+					ImGui::TableNextColumn();
+					ImGui::PushID(static_cast<int>(index));
+					ImGui::Checkbox((*row)[i].second, &settings_.profession_colors[index].enabled);
+					ImGui::SameLine();
+					ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(settings_.profession_colors[index].color);
+					if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+						settings_.profession_colors[index].color = ImGui::ColorConvertFloat4ToU32(color_vec);
+					}
+					ImGui::PopID();
+				}
+			}
+
+			ImGui::EndTable();
 		}
+		ImGui::Unindent();
 	}
 };
 
