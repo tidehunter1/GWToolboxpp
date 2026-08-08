@@ -14,6 +14,7 @@
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/Camera.h>
 #include <GWCA/GameEntities/Skill.h>
+#include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/CameraMgr.h>
 #include <GWCA/Managers/RenderMgr.h>
@@ -483,6 +484,8 @@ private:
 
 	using GetSkillImageFn = IDirect3DTexture9** (__cdecl*)(GW::Constants::SkillID);
 	GetSkillImageFn get_skill_image_ = nullptr;
+
+	bool debug_show_target_profession_ = false;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -1068,6 +1071,40 @@ private:
 		}
 	}
 
+	void DrawTargetProfessionSkillbarDebug() {
+		GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
+		if (!target) {
+			ImGui::TextDisabled("No target selected");
+			return;
+		}
+
+		ImGui::Text("Target agent id: %u, allegiance: %d", target->agent_id, static_cast<int>(target->allegiance));
+
+		GW::Constants::ProfessionByte prof = target->primary;
+		const char* source = "live agent";
+		if (prof == GW::Constants::ProfessionByte::None) {
+			const GW::NPC* npc = GW::Agents::GetNPCByID(target->player_number);
+			if (npc) {
+				prof = static_cast<GW::Constants::ProfessionByte>(npc->primary);
+				source = "NPC lookup fallback";
+			}
+			else {
+				source = "unavailable (no live profession, no NPC entry)";
+			}
+		}
+		ImGui::Text("Profession: %s (source: %s)", GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(prof)), source);
+
+		GW::Skillbar* skillbar = GW::SkillbarMgr::GetSkillbar(target->agent_id);
+		if (!skillbar || !skillbar->IsValid()) {
+			ImGui::TextDisabled("Skillbar: not available");
+			return;
+		}
+		ImGui::Text("Skillbar (agent %u):", skillbar->agent_id);
+		for (int i = 0; i < 8; ++i) {
+			ImGui::Text("  Slot %d: skill id %u", i, static_cast<uint32_t>(skillbar->skills[i].skill_id));
+		}
+	}
+
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Explorable Areas");
 
@@ -1174,6 +1211,13 @@ private:
 
 		ImGui::Checkbox("Hide enemy native nametag", &settings_.hide_enemy_native_nametags);
 		ShowHelpMarker("Experimental: blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
+
+		ImGui::SeparatorText("Debug");
+		ImGui::Checkbox("Show target profession & skillbar", &debug_show_target_profession_);
+		ShowHelpMarker("Diagnostic only. Prints your current target's profession and equipped skill IDs, to test whether this data is available before they've cast anything.");
+		if (debug_show_target_profession_) {
+			DrawTargetProfessionSkillbarDebug();
+		}
 	}
 };
 
