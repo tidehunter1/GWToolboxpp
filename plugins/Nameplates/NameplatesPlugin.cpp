@@ -22,6 +22,7 @@
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/QuestMgr.h>
 #include <GWCA/Utilities/Scanner.h>
+#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -876,12 +877,16 @@ private:
 		s_native_redraw_resolve_attempted = true;
 		uintptr_t address = GW::Scanner::Find("\x81\xce\xa0\x06\x00\x00", "xxxxxx");
 		if (address) address = GW::Scanner::FunctionFromNearCall(GW::Scanner::FindInRange("\xe8", "x", 0, address, address + 0xff));
-		if (!address) return;
+		if (!address) {
+			GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: native redraw scan found no function");
+			return;
+		}
 		s_set_global_nametag_visibility_func = reinterpret_cast<SetGlobalNameTagVisibility_pt>(address);
 		if (GW::Scanner::IsValidPtr(*reinterpret_cast<uintptr_t*>(address + 0xa)))
 			s_global_nametag_visibility_flags = *reinterpret_cast<uint32_t**>(address + 0xa);
 		else if (GW::Scanner::IsValidPtr(*reinterpret_cast<uintptr_t*>(address + 0xb)))
 			s_global_nametag_visibility_flags = *reinterpret_cast<uint32_t**>(address + 0xb);
+		GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: native redraw func=%p flags=%p", reinterpret_cast<void*>(address), static_cast<void*>(s_global_nametag_visibility_flags));
 	}
 
 	static void RefreshAllNametags() {
