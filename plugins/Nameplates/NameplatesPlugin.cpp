@@ -347,7 +347,7 @@ public:
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
-		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestRemoved, OnQuestUpdate);
+		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kSendAbandonQuest, OnQuestUpdate);
 		GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceUpdate);
 	}
 
@@ -883,7 +883,7 @@ private:
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
 		if (msgid != GW::UI::UIMessage::kQuestAdded
 			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
-			&& msgid != GW::UI::UIMessage::kQuestRemoved) return;
+			&& msgid != GW::UI::UIMessage::kSendAbandonQuest) return;
 		GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: quest update fired (%d)", static_cast<int>(msgid));
 		ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
 	}
