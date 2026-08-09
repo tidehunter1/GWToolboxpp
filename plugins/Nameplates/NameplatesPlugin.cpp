@@ -23,6 +23,7 @@
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
 #include <GWCA/Managers/QuestMgr.h>
+#include <GWCA/Utilities/Scanner.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -579,7 +580,6 @@ private:
 			const int quest_count = static_cast<int>(quest_log->size());
 			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
 				RefreshAllNametags();
-				RefreshQuestGiverNametagsExperiment();
 			}
 			last_quest_count_ = quest_count;
 		}
@@ -869,6 +869,24 @@ private:
 		return cfg.enabled ? std::optional<ImU32>(cfg.color) : std::nullopt;
 	}
 
+	using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t flags);
+	static inline SetGlobalNameTagVisibility_pt s_set_global_nametag_visibility_func = nullptr;
+	static inline uint32_t* s_global_nametag_visibility_flags = nullptr;
+	static inline bool s_native_redraw_resolve_attempted = false;
+
+	static void ResolveNativeNametagRedraw() {
+		if (s_native_redraw_resolve_attempted) return;
+		s_native_redraw_resolve_attempted = true;
+		uintptr_t address = GW::Scanner::Find("\x81\xce\xa0\x06\x00\x00", "xxxxxx");
+		if (address) address = GW::Scanner::FunctionFromNearCall(GW::Scanner::FindInRange("\xe8", "x", 0, address, address + 0xff));
+		if (!address) return;
+		s_set_global_nametag_visibility_func = reinterpret_cast<SetGlobalNameTagVisibility_pt>(address);
+		if (GW::Scanner::IsValidPtr(*reinterpret_cast<uintptr_t*>(address + 0xa)))
+			s_global_nametag_visibility_flags = *reinterpret_cast<uint32_t**>(address + 0xa);
+		else if (GW::Scanner::IsValidPtr(*reinterpret_cast<uintptr_t*>(address + 0xb)))
+			s_global_nametag_visibility_flags = *reinterpret_cast<uint32_t**>(address + 0xb);
+	}
+
 	static void RefreshAllNametags() {
 		GW::GameThread::Enqueue([] {
 			const bool ally_current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
@@ -878,6 +896,16 @@ private:
 			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, !foe_current);
 			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, foe_current);
 		});
+		ResolveNativeNametagRedraw();
+		if (s_set_global_nametag_visibility_func && s_global_nametag_visibility_flags) {
+			auto* func = s_set_global_nametag_visibility_func;
+			auto* flags_ptr = s_global_nametag_visibility_flags;
+			GW::GameThread::Enqueue([func, flags_ptr] {
+				const uint32_t prev_flags = *flags_ptr;
+				func(0);
+				func(prev_flags);
+			});
+		}
 	}
 
 	static void RefreshAllNametagsOnChange(std::optional<bool>& last_state, bool current_state) {
@@ -893,31 +921,10 @@ private:
 		self->HandleAgentNameTag(status, static_cast<GW::UI::AgentNameTagInfo*>(wParam));
 	}
 
-	static void TrySendAgentUpdateExperiment(uint32_t agent_id) {
-		GW::UI::SendUIMessage(GW::UI::UIMessage::kAgentUpdate, reinterpret_cast<void*>(static_cast<uintptr_t>(agent_id)));
-	}
-
-	static void RefreshQuestGiverNametagsExperiment() {
-		GW::GameThread::Enqueue([] {
-			GW::AgentArray* agents = GW::Agents::GetAgentArray();
-			if (!agents || !agents->valid()) return;
-			for (GW::Agent* agent : *agents) {
-				if (!agent || !agent->GetIsLivingType()) continue;
-				GW::AgentLiving* living = agent->GetAsAgentLiving();
-				if (!living) continue;
-				if (living->allegiance != GW::Constants::Allegiance::Ally_NonAttackable
-					&& living->allegiance != GW::Constants::Allegiance::Neutral
-					&& living->allegiance != GW::Constants::Allegiance::Npc_Minipet) continue;
-				TrySendAgentUpdateExperiment(living->agent_id);
-			}
-		});
-	}
-
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
 		if (msgid != GW::UI::UIMessage::kQuestAdded
 			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged) return;
 		RefreshAllNametags();
-		RefreshQuestGiverNametagsExperiment();
 	}
 
 	static void OnAgentAllegianceUpdate(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* packet) {
