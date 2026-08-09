@@ -23,7 +23,6 @@
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
 #include <GWCA/Managers/QuestMgr.h>
-#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -349,7 +348,6 @@ public:
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
 		GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceUpdate);
-		GW::UI::RegisterUIMessageCallback(&diagnostic_hook_entry_, GW::UI::UIMessage::kAgentUpdate, OnAgentUpdateDiagnostic);
 	}
 
 	const char* Name() const override { return "Nameplates"; }
@@ -418,7 +416,6 @@ public:
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 		GW::StoC::RemovePostCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
-		GW::UI::RemoveUIMessageCallback(&diagnostic_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
@@ -434,7 +431,6 @@ private:
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
-	GW::HookEntry diagnostic_hook_entry_;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -897,8 +893,8 @@ private:
 		self->HandleAgentNameTag(status, static_cast<GW::UI::AgentNameTagInfo*>(wParam));
 	}
 
-	static void TryHideAgentNameTagExperiment(uint32_t agent_id) {
-		GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(agent_id)));
+	static void TrySendAgentUpdateExperiment(uint32_t agent_id) {
+		GW::UI::SendUIMessage(GW::UI::UIMessage::kAgentUpdate, reinterpret_cast<void*>(static_cast<uintptr_t>(agent_id)));
 	}
 
 	static void RefreshQuestGiverNametagsExperiment() {
@@ -912,7 +908,7 @@ private:
 				if (living->allegiance != GW::Constants::Allegiance::Ally_NonAttackable
 					&& living->allegiance != GW::Constants::Allegiance::Neutral
 					&& living->allegiance != GW::Constants::Allegiance::Npc_Minipet) continue;
-				TryHideAgentNameTagExperiment(living->agent_id);
+				TrySendAgentUpdateExperiment(living->agent_id);
 			}
 		});
 	}
@@ -931,12 +927,6 @@ private:
 			if (!GW::Agents::GetAgentByID(agent_id)) return;
 			RefreshAllNametags();
 		});
-	}
-
-	static void OnAgentUpdateDiagnostic(GW::HookStatus*, GW::UI::UIMessage msgid, void* wParam, void*) {
-		if (msgid != GW::UI::UIMessage::kAgentUpdate) return;
-		const auto agent_id = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(wParam));
-		GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: kAgentUpdate agent_id=%u", agent_id);
 	}
 
 	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
