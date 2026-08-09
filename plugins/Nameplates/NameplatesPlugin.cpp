@@ -21,6 +21,7 @@
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/QuestMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -876,9 +877,22 @@ private:
 		});
 	}
 
+	static void TrySendTargetAgentUpdateDiagnostic() {
+		GW::GameThread::Enqueue([] {
+			const uint32_t target_id = GW::Agents::GetTargetId();
+			if (target_id == 0) {
+				GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: no target, skipping kAgentUpdate send");
+				return;
+			}
+			const bool sent = GW::UI::SendUIMessage(GW::UI::UIMessage::kAgentUpdate, reinterpret_cast<void*>(static_cast<uintptr_t>(target_id)));
+			GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: SendUIMessage(kAgentUpdate, %u) returned %d", target_id, sent ? 1 : 0);
+		});
+	}
+
 	static void RefreshAllNametagsOnChange(std::optional<bool>& last_state, bool current_state) {
 		if (last_state.has_value() && *last_state != current_state) {
 			RefreshAllNametags();
+			TrySendTargetAgentUpdateDiagnostic();
 		}
 		last_state = current_state;
 	}
