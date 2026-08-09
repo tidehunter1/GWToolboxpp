@@ -346,6 +346,7 @@ public:
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kSendAbandonQuest, OnQuestUpdate);
+		GW::UI::RegisterUIMessageCallback(&target_hook_entry_, GW::UI::UIMessage::kChangeTarget, OnTargetChanged);
 		GW::GameThread::Enqueue([] {
 			GW::UI::SetPreference(GW::UI::FlagPreference::AutoTargetNPCs, false);
 		});
@@ -416,6 +417,7 @@ public:
 	void Terminate() override {
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&target_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
@@ -430,6 +432,7 @@ private:
 	int last_quest_count_ = -1;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
+	GW::HookEntry target_hook_entry_;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -890,6 +893,14 @@ private:
 		if (msgid != GW::UI::UIMessage::kQuestAdded
 			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
 			&& msgid != GW::UI::UIMessage::kSendAbandonQuest) return;
+		RefreshAllNametags();
+	}
+
+	static void OnTargetChanged(GW::HookStatus*, GW::UI::UIMessage msgid, void* wParam, void*) {
+		if (msgid != GW::UI::UIMessage::kChangeTarget) return;
+		const auto* packet = static_cast<GW::UI::UIPacket::kChangeTarget*>(wParam);
+		if (!packet) return;
+		if (!packet->has_evaluated_target_changed && !packet->has_auto_target_changed && !packet->has_manual_target_changed) return;
 		RefreshAllNametags();
 	}
 
