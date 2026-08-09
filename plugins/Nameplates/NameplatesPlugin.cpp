@@ -21,7 +21,6 @@
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/QuestMgr.h>
-#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -427,6 +426,7 @@ private:
 	std::optional<bool> last_recolor_professions_state_;
 	std::optional<bool> last_recolor_quest_state_;
 	std::optional<bool> last_recolor_enemy_profession_state_;
+	std::optional<bool> last_show_enemies_state_;
 	int last_quest_count_ = -1;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
@@ -440,6 +440,7 @@ private:
 	};
 	std::array<PriorityState, 2> priority_states_;
 
+	static constexpr bool kQuestCountPollEnabled = false;
 	static constexpr float kNameplateFontSize = 18.f;
 	static constexpr float kStackSmoothing = 0.05f;
 	static constexpr float kBgTintAmount = 0.3f;
@@ -564,13 +565,16 @@ private:
 		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions);
 		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags);
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
+		RefreshAllNametagsOnChange(last_show_enemies_state_, settings_.show_enemies);
 
-		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
-			const int quest_count = static_cast<int>(quest_log->size());
-			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
-				RefreshAllNametags();
+		if (kQuestCountPollEnabled) {
+			if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
+				const int quest_count = static_cast<int>(quest_log->size());
+				if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
+					RefreshAllNametags();
+				}
+				last_quest_count_ = quest_count;
 			}
-			last_quest_count_ = quest_count;
 		}
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
@@ -883,13 +887,9 @@ private:
 	}
 
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
-		if (msgid == GW::UI::UIMessage::kSendAbandonQuest) {
-			GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: kSendAbandonQuest fired");
-			RefreshAllNametags();
-			return;
-		}
 		if (msgid != GW::UI::UIMessage::kQuestAdded
-			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged) return;
+			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
+			&& msgid != GW::UI::UIMessage::kSendAbandonQuest) return;
 		RefreshAllNametags();
 	}
 
