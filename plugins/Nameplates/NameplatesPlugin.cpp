@@ -583,6 +583,7 @@ private:
 			const int quest_count = static_cast<int>(quest_log->size());
 			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
 				RefreshAllNametags();
+				RefreshQuestGiverNametagsExperiment();
 			}
 			last_quest_count_ = quest_count;
 		}
@@ -896,10 +897,31 @@ private:
 		self->HandleAgentNameTag(status, static_cast<GW::UI::AgentNameTagInfo*>(wParam));
 	}
 
+	static void TryHideAgentNameTagExperiment(uint32_t agent_id) {
+		GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(agent_id)));
+	}
+
+	static void RefreshQuestGiverNametagsExperiment() {
+		GW::GameThread::Enqueue([] {
+			GW::AgentArray* agents = GW::Agents::GetAgentArray();
+			if (!agents || !agents->valid()) return;
+			for (GW::Agent* agent : *agents) {
+				if (!agent || !agent->GetIsLivingType()) continue;
+				GW::AgentLiving* living = agent->GetAsAgentLiving();
+				if (!living) continue;
+				if (living->allegiance != GW::Constants::Allegiance::Ally_NonAttackable
+					&& living->allegiance != GW::Constants::Allegiance::Neutral
+					&& living->allegiance != GW::Constants::Allegiance::Npc_Minipet) continue;
+				TryHideAgentNameTagExperiment(living->agent_id);
+			}
+		});
+	}
+
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
 		if (msgid != GW::UI::UIMessage::kQuestAdded
 			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged) return;
 		RefreshAllNametags();
+		RefreshQuestGiverNametagsExperiment();
 	}
 
 	static void OnAgentAllegianceUpdate(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* packet) {
@@ -945,16 +967,16 @@ private:
 			return;
 		}
 
+		if (settings_.recolor_quest_nametags && living->GetHasQuest()) {
+			tag->text_color = settings_.quest_color;
+			return;
+		}
+
 		if (settings_.recolor_professions
 			&& living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
 			if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
 				tag->text_color = *color;
 			}
-			return;
-		}
-
-		if (settings_.recolor_quest_nametags && living->GetHasQuest()) {
-			tag->text_color = settings_.quest_color;
 		}
 	}
 
