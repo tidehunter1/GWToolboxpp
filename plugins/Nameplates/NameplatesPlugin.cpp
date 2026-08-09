@@ -430,7 +430,6 @@ private:
 	std::optional<bool> last_recolor_enemy_profession_state_;
 	std::optional<bool> last_show_enemies_state_;
 	int last_quest_count_ = -1;
-	uint64_t last_gather_tick_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry target_hook_entry_;
@@ -444,7 +443,6 @@ private:
 	};
 	std::array<PriorityState, 2> priority_states_;
 
-	static constexpr uint64_t kGatherIntervalMs = 33;
 	static constexpr float kNameplateFontSize = 18.f;
 	static constexpr float kStackSmoothing = 0.05f;
 	static constexpr float kBgTintAmount = 0.3f;
@@ -582,19 +580,16 @@ private:
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
-		const uint64_t now = GetTickCount64();
-		if (now - last_gather_tick_ >= kGatherIntervalMs) {
-			last_gather_tick_ = now;
-			DirectX::XMMATRIX view_proj;
-			float viewport_width, viewport_height;
-			if (BuildFrameProjection(view_proj, viewport_width, viewport_height)) {
-				GatherPendingBars(agents, me, target, view_proj, viewport_width, viewport_height);
-				ResolveStacking(pending_);
-				ApplyStackSmoothing();
-			}
-		}
+		DirectX::XMMATRIX view_proj;
+		float viewport_width, viewport_height;
+		if (!BuildFrameProjection(view_proj, viewport_width, viewport_height)) return;
 
 		ImFont* font = ImGui::GetFont();
+
+		GatherPendingBars(agents, me, target, view_proj, viewport_width, viewport_height);
+		ResolveStacking(pending_);
+		ApplyStackSmoothing();
+
 		ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 		const PendingBar* target_pb = nullptr;
 		
@@ -779,6 +774,21 @@ private:
 		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			color = ImGui::ColorConvertFloat4ToU32(color_vec);
 		}
+	}
+
+	void DrawProfessionCell(size_t index) {
+		ProfessionColorConfig& cfg = settings_.profession_colors[index];
+		ImGui::PushID(static_cast<int>(index));
+		const bool was_enabled = cfg.enabled;
+		if (!was_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
+		ImGui::Checkbox(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)), &cfg.enabled);
+		ImGui::SameLine();
+		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(cfg.color);
+		if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			cfg.color = ImGui::ColorConvertFloat4ToU32(color_vec);
+		}
+		if (!was_enabled) ImGui::PopStyleVar();
+		ImGui::PopID();
 	}
 
 	void DrawBar(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
@@ -1064,34 +1074,42 @@ private:
 		ImGui::TextUnformatted("Profession colors");
 		ShowHelpMarker("Used by 'Color ally nametags by profession' and 'Color enemy nameplates by profession' above. Defaults match the classic ally-nametag profession colors.");
 
-		static constexpr std::array<std::pair<GW::Constants::ProfessionByte, const char*>, 5> kProfessionRow1 = {{
-			{GW::Constants::ProfessionByte::Warrior, "Warrior"},
-			{GW::Constants::ProfessionByte::Ranger, "Ranger"},
-			{GW::Constants::ProfessionByte::Assassin, "Assassin"},
-			{GW::Constants::ProfessionByte::Dervish, "Dervish"},
-			{GW::Constants::ProfessionByte::Paragon, "Paragon"}
-		}};
-		static constexpr std::array<std::pair<GW::Constants::ProfessionByte, const char*>, 5> kProfessionRow2 = {{
-			{GW::Constants::ProfessionByte::Monk, "Monk"},
-			{GW::Constants::ProfessionByte::Mesmer, "Mesmer"},
-			{GW::Constants::ProfessionByte::Elementalist, "Elementalist"},
-			{GW::Constants::ProfessionByte::Necromancer, "Necromancer"},
-			{GW::Constants::ProfessionByte::Ritualist, "Ritualist"}
-		}};
+		static constexpr ImU32 kLinkColor = IM_COL32(120, 170, 255, 255);
+		const float all_width = ImGui::CalcTextSize("All").x;
+		const float sep_width = ImGui::CalcTextSize(" / ").x;
+		const float none_width = ImGui::CalcTextSize("None").x;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - (all_width + sep_width + none_width));
+		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kLinkColor).Value);
+		ImGui::TextUnformatted("All");
+		if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+		if (ImGui::IsItemClicked()) {
+			for (size_t i = 1; i < settings_.profession_colors.size(); ++i) settings_.profession_colors[i].enabled = true;
+		}
+		ImGui::PopStyleColor();
+		ImGui::SameLine(0.f, 0.f);
+		ImGui::TextUnformatted(" / ");
+		ImGui::SameLine(0.f, 0.f);
+		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kLinkColor).Value);
+		ImGui::TextUnformatted("None");
+		if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+		if (ImGui::IsItemClicked()) {
+			for (size_t i = 1; i < settings_.profession_colors.size(); ++i) settings_.profession_colors[i].enabled = false;
+		}
+		ImGui::PopStyleColor();
 
-		for (const auto* row : {&kProfessionRow1, &kProfessionRow2}) {
-			for (size_t i = 0; i < row->size(); ++i) {
-				const size_t index = static_cast<size_t>((*row)[i].first);
-				ImGui::PushID(static_cast<int>(index));
-				ImGui::Checkbox((*row)[i].second, &settings_.profession_colors[index].enabled);
-				ImGui::SameLine();
-				ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(settings_.profession_colors[index].color);
-				if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-					settings_.profession_colors[index].color = ImGui::ColorConvertFloat4ToU32(color_vec);
-				}
-				ImGui::PopID();
-				if (i + 1 < row->size()) ImGui::SameLine();
+		if (ImGui::BeginTable("##profession_colors_table", 5)) {
+			for (int c = 0; c < 5; ++c) {
+				ImGui::TableSetupColumn("##pcol", ImGuiTableColumnFlags_WidthStretch);
 			}
+			for (size_t row = 0; row < 2; ++row) {
+				ImGui::TableNextRow();
+				for (size_t col = 0; col < 5; ++col) {
+					ImGui::TableNextColumn();
+					DrawProfessionCell(row * 5 + col + 1);
+				}
+			}
+			ImGui::EndTable();
 		}
 	}
 };
