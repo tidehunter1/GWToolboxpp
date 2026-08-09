@@ -428,6 +428,7 @@ private:
 	std::optional<bool> last_recolor_enemy_profession_state_;
 	std::optional<bool> last_show_enemies_state_;
 	int last_quest_count_ = -1;
+	uint64_t pending_quest_redraw_at_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -577,9 +578,14 @@ private:
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
 			const int quest_count = static_cast<int>(quest_log->size());
 			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
-				ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
+				pending_quest_redraw_at_ = GetTickCount64() + 1000;
 			}
 			last_quest_count_ = quest_count;
+		}
+
+		if (pending_quest_redraw_at_ != 0 && GetTickCount64() >= pending_quest_redraw_at_) {
+			ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			pending_quest_redraw_at_ = 0;
 		}
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
@@ -891,7 +897,8 @@ private:
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
 		if (msgid != GW::UI::UIMessage::kQuestAdded
 			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged) return;
-		ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
+		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
+		self->pending_quest_redraw_at_ = GetTickCount64() + 1000;
 	}
 
 	static void OnAgentAllegianceUpdate(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* packet) {
