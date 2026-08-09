@@ -166,6 +166,18 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
 	}
 }
 
+inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
+	std::vector<std::wstring> out;
+	size_t start = 0;
+	while (start <= text.size()) {
+		size_t pos = text.find(L' ', start);
+		if (pos == std::wstring::npos) pos = text.size();
+		if (pos > start) out.emplace_back(text.substr(start, pos - start));
+		start = pos + 1;
+	}
+	return out;
+}
+
 class StackYSmoother {
 public:
 	float Update(uint32_t agent_id, float target_y, float alpha) {
@@ -251,18 +263,6 @@ private:
 	std::unordered_map<uint32_t, Entry> cache_;
 	uint64_t tick_ = 0, last_prune_tick_ = 0;
 };
-
-inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
-	std::vector<std::wstring> out;
-	size_t start = 0;
-	while (start <= text.size()) {
-		size_t pos = text.find(L' ', start);
-		if (pos == std::wstring::npos) pos = text.size();
-		if (pos > start) out.emplace_back(text.substr(start, pos - start));
-		start = pos + 1;
-	}
-	return out;
-}
 
 inline bool IsMinipet(uint16_t player_number) {
 	static constexpr std::array<uint16_t, 129> ids = {
