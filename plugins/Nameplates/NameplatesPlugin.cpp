@@ -900,13 +900,9 @@ private:
 		});
 		ResolveNativeNametagRedraw();
 		if (s_set_global_nametag_visibility_func && s_global_nametag_visibility_flags) {
-			auto* func = s_set_global_nametag_visibility_func;
-			auto* flags_ptr = s_global_nametag_visibility_flags;
-			GW::GameThread::Enqueue([func, flags_ptr] {
-				const uint32_t prev_flags = *flags_ptr;
-				func(0);
-				func(prev_flags);
-			});
+			const uint32_t prev_flags = *s_global_nametag_visibility_flags;
+			s_set_global_nametag_visibility_func(0);
+			s_set_global_nametag_visibility_func(prev_flags);
 		}
 	}
 
