@@ -342,6 +342,9 @@ public:
 		order_.reserve(256);
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
+		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
+		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
+		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kSendAbandonQuest, OnQuestUpdate);
 		GW::GameThread::Enqueue([] {
 			GW::UI::SetPreference(GW::UI::FlagPreference::AutoTargetNPCs, false);
 		});
@@ -411,6 +414,7 @@ public:
 
 	void Terminate() override {
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
@@ -418,8 +422,12 @@ public:
 private:
 	NameplateSettings settings_;
 	bool visible_ = true;
+	std::optional<bool> last_recolor_professions_state_;
+	std::optional<bool> last_recolor_quest_state_;
+	std::optional<bool> last_recolor_enemy_profession_state_;
 	std::optional<bool> last_show_enemies_state_;
 	GW::HookEntry nametag_hook_entry_;
+	GW::HookEntry quest_hook_entry_;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -550,6 +558,10 @@ private:
 		GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
 		const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
 		const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+
+		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions);
+		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags);
+		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
 
 		if (!last_show_enemies_state_.has_value() || *last_show_enemies_state_ != settings_.show_enemies) {
 			const bool show_enemies_now = settings_.show_enemies;
@@ -844,10 +856,35 @@ private:
 		return cfg.enabled ? std::optional<ImU32>(cfg.color) : std::nullopt;
 	}
 
+	static void RefreshAllNametags() {
+		GW::GameThread::Enqueue([] {
+			const bool ally_current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, !ally_current);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, ally_current);
+			const bool foe_current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, !foe_current);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, foe_current);
+		});
+	}
+
+	static void RefreshAllNametagsOnChange(std::optional<bool>& last_state, bool current_state) {
+		if (last_state.has_value() && *last_state != current_state) {
+			RefreshAllNametags();
+		}
+		last_state = current_state;
+	}
+
 	static void OnAgentNameTag(GW::HookStatus* status, GW::UI::UIMessage msgid, void* wParam, void*) {
 		if (msgid != GW::UI::UIMessage::kShowAgentNameTag && msgid != GW::UI::UIMessage::kSetAgentNameTagAttribs) return;
 		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
 		self->HandleAgentNameTag(status, static_cast<GW::UI::AgentNameTagInfo*>(wParam));
+	}
+
+	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
+		if (msgid != GW::UI::UIMessage::kQuestAdded
+			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
+			&& msgid != GW::UI::UIMessage::kSendAbandonQuest) return;
+		RefreshAllNametags();
 	}
 
 	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
