@@ -440,7 +440,7 @@ private:
 	};
 	std::array<PriorityState, 2> priority_states_;
 
-	static constexpr bool kQuestCountPollEnabled = false;
+	static constexpr bool kQuestCountPollEnabled = true;
 	static constexpr float kNameplateFontSize = 18.f;
 	static constexpr float kStackSmoothing = 0.05f;
 	static constexpr float kBgTintAmount = 0.3f;
