@@ -870,9 +870,16 @@ private:
 
 	static void RefreshAllNametags() {
 		GW::GameThread::Enqueue([] {
-			const uint32_t current = GW::UI::GetPreference(GW::UI::NumberPreference::FloaterScale);
-			GW::UI::SetPreference(GW::UI::NumberPreference::FloaterScale, current == 0 ? 1 : current - 1);
-			GW::UI::SetPreference(GW::UI::NumberPreference::FloaterScale, current);
+			GW::UI::UIPacket::kPreferenceFlagChanged ally_packet = {
+				GW::UI::FlagPreference::AlwaysShowAllyNames,
+				static_cast<uint32_t>(GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames))
+			};
+			GW::UI::SendUIMessage(GW::UI::UIMessage::kPreferenceFlagChanged, &ally_packet);
+			GW::UI::UIPacket::kPreferenceFlagChanged foe_packet = {
+				GW::UI::FlagPreference::AlwaysShowFoeNames,
+				static_cast<uint32_t>(GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames))
+			};
+			GW::UI::SendUIMessage(GW::UI::UIMessage::kPreferenceFlagChanged, &foe_packet);
 		});
 	}
 
