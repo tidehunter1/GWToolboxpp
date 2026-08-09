@@ -428,7 +428,6 @@ private:
 	std::optional<bool> last_recolor_enemy_profession_state_;
 	std::optional<bool> last_show_enemies_state_;
 	int last_quest_count_ = -1;
-	uint64_t pending_quest_redraw_at_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -563,29 +562,25 @@ private:
 		const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
 		const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
-		ForceNametagRedrawOnChange(last_recolor_professions_state_, settings_.recolor_professions, GW::UI::FlagPreference::AlwaysShowAllyNames);
-		ForceNametagRedrawOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, GW::UI::FlagPreference::AlwaysShowAllyNames);
-		ForceNametagRedrawOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession, GW::UI::FlagPreference::AlwaysShowFoeNames);
+		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions);
+		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags);
+		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
 
 		if (!last_show_enemies_state_.has_value() || *last_show_enemies_state_ != settings_.show_enemies) {
 			const bool show_enemies_now = settings_.show_enemies;
 			GW::GameThread::Enqueue([show_enemies_now] {
 				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, !show_enemies_now);
 			});
+			RefreshAllNametags();
 		}
 		last_show_enemies_state_ = settings_.show_enemies;
 
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
 			const int quest_count = static_cast<int>(quest_log->size());
 			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
-				pending_quest_redraw_at_ = GetTickCount64() + 1000;
+				RefreshAllNametags();
 			}
 			last_quest_count_ = quest_count;
-		}
-
-		if (pending_quest_redraw_at_ != 0 && GetTickCount64() >= pending_quest_redraw_at_) {
-			ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
-			pending_quest_redraw_at_ = 0;
 		}
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
@@ -873,17 +868,17 @@ private:
 		return cfg.enabled ? std::optional<ImU32>(cfg.color) : std::nullopt;
 	}
 
-	static void ForceNametagRedraw(GW::UI::FlagPreference pref) {
-		GW::GameThread::Enqueue([pref] {
-			const bool current = GW::UI::GetPreference(pref);
-			GW::UI::SetPreference(pref, !current);
-			GW::UI::SetPreference(pref, current);
+	static void RefreshAllNametags() {
+		GW::GameThread::Enqueue([] {
+			const uint32_t current = GW::UI::GetPreference(GW::UI::NumberPreference::FloaterScale);
+			GW::UI::SetPreference(GW::UI::NumberPreference::FloaterScale, current == 0 ? 1 : current - 1);
+			GW::UI::SetPreference(GW::UI::NumberPreference::FloaterScale, current);
 		});
 	}
 
-	static void ForceNametagRedrawOnChange(std::optional<bool>& last_state, bool current_state, GW::UI::FlagPreference pref) {
+	static void RefreshAllNametagsOnChange(std::optional<bool>& last_state, bool current_state) {
 		if (last_state.has_value() && *last_state != current_state) {
-			ForceNametagRedraw(pref);
+			RefreshAllNametags();
 		}
 		last_state = current_state;
 	}
@@ -897,8 +892,7 @@ private:
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
 		if (msgid != GW::UI::UIMessage::kQuestAdded
 			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged) return;
-		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
-		self->pending_quest_redraw_at_ = GetTickCount64() + 1000;
+		RefreshAllNametags();
 	}
 
 	static void OnAgentAllegianceUpdate(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* packet) {
@@ -906,8 +900,7 @@ private:
 		const uint32_t agent_id = packet->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
 			if (!GW::Agents::GetAgentByID(agent_id)) return;
-			ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
-			ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowFoeNames);
+			RefreshAllNametags();
 		});
 	}
 
