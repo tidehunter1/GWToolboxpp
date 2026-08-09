@@ -22,7 +22,7 @@
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
-#include <GWCA/Managers/ChatMgr.h>
+#include <GWCA/Managers/QuestMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -347,7 +347,6 @@ public:
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
-		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kSendAbandonQuest, OnQuestUpdate);
 		GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceUpdate);
 	}
 
@@ -428,6 +427,7 @@ private:
 	std::optional<bool> last_recolor_quest_state_;
 	std::optional<bool> last_recolor_enemy_profession_state_;
 	std::optional<bool> last_show_enemies_state_;
+	int last_quest_count_ = -1;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -573,6 +573,14 @@ private:
 			});
 		}
 		last_show_enemies_state_ = settings_.show_enemies;
+
+		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
+			const int quest_count = static_cast<int>(quest_log->size());
+			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
+				ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			}
+			last_quest_count_ = quest_count;
+		}
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
@@ -882,9 +890,7 @@ private:
 
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
 		if (msgid != GW::UI::UIMessage::kQuestAdded
-			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
-			&& msgid != GW::UI::UIMessage::kSendAbandonQuest) return;
-		GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: quest update fired (%d)", static_cast<int>(msgid));
+			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged) return;
 		ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
 	}
 
