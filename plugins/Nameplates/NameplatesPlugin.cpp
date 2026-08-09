@@ -20,6 +20,8 @@
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
+#include <GWCA/Managers/StoCMgr.h>
+#include <GWCA/Packets/StoC.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -197,6 +199,7 @@ public:
 	struct NameLookup {
 		const std::wstring* lower;
 		const std::wstring* display;
+		const std::vector<std::wstring>* words;
 	};
 
 	NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
@@ -213,10 +216,11 @@ public:
 			entry.decoded_display = entry.buffer;
 			entry.decoded_lower = entry.buffer;
 			std::transform(entry.decoded_lower.begin(), entry.decoded_lower.end(), entry.decoded_lower.begin(), ::towlower);
+			entry.decoded_words_lower = SplitWords(entry.decoded_lower);
 			WideToUtf8Into(entry.decoded_display, entry.decoded_display_utf8);
 			entry.converted = true;
 		}
-		return { &entry.decoded_lower, &entry.decoded_display };
+		return { &entry.decoded_lower, &entry.decoded_display, &entry.decoded_words_lower };
 	}
 
 	const std::string& GetTruncated(uint32_t agent_id, ImFont* font, float font_size, float max_width) {
@@ -241,11 +245,24 @@ private:
 		float truncated_for_width = -1.f;
 		uint64_t last_seen_tick = 0;
 		std::wstring decoded_lower, decoded_display;
+		std::vector<std::wstring> decoded_words_lower;
 		std::string decoded_display_utf8, truncated_utf8;
 	};
 	std::unordered_map<uint32_t, Entry> cache_;
 	uint64_t tick_ = 0, last_prune_tick_ = 0;
 };
+
+inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
+	std::vector<std::wstring> out;
+	size_t start = 0;
+	while (start <= text.size()) {
+		size_t pos = text.find(L' ', start);
+		if (pos == std::wstring::npos) pos = text.size();
+		if (pos > start) out.emplace_back(text.substr(start, pos - start));
+		start = pos + 1;
+	}
+	return out;
+}
 
 inline bool IsMinipet(uint16_t player_number) {
 	static constexpr std::array<uint16_t, 129> ids = {
@@ -288,7 +305,6 @@ struct ProfessionColorConfig {
 struct NameplateSettings {
 	bool show_enemies = true, show_summoned_allies = false, show_friendlies = true;
 	bool recolor_quest_nametags = true, recolor_professions = false, fade_enemies_by_range = true, color_nameplate_text_by_combat = true;
-	bool hide_enemy_native_nametags = true;
 	bool recolor_enemy_nameplates_by_profession = false;
 	uint32_t combat_text_color = IM_COL32(255, 255, 0, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
@@ -314,10 +330,9 @@ struct NameplateSettings {
 		{true, IM_COL32(221, 221, 255, 255)}
 	}};
 
-	std::array<PriorityConfig, 3> priorities = {{
+	std::array<PriorityConfig, 2> priorities = {{
 		{"", IM_COL32(135, 206, 250, 255)},
-		{"", IM_COL32(255, 105, 180, 255)},
-		{"", IM_COL32(147, 112, 219, 255)}
+		{"", IM_COL32(255, 105, 180, 255)}
 	}};
 };
 
@@ -329,6 +344,10 @@ public:
 		order_.reserve(256);
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
+		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
+		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
+		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestRemoved, OnQuestUpdate);
+		GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceUpdate);
 	}
 
 	const char* Name() const override { return "Nameplates"; }
@@ -344,7 +363,7 @@ public:
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height); L_SET(border_thickness);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies);
-		L_SET(recolor_quest_nametags); L_SET(recolor_professions); L_SET(hide_enemy_native_nametags);
+		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
 		L_SET(recolor_enemy_nameplates_by_profession);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color); L_SET(border_color);
 		L_SET(color_by_boss); L_SET(boss_color);
@@ -352,7 +371,7 @@ public:
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
-		for (size_t i = 0; i < 3; ++i) {
+		for (size_t i = 0; i < 2; ++i) {
 			const std::string prefix = "priority" + std::to_string(i + 1);
 			LoadSetting((prefix + "_raw").c_str(), settings_.priorities[i].raw);
 			LoadSetting((prefix + "_color").c_str(), settings_.priorities[i].color);
@@ -370,7 +389,7 @@ public:
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height); S_SET(border_thickness);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
 		S_SET(show_summoned_allies);
-		S_SET(recolor_quest_nametags); S_SET(recolor_professions); S_SET(hide_enemy_native_nametags);
+		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
 		S_SET(recolor_enemy_nameplates_by_profession);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color); S_SET(border_color);
 		S_SET(color_by_boss); S_SET(boss_color);
@@ -378,7 +397,7 @@ public:
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
-		for (size_t i = 0; i < 3; ++i) {
+		for (size_t i = 0; i < 2; ++i) {
 			const std::string prefix = "priority" + std::to_string(i + 1);
 			SaveSetting((prefix + "_raw").c_str(), settings_.priorities[i].raw);
 			SaveSetting((prefix + "_color").c_str(), settings_.priorities[i].color);
@@ -395,6 +414,8 @@ public:
 
 	void Terminate() override {
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
+		GW::StoC::RemovePostCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
@@ -404,8 +425,10 @@ private:
 	bool visible_ = true;
 	std::optional<bool> last_recolor_professions_state_;
 	std::optional<bool> last_recolor_quest_state_;
-	std::optional<bool> last_show_enemies_state_;
+	std::optional<bool> last_recolor_enemy_profession_state_;
 	GW::HookEntry nametag_hook_entry_;
+	GW::HookEntry quest_hook_entry_;
+	GW::HookEntry allegiance_hook_entry_;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -414,7 +437,7 @@ private:
 		char buf[512] = {};
 		std::vector<std::wstring> names;
 	};
-	std::array<PriorityState, 3> priority_states_;
+	std::array<PriorityState, 2> priority_states_;
 
 	static constexpr float kNameplateFontSize = 18.f;
 	static constexpr float kStackSmoothing = 0.05f;
@@ -439,17 +462,20 @@ private:
 	}
 
 	void RefreshPriorityBuffersAndLists() {
-		for (size_t i = 0; i < 3; ++i) {
+		for (size_t i = 0; i < 2; ++i) {
 			strncpy_s(priority_states_[i].buf, 512, settings_.priorities[i].raw.c_str(), 511);
 			priority_states_[i].names = ParseSemicolonNameList(settings_.priorities[i].raw);
 		}
 	}
 
-	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower) const {
-		if (name_lower.empty()) return std::nullopt;
-		for (size_t i = 0; i < 3; ++i) {
-			if (std::binary_search(priority_states_[i].names.begin(), priority_states_[i].names.end(), name_lower)) {
-				return settings_.priorities[i].color;
+	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower, const std::vector<std::wstring>& words) const {
+		if (!name_lower.empty()
+			&& std::binary_search(priority_states_[0].names.begin(), priority_states_[0].names.end(), name_lower)) {
+			return settings_.priorities[0].color;
+		}
+		for (const auto& word : words) {
+			if (std::binary_search(priority_states_[1].names.begin(), priority_states_[1].names.end(), word)) {
+				return settings_.priorities[1].color;
 			}
 		}
 		return std::nullopt;
@@ -460,6 +486,7 @@ private:
 		ImVec2 screen{}, footprint{};
 		const std::wstring* name_lower = nullptr;
 		const std::wstring* display = nullptr;
+		const std::vector<std::wstring>* words = nullptr;
 		bool is_targeted = false, is_in_combat = false;
 		float natural_y = 0.f;
 		float dist_sq_from_me = -1.f;
@@ -533,20 +560,11 @@ private:
 		const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
 		const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
-		if (last_show_enemies_state_.has_value() && *last_show_enemies_state_ && !settings_.show_enemies) {
-			GW::GameThread::Enqueue([] {
-				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, true);
-			});
-		}
-		last_show_enemies_state_ = settings_.show_enemies;
+		ForceNametagRedrawOnChange(last_recolor_professions_state_, settings_.recolor_professions, GW::UI::FlagPreference::AlwaysShowAllyNames);
+		ForceNametagRedrawOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, GW::UI::FlagPreference::AlwaysShowAllyNames);
+		ForceNametagRedrawOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession, GW::UI::FlagPreference::AlwaysShowFoeNames);
 
-		FlashOnChange(last_recolor_professions_state_, settings_.recolor_professions, [] {
-			FlashPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
-		});
-
-		FlashOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, [] {
-			FlashPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
-		});
+		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
 		DirectX::XMMATRIX view_proj;
 		float viewport_width, viewport_height;
@@ -554,7 +572,7 @@ private:
 
 		ImFont* font = ImGui::GetFont();
 
-		GatherPendingBars(agents, me, target, in_outpost, view_proj, viewport_width, viewport_height);
+		GatherPendingBars(agents, me, target, view_proj, viewport_width, viewport_height);
 		ResolveStacking(pending_);
 		ApplyStackSmoothing();
 
@@ -578,7 +596,7 @@ private:
 	}
 
 	void GatherPendingBars(GW::AgentArray* agents, GW::AgentLiving* me, GW::AgentLiving* target,
-							bool in_outpost, const DirectX::XMMATRIX& view_proj,
+							const DirectX::XMMATRIX& view_proj,
 							float viewport_width, float viewport_height) {
 		pending_.clear();
 		const float max_range_sq = settings_.max_range * settings_.max_range;
@@ -595,7 +613,6 @@ private:
 			float dist_sq = -1.f;
 			if (!WithinRange(living, me, max_range_sq, dist_sq)) continue;
 			if (IsMinipet(living->player_number)) continue;
-			if (in_outpost) continue;
 
 			if (!settings_.show_summoned_allies
 				&& (living->allegiance == GW::Constants::Allegiance::Spirit_Pet
@@ -627,6 +644,7 @@ private:
 			pb.natural_y = screen.y;
 			pb.name_lower = name_lookup.lower;
 			pb.display = name_lookup.display;
+			pb.words = name_lookup.words;
 			pb.is_targeted = target && living->agent_id == target->agent_id;
 			pb.dist_sq_from_me = dist_sq;
 
@@ -744,16 +762,6 @@ private:
 		}
 	}
 
-	static void DrawColorSwatchLabeled(const char* label, uint32_t& color) {
-		ImGui::TextUnformatted(label);
-		ImGui::SameLine();
-		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
-		const std::string picker_id = std::string("##color_") + label;
-		if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			color = ImGui::ColorConvertFloat4ToU32(color_vec);
-		}
-	}
-
 	void DrawBar(ImDrawList* draw_list, const PendingBar& pb, ImFont* font, bool left_clicked_this_frame) {
 		const GW::AgentLiving* living = pb.living;
 
@@ -765,7 +773,7 @@ private:
 		const ImVec2 bottom_right(top_left.x + bar_width, top_left.y + bar_height);
 		const ImVec2 fill_bottom_right(top_left.x + bar_width * hp_pct, bottom_right.y);
 
-		const auto priority_color = GetPriorityColor(*pb.name_lower);
+		const auto priority_color = GetPriorityColor(*pb.name_lower, *pb.words);
 		ImU32 fill_color;
 		if (priority_color) {
 			fill_color = *priority_color;
@@ -841,7 +849,7 @@ private:
 		return cfg.enabled ? std::optional<ImU32>(cfg.color) : std::nullopt;
 	}
 
-	static void FlashPreference(GW::UI::FlagPreference pref) {
+	static void ForceNametagRedraw(GW::UI::FlagPreference pref) {
 		GW::GameThread::Enqueue([pref] {
 			const bool current = GW::UI::GetPreference(pref);
 			GW::UI::SetPreference(pref, !current);
@@ -849,10 +857,9 @@ private:
 		});
 	}
 
-	template<typename Func>
-	static void FlashOnChange(std::optional<bool>& last_state, bool current_state, Func&& flash) {
+	static void ForceNametagRedrawOnChange(std::optional<bool>& last_state, bool current_state, GW::UI::FlagPreference pref) {
 		if (last_state.has_value() && *last_state != current_state) {
-			flash();
+			ForceNametagRedraw(pref);
 		}
 		last_state = current_state;
 	}
@@ -863,20 +870,50 @@ private:
 		self->HandleAgentNameTag(status, static_cast<GW::UI::AgentNameTagInfo*>(wParam));
 	}
 
-	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) const {
+	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
+		if (msgid != GW::UI::UIMessage::kQuestAdded
+			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
+			&& msgid != GW::UI::UIMessage::kQuestRemoved) return;
+		ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
+	}
+
+	static void OnAgentAllegianceUpdate(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* packet) {
+		if (!packet) return;
+		const uint32_t agent_id = packet->agent_id;
+		GW::GameThread::Enqueue([agent_id] {
+			if (!GW::Agents::GetAgentByID(agent_id)) return;
+			ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowFoeNames);
+		});
+	}
+
+	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
 		if (!tag) return;
 
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
+		if (!living) return;
 
-		if (settings_.hide_enemy_native_nametags && status && living
-			&& living->allegiance == GW::Constants::Allegiance::Enemy) {
+		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
+
+		if (is_enemy && settings_.show_enemies && status) {
 			status->blocked = true;
 			return;
 		}
 
-		if (!settings_.recolor_quest_nametags && !settings_.recolor_professions && !settings_.recolor_enemy_nameplates_by_profession) return;
-		if (!living) return;
+		if (is_enemy) {
+			const auto name_lookup = name_cache_.Get(living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
+			if (const auto color = GetPriorityColor(*name_lookup.lower, *name_lookup.words)) {
+				tag->text_color = *color;
+				return;
+			}
+			if (settings_.recolor_enemy_nameplates_by_profession) {
+				if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
+					tag->text_color = *color;
+				}
+			}
+			return;
+		}
 
 		if (settings_.recolor_professions
 			&& living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
@@ -886,29 +923,20 @@ private:
 			return;
 		}
 
-		if (settings_.recolor_enemy_nameplates_by_profession
-			&& living->allegiance == GW::Constants::Allegiance::Enemy) {
-			if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
-				tag->text_color = *color;
-				return;
-			}
-		}
-
 		if (settings_.recolor_quest_nametags && living->GetHasQuest()) {
 			tag->text_color = settings_.quest_color;
 		}
 	}
 
 	void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
-		ImGui::TextColored(ImColor(color).Value, "%s", label);
-		ImGui::TableNextColumn();
-		const std::string input_id = std::string("##input_") + label;
-		const bool changed = ImGui::InputText(input_id.c_str(), buf, 512);
+		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
+		const bool changed = ImGui::InputText(label, buf, 512);
+		ImGui::PopStyleColor();
 		if (changed) {
 			raw = buf;
 			names = ParseSemicolonNameList(raw);
 		}
-		ImGui::TableNextColumn();
+		ImGui::SameLine();
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
 		const std::string picker_id = std::string("##color_") + label;
 		if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
@@ -916,76 +944,38 @@ private:
 		}
 	}
 
-	[[nodiscard]] static float ComputeLabelSwatchColumnWidth(const std::initializer_list<const char*>& labels) {
-		const ImGuiStyle& style = ImGui::GetStyle();
-		float max_text_width = 0.f;
-		for (const char* label : labels) {
-			max_text_width = std::max(max_text_width, ImGui::CalcTextSize(label).x);
-		}
-		const float checkbox_box = ImGui::GetFrameHeight();
-		const float swatch_box = ImGui::GetFrameHeight();
-		return checkbox_box + style.ItemInnerSpacing.x + max_text_width + style.ItemSpacing.x + swatch_box + 34.f;
-	}
-
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Explorable Areas");
 
-		const float checkbox_col_width = ComputeLabelSwatchColumnWidth({
-			"Show enemy nameplates", "Show friendly nameplates",
-			"Color nameplate text by combat status", "Color quest-giver nametags",
-			"Color ally nametags by profession", "Color enemy nameplates by profession",
-			"Hide enemy native nametag", "Color by boss"
-		});
+		DrawCheckboxWithColor("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
+		DrawCheckboxWithColor("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
 
-		if (ImGui::BeginTable("##explorable_toggles", 2, ImGuiTableFlags_SizingFixedFit)) {
-			ImGui::TableSetupColumn("##col0", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
-			ImGui::TableSetupColumn("##col1", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
+		ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
+		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			DrawCheckboxWithColor("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
-			ImGui::TableNextColumn();
-			DrawCheckboxWithColor("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
+		ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
+		ShowHelpMarker("Nameplates fade in steps: \n0-1500 range, 100% opaque \n1500-2500 range, 75% transparency \n2500 range and above, 50% transparency");
 
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::TableNextColumn();
-			ImGui::Indent();
-			ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
-			ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
-			ImGui::Unindent();
+		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
+		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
 
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
-			ShowHelpMarker("Nameplates fade in steps: \n0-1500 range, 100% opaque \n1500-2500 range, 75% transparency \n2500 range and above, 50% transparency \nApplies to enemy nameplates only");
-
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
-			ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
-
-			ImGui::EndTable();
-		}
-
-		ImGui::Spacing();
 		const float border_thickness_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
 		ImGui::SetNextItemWidth(border_thickness_width);
-		ImGui::SliderFloat("Border thickness", &settings_.border_thickness, 1.0f, 3.0f, "%.1f");
-
-		if (ImGui::BeginTable("##border_colors", 2, ImGuiTableFlags_SizingFixedFit)) {
-			ImGui::TableSetupColumn("##col0", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
-			ImGui::TableSetupColumn("##col1", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
-
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			DrawColorSwatchLabeled("Border color", settings_.border_color);
-			ImGui::TableNextColumn();
-			DrawColorSwatchLabeled("Target border color", settings_.target_border_color);
-
-			ImGui::EndTable();
+		ImGui::SliderFloat("##border_thickness", &settings_.border_thickness, 1.0f, 3.0f, "%.1f");
+		ImGui::SameLine();
+		ImGui::TextUnformatted("Border thickness");
+		ImGui::SameLine();
+		ImVec4 border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.border_color);
+		if (ImGui::ColorEdit3("##color_border", &border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.border_color = ImGui::ColorConvertFloat4ToU32(border_color_vec);
 		}
-		ImGui::Spacing();
+		ImGui::SameLine();
+		ImGui::TextUnformatted("Target border color");
+		ImGui::SameLine();
+		ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
+		if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
+		}
 
 		int thresholds[2] = {
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
@@ -1014,68 +1004,27 @@ private:
 		ImGui::SameLine();
 		ImGui::TextUnformatted("Bar width & height");
 
-		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::TextUnformatted("Priority nameplate coloring");
-		ShowHelpMarker("Semicolon-separated. e.g. \"Charr Shaman; Keeper of Souls\"");
+		ShowHelpMarker("Priority 1 matches full names exactly, semicolon-separated. \nPriority 2 matches whole words only, e.g. \"Monk\" matches \"Charr Monk\" but not \"Charrmonk\".");
 
-		const float priority_label_width = ImGui::CalcTextSize("Priority 3").x + ImGui::GetStyle().ItemInnerSpacing.x * 2.f;
-		const float priority_swatch_width = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
-
-		if (ImGui::BeginTable("##priority_inputs", 3, ImGuiTableFlags_SizingFixedFit)) {
-			ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, priority_label_width);
-			ImGui::TableSetupColumn("##input", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("##swatch", ImGuiTableColumnFlags_WidthFixed, priority_swatch_width);
-
-			for (size_t i = 0; i < 3; ++i) {
-				const std::string label = "Priority " + std::to_string(i + 1);
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				DrawPriorityInput(label.c_str(), settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
-			}
-
-			ImGui::EndTable();
+		for (size_t i = 0; i < 2; ++i) {
+			const std::string label = "Priority " + std::to_string(i + 1);
+			DrawPriorityInput(label.c_str(), settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
 		}
 
-		ImGui::Spacing();
-		if (ImGui::BeginTable("##boss_color", 2, ImGuiTableFlags_SizingFixedFit)) {
-			ImGui::TableSetupColumn("##col0", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
-			ImGui::TableSetupColumn("##col1", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
-
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			DrawCheckboxWithColor("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
-			ShowHelpMarker("Overrides other nameplate coloring (except Priority) for agents with the boss glow");
-
-			ImGui::EndTable();
-		}
+		DrawCheckboxWithColor("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
+		ShowHelpMarker("Overrides other nameplate coloring (except Priority) for agents with the boss glow");
 
 		ImGui::SeparatorText("All Areas");
 
-		if (ImGui::BeginTable("##all_areas_toggles", 2, ImGuiTableFlags_SizingFixedFit)) {
-			ImGui::TableSetupColumn("##col0", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
-			ImGui::TableSetupColumn("##col1", ImGuiTableColumnFlags_WidthFixed, checkbox_col_width);
+		DrawCheckboxWithColor("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
 
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			DrawCheckboxWithColor("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
+		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
+		ImGui::SameLine();
+		ImGui::Checkbox("Color enemy nameplates by profession", &settings_.recolor_enemy_nameplates_by_profession);
+		ShowHelpMarker("Works on Players/Heroes/Henchmen (nametags) and enemy nameplates. Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
-			ImGui::TableNextColumn();
-			ImGui::Checkbox("Color enemy nameplates by profession", &settings_.recolor_enemy_nameplates_by_profession);
-			ShowHelpMarker("Works on Players/Heroes/Henchmen (nametags) and enemy nameplates. Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
-
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::Checkbox("Hide enemy native nametag", &settings_.hide_enemy_native_nametags);
-			ShowHelpMarker("Blocks the game's own nametag on enemies, since 'Show foe names' has no effect on your current target. Enemies only, never friendlies or NPCs.");
-
-			ImGui::EndTable();
-		}
-
-		ImGui::Indent();
 		ImGui::TextUnformatted("Profession colors");
 		ShowHelpMarker("Used by 'Color ally nametags by profession' and 'Color enemy nameplates by profession' above. Defaults match the classic ally-nametag profession colors.");
 
@@ -1094,32 +1043,20 @@ private:
 			{GW::Constants::ProfessionByte::Ritualist, "Ritualist"}
 		}};
 
-		const float profession_col_width = ComputeLabelSwatchColumnWidth({"Warrior", "Ranger", "Assassin", "Dervish", "Paragon", "Monk", "Mesmer", "Elementalist", "Necromancer", "Ritualist"});
-
-		if (ImGui::BeginTable("##profession_colors", 5, ImGuiTableFlags_SizingFixedFit)) {
-			for (int c = 0; c < 5; ++c) {
-				ImGui::TableSetupColumn("##pcol", ImGuiTableColumnFlags_WidthFixed, profession_col_width);
-			}
-
-			for (const auto* row : {&kProfessionRow1, &kProfessionRow2}) {
-				ImGui::TableNextRow();
-				for (size_t i = 0; i < row->size(); ++i) {
-					const size_t index = static_cast<size_t>((*row)[i].first);
-					ImGui::TableNextColumn();
-					ImGui::PushID(static_cast<int>(index));
-					ImGui::Checkbox((*row)[i].second, &settings_.profession_colors[index].enabled);
-					ImGui::SameLine();
-					ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(settings_.profession_colors[index].color);
-					if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-						settings_.profession_colors[index].color = ImGui::ColorConvertFloat4ToU32(color_vec);
-					}
-					ImGui::PopID();
+		for (const auto* row : {&kProfessionRow1, &kProfessionRow2}) {
+			for (size_t i = 0; i < row->size(); ++i) {
+				const size_t index = static_cast<size_t>((*row)[i].first);
+				ImGui::PushID(static_cast<int>(index));
+				ImGui::Checkbox((*row)[i].second, &settings_.profession_colors[index].enabled);
+				ImGui::SameLine();
+				ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(settings_.profession_colors[index].color);
+				if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+					settings_.profession_colors[index].color = ImGui::ColorConvertFloat4ToU32(color_vec);
 				}
+				ImGui::PopID();
+				if (i + 1 < row->size()) ImGui::SameLine();
 			}
-
-			ImGui::EndTable();
 		}
-		ImGui::Unindent();
 	}
 };
 
