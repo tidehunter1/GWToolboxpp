@@ -894,7 +894,7 @@ private:
 		GW::GameThread::Enqueue([] {
 			const uint32_t target_id = GW::Agents::GetTargetId();
 			if (target_id == 0) return;
-			GW::Agents::ChangeTarget(0);
+			GW::Agents::ChangeTarget(0u);
 			GW::Agents::ChangeTarget(target_id);
 		});
 	}
