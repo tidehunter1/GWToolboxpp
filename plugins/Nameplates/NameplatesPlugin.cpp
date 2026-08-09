@@ -20,6 +20,8 @@
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
+#include <GWCA/Managers/QuestMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -425,7 +427,7 @@ private:
 	std::optional<bool> last_recolor_professions_state_;
 	std::optional<bool> last_recolor_quest_state_;
 	std::optional<bool> last_recolor_enemy_profession_state_;
-	std::optional<bool> last_show_enemies_state_;
+	int last_quest_count_ = -1;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 
@@ -563,13 +565,13 @@ private:
 		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags);
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
 
-		if (!last_show_enemies_state_.has_value() || *last_show_enemies_state_ != settings_.show_enemies) {
-			const bool show_enemies_now = settings_.show_enemies;
-			GW::GameThread::Enqueue([show_enemies_now] {
-				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, !show_enemies_now);
-			});
+		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
+			const int quest_count = static_cast<int>(quest_log->size());
+			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
+				RefreshAllNametags();
+			}
+			last_quest_count_ = quest_count;
 		}
-		last_show_enemies_state_ = settings_.show_enemies;
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
@@ -881,9 +883,13 @@ private:
 	}
 
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
+		if (msgid == GW::UI::UIMessage::kSendAbandonQuest) {
+			GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: kSendAbandonQuest fired");
+			RefreshAllNametags();
+			return;
+		}
 		if (msgid != GW::UI::UIMessage::kQuestAdded
-			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
-			&& msgid != GW::UI::UIMessage::kSendAbandonQuest) return;
+			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged) return;
 		RefreshAllNametags();
 	}
 
