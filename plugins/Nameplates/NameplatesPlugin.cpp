@@ -782,7 +782,8 @@ private:
 		const bool was_enabled = cfg.enabled;
 		if (!was_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
 		ImGui::Checkbox(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)), &cfg.enabled);
-		ImGui::SameLine();
+		const float swatch_offset = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize("Mo").x + ImGui::GetStyle().ItemInnerSpacing.x;
+		ImGui::SameLine(swatch_offset);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(cfg.color);
 		if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			cfg.color = ImGui::ColorConvertFloat4ToU32(color_vec);
