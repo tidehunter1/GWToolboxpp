@@ -566,7 +566,7 @@ private:
 		const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
 		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions);
-		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags);
+		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, true);
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
 		RefreshAllNametagsOnChange(last_show_enemies_state_, settings_.show_enemies);
 
@@ -877,9 +877,10 @@ private:
 		});
 	}
 
-	static void RefreshAllNametagsOnChange(std::optional<bool>& last_state, bool current_state) {
+	static void RefreshAllNametagsOnChange(std::optional<bool>& last_state, bool current_state, bool also_retarget = false) {
 		if (last_state.has_value() && *last_state != current_state) {
 			RefreshAllNametags();
+			if (also_retarget) RefreshTargetedNametagViaRetarget();
 		}
 		last_state = current_state;
 	}
@@ -894,6 +895,9 @@ private:
 		GW::GameThread::Enqueue([] {
 			const uint32_t target_id = GW::Agents::GetTargetId();
 			if (target_id == 0) return;
+			GW::Agent* target_agent = GW::Agents::GetAgentByID(target_id);
+			GW::AgentLiving* target_living = target_agent ? target_agent->GetAsAgentLiving() : nullptr;
+			if (!target_living || target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
 			GW::Agents::ChangeTarget(0u);
 			GW::Agents::ChangeTarget(target_id);
 		});
