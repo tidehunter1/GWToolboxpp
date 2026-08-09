@@ -22,6 +22,7 @@
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
+#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -426,6 +427,7 @@ private:
 	std::optional<bool> last_recolor_professions_state_;
 	std::optional<bool> last_recolor_quest_state_;
 	std::optional<bool> last_recolor_enemy_profession_state_;
+	std::optional<bool> last_show_enemies_state_;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -563,6 +565,14 @@ private:
 		ForceNametagRedrawOnChange(last_recolor_professions_state_, settings_.recolor_professions, GW::UI::FlagPreference::AlwaysShowAllyNames);
 		ForceNametagRedrawOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, GW::UI::FlagPreference::AlwaysShowAllyNames);
 		ForceNametagRedrawOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession, GW::UI::FlagPreference::AlwaysShowFoeNames);
+
+		if (!last_show_enemies_state_.has_value() || *last_show_enemies_state_ != settings_.show_enemies) {
+			const bool show_enemies_now = settings_.show_enemies;
+			GW::GameThread::Enqueue([show_enemies_now] {
+				GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, !show_enemies_now);
+			});
+		}
+		last_show_enemies_state_ = settings_.show_enemies;
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
@@ -874,6 +884,7 @@ private:
 		if (msgid != GW::UI::UIMessage::kQuestAdded
 			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
 			&& msgid != GW::UI::UIMessage::kQuestRemoved) return;
+		GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GWCA1, L"Nameplates: quest update fired (%d)", static_cast<int>(msgid));
 		ForceNametagRedraw(GW::UI::FlagPreference::AlwaysShowAllyNames);
 	}
 
