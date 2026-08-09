@@ -870,16 +870,12 @@ private:
 
 	static void RefreshAllNametags() {
 		GW::GameThread::Enqueue([] {
-			GW::UI::UIPacket::kPreferenceFlagChanged ally_packet = {
-				GW::UI::FlagPreference::AlwaysShowAllyNames,
-				static_cast<uint32_t>(GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames))
-			};
-			GW::UI::SendUIMessage(GW::UI::UIMessage::kPreferenceFlagChanged, &ally_packet);
-			GW::UI::UIPacket::kPreferenceFlagChanged foe_packet = {
-				GW::UI::FlagPreference::AlwaysShowFoeNames,
-				static_cast<uint32_t>(GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames))
-			};
-			GW::UI::SendUIMessage(GW::UI::UIMessage::kPreferenceFlagChanged, &foe_packet);
+			const bool ally_current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, !ally_current);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, ally_current);
+			const bool foe_current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, !foe_current);
+			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, foe_current);
 		});
 	}
 
