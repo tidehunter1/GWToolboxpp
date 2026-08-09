@@ -430,6 +430,7 @@ private:
 	std::optional<bool> last_recolor_enemy_profession_state_;
 	std::optional<bool> last_show_enemies_state_;
 	int last_quest_count_ = -1;
+	uint64_t last_gather_tick_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry target_hook_entry_;
@@ -443,7 +444,7 @@ private:
 	};
 	std::array<PriorityState, 2> priority_states_;
 
-	static constexpr bool kQuestCountPollEnabled = true;
+	static constexpr uint64_t kGatherIntervalMs = 33;
 	static constexpr float kNameplateFontSize = 18.f;
 	static constexpr float kStackSmoothing = 0.05f;
 	static constexpr float kBgTintAmount = 0.3f;
@@ -570,29 +571,30 @@ private:
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
 		RefreshAllNametagsOnChange(last_show_enemies_state_, settings_.show_enemies);
 
-		if (kQuestCountPollEnabled) {
-			if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
-				const int quest_count = static_cast<int>(quest_log->size());
-				if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
-					RefreshAllNametags();
-					RefreshTargetedNametagViaRetarget();
-				}
-				last_quest_count_ = quest_count;
+		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
+			const int quest_count = static_cast<int>(quest_log->size());
+			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
+				RefreshAllNametags();
+				RefreshTargetedNametagViaRetarget();
 			}
+			last_quest_count_ = quest_count;
 		}
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
-		DirectX::XMMATRIX view_proj;
-		float viewport_width, viewport_height;
-		if (!BuildFrameProjection(view_proj, viewport_width, viewport_height)) return;
+		const uint64_t now = GetTickCount64();
+		if (now - last_gather_tick_ >= kGatherIntervalMs) {
+			last_gather_tick_ = now;
+			DirectX::XMMATRIX view_proj;
+			float viewport_width, viewport_height;
+			if (BuildFrameProjection(view_proj, viewport_width, viewport_height)) {
+				GatherPendingBars(agents, me, target, view_proj, viewport_width, viewport_height);
+				ResolveStacking(pending_);
+				ApplyStackSmoothing();
+			}
+		}
 
 		ImFont* font = ImGui::GetFont();
-
-		GatherPendingBars(agents, me, target, view_proj, viewport_width, viewport_height);
-		ResolveStacking(pending_);
-		ApplyStackSmoothing();
-
 		ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
 		const PendingBar* target_pb = nullptr;
 		
@@ -764,7 +766,7 @@ private:
 		}
 	}
 
-	void ShowHelpMarker(const char* help) const {
+	static void ShowHelpMarker(const char* help) {
 		ImGui::SameLine();
 		ImGui::TextDisabled("(?)");
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
@@ -866,14 +868,16 @@ private:
 		return cfg.enabled ? std::optional<ImU32>(cfg.color) : std::nullopt;
 	}
 
+	static void FlashFlagPreference(GW::UI::FlagPreference pref) {
+		const bool current = GW::UI::GetPreference(pref);
+		GW::UI::SetPreference(pref, !current);
+		GW::UI::SetPreference(pref, current);
+	}
+
 	static void RefreshAllNametags() {
 		GW::GameThread::Enqueue([] {
-			const bool ally_current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, !ally_current);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames, ally_current);
-			const bool foe_current = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, !foe_current);
-			GW::UI::SetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames, foe_current);
+			FlashFlagPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			FlashFlagPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
 		});
 	}
 
