@@ -448,7 +448,6 @@ private:
 	};
 	std::array<PriorityState, 2> priority_states_;
 
-	static constexpr uint64_t kDiscoveryIntervalMs = 150;
 	static constexpr float kNameplateFontSize = 18.f;
 	static constexpr float kStackSmoothing = 0.05f;
 	static constexpr float kBgTintAmount = 0.3f;
@@ -506,8 +505,6 @@ private:
 	std::vector<PendingBar> pending_;
 	std::vector<PlacedRect> placed_;
 	std::vector<size_t> order_;
-	std::vector<uint32_t> discovered_agent_ids_;
-	uint64_t last_discovery_tick_ = 0;
 
 	void ResolveStacking(std::vector<PendingBar>& items) {
 		static constexpr float kGap = 2.f;
@@ -587,19 +584,13 @@ private:
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
-		const uint64_t now = GetTickCount64();
-		if (now - last_discovery_tick_ >= kDiscoveryIntervalMs) {
-			last_discovery_tick_ = now;
-			DiscoverQualifyingAgents(agents, me);
-		}
-
 		DirectX::XMMATRIX view_proj;
 		float viewport_width, viewport_height;
 		if (!BuildFrameProjection(view_proj, viewport_width, viewport_height)) return;
 
 		ImFont* font = ImGui::GetFont();
 
-		GatherPendingBars(me, target, view_proj, viewport_width, viewport_height);
+		GatherPendingBars(agents, me, target, view_proj, viewport_width, viewport_height);
 		ResolveStacking(pending_);
 		ApplyStackSmoothing();
 
@@ -622,8 +613,10 @@ private:
 		stack_y_smoother_.MaybePrune();
 	}
 
-	void DiscoverQualifyingAgents(GW::AgentArray* agents, GW::AgentLiving* me) {
-		discovered_agent_ids_.clear();
+	void GatherPendingBars(GW::AgentArray* agents, GW::AgentLiving* me, GW::AgentLiving* target,
+							const DirectX::XMMATRIX& view_proj,
+							float viewport_width, float viewport_height) {
+		pending_.clear();
 		const float max_range_sq = settings_.max_range * settings_.max_range;
 
 		for (GW::Agent* agent : *agents) {
@@ -657,26 +650,6 @@ private:
 			else if (is_allied) {
 				if (living->hp * 100.f > settings_.allied_health_threshold) continue;
 			}
-
-			discovered_agent_ids_.push_back(living->agent_id);
-		}
-	}
-
-	void GatherPendingBars(GW::AgentLiving* me, GW::AgentLiving* target,
-							const DirectX::XMMATRIX& view_proj,
-							float viewport_width, float viewport_height) {
-		pending_.clear();
-		const float max_range_sq = settings_.max_range * settings_.max_range;
-
-		for (uint32_t agent_id : discovered_agent_ids_) {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent) continue;
-			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living) continue;
-			if (living->GetIsDead()) continue;
-
-			float dist_sq = -1.f;
-			if (!WithinRange(living, me, max_range_sq, dist_sq)) continue;
 
 			ImVec2 screen;
 			if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) continue;
