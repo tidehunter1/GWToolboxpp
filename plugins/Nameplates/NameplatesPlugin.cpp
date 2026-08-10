@@ -986,12 +986,12 @@ private:
 	}
 
 	void DrawPriorityInput(const char* input_id, const char* hint, const char* color_id, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
-		ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x));
+		ImGui::SetNextItemWidth(-ImGui::GetFrameHeight());
 		if (ImGui::InputTextWithHint(input_id, hint, buf, 512)) {
 			raw = buf;
 			names = ParseSemicolonNameList(raw);
 		}
-		ImGui::SameLine();
+		ImGui::SameLine(0.f, 0.f);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
 		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			color = ImGui::ColorConvertFloat4ToU32(color_vec);
