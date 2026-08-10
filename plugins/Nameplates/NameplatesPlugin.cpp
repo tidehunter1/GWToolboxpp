@@ -1004,12 +1004,23 @@ private:
 		ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
+		const bool alpha_enabled = settings_.fade_enemies_by_range;
 		ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
 		ShowHelpMarker("Fades enemy nameplates in steps based on distance, using the thresholds and opacity below.");
+		ImGui::SameLine();
+		ImGui::Text("%.0f-%.0f: 100%%  |  %.0f-%.0f: %.0f%%  |  %.0f+: %.0f%%",
+			0.f, settings_.fade_distance_near,
+			settings_.fade_distance_near, settings_.fade_distance_far, settings_.fade_opacity_mid * 100.f,
+			settings_.fade_distance_far, settings_.fade_opacity_far * 100.f);
+
+		if (!alpha_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
 
 		float fade_distances[2] = { settings_.fade_distance_near, settings_.fade_distance_far };
-		if (ImGui::SliderFloat2("Fade distance thresholds", fade_distances, 500.f, 5000.f, "%.0f")) {
+		if (ImGui::InputFloat2("Fade distance thresholds", fade_distances, "%.0f")) {
+			if (fade_distances[0] < 0.f) fade_distances[0] = 0.f;
+			if (fade_distances[0] > 5000.f) fade_distances[0] = 5000.f;
 			if (fade_distances[1] < fade_distances[0]) fade_distances[1] = fade_distances[0];
+			if (fade_distances[1] > 5000.f) fade_distances[1] = 5000.f;
 			settings_.fade_distance_near = fade_distances[0];
 			settings_.fade_distance_far = fade_distances[1];
 		}
@@ -1020,10 +1031,7 @@ private:
 			settings_.fade_opacity_far = fade_opacities[1] / 100.f;
 		}
 
-		ImGui::Text("%.0f-%.0f: 100%%  |  %.0f-%.0f: %.0f%%  |  %.0f+: %.0f%%",
-			0.f, settings_.fade_distance_near,
-			settings_.fade_distance_near, settings_.fade_distance_far, settings_.fade_opacity_mid * 100.f,
-			settings_.fade_distance_far, settings_.fade_opacity_far * 100.f);
+		if (!alpha_enabled) ImGui::PopStyleVar();
 
 		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
 		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
