@@ -776,13 +776,12 @@ private:
 		}
 	}
 
-	void DrawProfessionCell(size_t index) {
+	void DrawProfessionCell(size_t index, float swatch_offset) {
 		ProfessionColorConfig& cfg = settings_.profession_colors[index];
 		ImGui::PushID(static_cast<int>(index));
 		const bool was_enabled = cfg.enabled;
 		if (!was_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
 		ImGui::Checkbox(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)), &cfg.enabled);
-		const float swatch_offset = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize("Mo").x + ImGui::GetStyle().ItemInnerSpacing.x;
 		ImGui::SameLine(swatch_offset);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(cfg.color);
 		if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
@@ -1099,6 +1098,12 @@ private:
 		}
 		ImGui::PopStyleColor();
 
+		float max_acronym_width = 0.f;
+		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
+			max_acronym_width = std::max(max_acronym_width, ImGui::CalcTextSize(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(i))).x);
+		}
+		const float profession_swatch_offset = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + max_acronym_width + ImGui::GetStyle().ItemInnerSpacing.x * 2.f;
+
 		if (ImGui::BeginTable("##profession_colors_table", 5)) {
 			for (int c = 0; c < 5; ++c) {
 				ImGui::TableSetupColumn("##pcol", ImGuiTableColumnFlags_WidthStretch);
@@ -1107,7 +1112,7 @@ private:
 				ImGui::TableNextRow();
 				for (size_t col = 0; col < 5; ++col) {
 					ImGui::TableNextColumn();
-					DrawProfessionCell(row * 5 + col + 1);
+					DrawProfessionCell(row * 5 + col + 1, profession_swatch_offset);
 				}
 			}
 			ImGui::EndTable();
