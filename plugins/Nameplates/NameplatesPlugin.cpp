@@ -986,12 +986,12 @@ private:
 	}
 
 	void DrawPriorityInput(const char* input_id, const char* hint, const char* color_id, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
-		ImGui::SetNextItemWidth(-ImGui::GetFrameHeight());
+		ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x));
 		if (ImGui::InputTextWithHint(input_id, hint, buf, 512)) {
 			raw = buf;
 			names = ParseSemicolonNameList(raw);
 		}
-		ImGui::SameLine(0.f, 0.f);
+		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
 		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			color = ImGui::ColorConvertFloat4ToU32(color_vec);
@@ -1044,8 +1044,6 @@ private:
 
 		if (!alpha_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
 
-		ImGui::TextUnformatted("Fade nameplates by distance");
-
 		ImGui::TextUnformatted("Fade distance thresholds");
 		float fade_distances[2] = { settings_.fade_distance_near, settings_.fade_distance_far };
 		ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1076,33 +1074,32 @@ private:
 
 		ImGui::Separator();
 
-		if (ImGui::BeginTable("##border_row", 3)) {
-			ImGui::TableSetupColumn("##thickness_col", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-			ImGui::TableSetupColumn("##bordercolor_col", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			ImGui::TableSetupColumn("##targetcolor_col", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted("Border thickness");
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted("Border color");
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted("Target color");
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::SetNextItemWidth(-FLT_MIN);
-			ImGui::DragFloat("##border_thickness", &settings_.border_thickness, 0.02f, 1.0f, 3.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::TableNextColumn();
-			ImVec4 border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.border_color);
-			if (ImGui::ColorEdit3("##color_border", &border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-				settings_.border_color = ImGui::ColorConvertFloat4ToU32(border_color_vec);
-			}
-			ImGui::TableNextColumn();
-			ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
-			if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-				settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
-			}
-			ImGui::EndTable();
+		ImGui::TextUnformatted("Border thickness");
+		const float border_thickness_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
+		ImGui::SetNextItemWidth(border_thickness_width);
+		ImGui::DragFloat("##border_thickness", &settings_.border_thickness, 0.02f, 1.0f, 3.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+
+		const float swatch_w = ImGui::GetFrameHeight();
+		const float border_label_w = ImGui::CalcTextSize("Border").x;
+		const float target_label_w = ImGui::CalcTextSize("Target").x;
+		const float inner_spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+		const float border_group_width = swatch_w + inner_spacing + border_label_w + inner_spacing * 2.f + swatch_w + inner_spacing + target_label_w;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - border_group_width);
+
+		ImVec4 border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.border_color);
+		if (ImGui::ColorEdit3("##color_border", &border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.border_color = ImGui::ColorConvertFloat4ToU32(border_color_vec);
 		}
+		ImGui::SameLine();
+		ImGui::TextUnformatted("Border");
+		ImGui::SameLine();
+		ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
+		if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
+		}
+		ImGui::SameLine();
+		ImGui::TextUnformatted("Target");
 
 		ImGui::TextUnformatted("NPC & ally visibility threshold");
 		ShowHelpMarker("0 = off, 100 = on");
@@ -1145,30 +1142,6 @@ private:
 
 		ImGui::TextUnformatted("Profession colors");
 		ShowHelpMarker("Used by 'Color ally nametags by profession' and 'Color enemy nameplates by profession' above. Defaults match the classic ally-nametag profession colors.");
-
-		static constexpr ImU32 kLinkColor = IM_COL32(120, 170, 255, 255);
-		const float all_width = ImGui::CalcTextSize("All").x;
-		const float sep_width = ImGui::CalcTextSize(" / ").x;
-		const float none_width = ImGui::CalcTextSize("None").x;
-		ImGui::SameLine();
-		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - (all_width + sep_width + none_width));
-		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kLinkColor).Value);
-		ImGui::TextUnformatted("All");
-		if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-		if (ImGui::IsItemClicked()) {
-			for (size_t i = 1; i < settings_.profession_colors.size(); ++i) settings_.profession_colors[i].enabled = true;
-		}
-		ImGui::PopStyleColor();
-		ImGui::SameLine(0.f, 0.f);
-		ImGui::TextUnformatted(" / ");
-		ImGui::SameLine(0.f, 0.f);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(kLinkColor).Value);
-		ImGui::TextUnformatted("None");
-		if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-		if (ImGui::IsItemClicked()) {
-			for (size_t i = 1; i < settings_.profession_colors.size(); ++i) settings_.profession_colors[i].enabled = false;
-		}
-		ImGui::PopStyleColor();
 
 		if (ImGui::BeginTable("##profession_colors_table", 5)) {
 			for (int c = 0; c < 5; ++c) {
