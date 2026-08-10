@@ -206,17 +206,25 @@ private:
 	uint64_t tick_ = 0, last_prune_tick_ = 0;
 };
 
+inline GW::Constants::ProfessionByte GetAgentProfession(const GW::AgentLiving* living) {
+	if (living->primary != GW::Constants::ProfessionByte::None) return living->primary;
+	const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
+	return npc ? static_cast<GW::Constants::ProfessionByte>(npc->primary) : GW::Constants::ProfessionByte::None;
+}
+
 class AgentNameCache {
 public:
 	struct NameLookup {
 		const std::wstring* lower;
 		const std::wstring* display;
 		const std::vector<std::wstring>* words;
+		GW::Constants::ProfessionByte profession;
 	};
 
-	NameLookup Get(uint32_t agent_id, const wchar_t* enc_name) {
-		Entry& entry = cache_[agent_id];
+	NameLookup Get(const GW::AgentLiving* living) {
+		Entry& entry = cache_[living->agent_id];
 		entry.last_seen_tick = tick_;
+		const wchar_t* enc_name = GW::Agents::GetAgentEncName(living->agent_id);
 		if (enc_name && wcsncmp(entry.last_enc, enc_name, kMaxEncLen - 1) != 0) {
 			wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
 			entry.buffer[0] = L'\0';
@@ -232,14 +240,19 @@ public:
 			WideToUtf8Into(entry.decoded_display, entry.decoded_display_utf8);
 			entry.converted = true;
 		}
-		return { &entry.decoded_lower, &entry.decoded_display, &entry.decoded_words_lower };
+		if (!entry.profession_resolved) {
+			entry.profession = GetAgentProfession(living);
+			entry.profession_resolved = true;
+		}
+		return { &entry.decoded_lower, &entry.decoded_display, &entry.decoded_words_lower, entry.profession };
 	}
 
 	const std::string& GetTruncated(uint32_t agent_id, ImFont* font, float font_size, float max_width) {
 		Entry& entry = cache_[agent_id];
-		if (entry.truncated_for_width != max_width) {
-			entry.truncated_utf8 = TruncateWithEllipsis(font, font_size, entry.decoded_display, entry.decoded_display_utf8, max_width);
-			entry.truncated_for_width = max_width;
+		const float quantized_width = std::floor(max_width / 4.f) * 4.f;
+		if (entry.truncated_for_width != quantized_width) {
+			entry.truncated_utf8 = TruncateWithEllipsis(font, font_size, entry.decoded_display, entry.decoded_display_utf8, quantized_width);
+			entry.truncated_for_width = quantized_width;
 		}
 		return entry.truncated_utf8;
 	}
@@ -259,6 +272,8 @@ private:
 		std::wstring decoded_lower, decoded_display;
 		std::vector<std::wstring> decoded_words_lower;
 		std::string decoded_display_utf8, truncated_utf8;
+		GW::Constants::ProfessionByte profession = GW::Constants::ProfessionByte::None;
+		bool profession_resolved = false;
 	};
 	std::unordered_map<uint32_t, Entry> cache_;
 	uint64_t tick_ = 0, last_prune_tick_ = 0;
@@ -348,7 +363,6 @@ public:
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
-		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kSendAbandonQuest, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&target_hook_entry_, GW::UI::UIMessage::kChangeTarget, OnTargetChanged);
 		GW::GameThread::Enqueue([] {
 			GW::UI::SetPreference(GW::UI::FlagPreference::AutoTargetNPCs, false);
@@ -448,6 +462,7 @@ private:
 	};
 	std::array<PriorityState, 2> priority_states_;
 
+	static constexpr uint64_t kDiscoveryIntervalMs = 150;
 	static constexpr float kNameplateFontSize = 18.f;
 	static constexpr float kStackSmoothing = 0.05f;
 	static constexpr float kBgTintAmount = 0.3f;
@@ -495,6 +510,7 @@ private:
 		const std::wstring* name_lower = nullptr;
 		const std::wstring* display = nullptr;
 		const std::vector<std::wstring>* words = nullptr;
+		GW::Constants::ProfessionByte profession = GW::Constants::ProfessionByte::None;
 		bool is_targeted = false, is_in_combat = false;
 		float natural_y = 0.f;
 		float dist_sq_from_me = -1.f;
@@ -505,6 +521,11 @@ private:
 	std::vector<PendingBar> pending_;
 	std::vector<PlacedRect> placed_;
 	std::vector<size_t> order_;
+	std::vector<uint32_t> discovered_agent_ids_;
+	uint64_t last_discovery_tick_ = 0;
+	std::optional<GW::Constants::MapID> last_known_map_id_;
+
+	static constexpr int kMaxStackResolutionIterations = 32;
 
 	void ResolveStacking(std::vector<PendingBar>& items) {
 		static constexpr float kGap = 2.f;
@@ -535,8 +556,10 @@ private:
 
 			float cur_top = natural_top;
 			bool moved = true;
-			while (moved) {
+			int iterations = 0;
+			while (moved && iterations < kMaxStackResolutionIterations) {
 				moved = false;
+				++iterations;
 				for (const auto& p : placed_) {
 					const float y_min = cur_top;
 					const float y_max = cur_top + item.footprint.y;
@@ -568,6 +591,13 @@ private:
 		const bool in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
 		const bool left_clicked_this_frame = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 
+		const GW::Constants::MapID current_map_id = GW::Map::GetMapID();
+		if (!last_known_map_id_.has_value() || *last_known_map_id_ != current_map_id) {
+			last_known_map_id_ = current_map_id;
+			discovered_agent_ids_.clear();
+			last_discovery_tick_ = 0;
+		}
+
 		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions);
 		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, true);
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
@@ -584,13 +614,19 @@ private:
 
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
+		const uint64_t now = GetTickCount64();
+		if (now - last_discovery_tick_ >= kDiscoveryIntervalMs) {
+			last_discovery_tick_ = now;
+			DiscoverQualifyingAgents(agents, me);
+		}
+
 		DirectX::XMMATRIX view_proj;
 		float viewport_width, viewport_height;
 		if (!BuildFrameProjection(view_proj, viewport_width, viewport_height)) return;
 
 		ImFont* font = ImGui::GetFont();
 
-		GatherPendingBars(agents, me, target, view_proj, viewport_width, viewport_height);
+		GatherPendingBars(me, target, view_proj, viewport_width, viewport_height);
 		ResolveStacking(pending_);
 		ApplyStackSmoothing();
 
@@ -613,10 +649,8 @@ private:
 		stack_y_smoother_.MaybePrune();
 	}
 
-	void GatherPendingBars(GW::AgentArray* agents, GW::AgentLiving* me, GW::AgentLiving* target,
-							const DirectX::XMMATRIX& view_proj,
-							float viewport_width, float viewport_height) {
-		pending_.clear();
+	void DiscoverQualifyingAgents(GW::AgentArray* agents, GW::AgentLiving* me) {
+		discovered_agent_ids_.clear();
 		const float max_range_sq = settings_.max_range * settings_.max_range;
 
 		for (GW::Agent* agent : *agents) {
@@ -651,10 +685,40 @@ private:
 				if (living->hp * 100.f > settings_.allied_health_threshold) continue;
 			}
 
-			ImVec2 screen;
-			if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) continue;
+			discovered_agent_ids_.push_back(living->agent_id);
+		}
+	}
 
-			const auto name_lookup = name_cache_.Get(living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
+	void GatherPendingBars(GW::AgentLiving* me, GW::AgentLiving* target,
+							const DirectX::XMMATRIX& view_proj,
+							float viewport_width, float viewport_height) {
+		pending_.clear();
+		const float max_range_sq = settings_.max_range * settings_.max_range;
+
+		for (size_t i = 0; i < discovered_agent_ids_.size(); ) {
+			const uint32_t agent_id = discovered_agent_ids_[i];
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
+			if (!living || living->GetIsDead()) {
+				discovered_agent_ids_[i] = discovered_agent_ids_.back();
+				discovered_agent_ids_.pop_back();
+				continue;
+			}
+
+			float dist_sq = -1.f;
+			if (!WithinRange(living, me, max_range_sq, dist_sq)) {
+				discovered_agent_ids_[i] = discovered_agent_ids_.back();
+				discovered_agent_ids_.pop_back();
+				continue;
+			}
+
+			ImVec2 screen;
+			if (!WorldToScreen(living, view_proj, viewport_width, viewport_height, screen)) {
+				++i;
+				continue;
+			}
+
+			const auto name_lookup = name_cache_.Get(living);
 
 			PendingBar pb;
 			pb.living = living;
@@ -663,6 +727,7 @@ private:
 			pb.name_lower = name_lookup.lower;
 			pb.display = name_lookup.display;
 			pb.words = name_lookup.words;
+			pb.profession = name_lookup.profession;
 			pb.is_targeted = target && living->agent_id == target->agent_id;
 			pb.dist_sq_from_me = dist_sq;
 
@@ -680,6 +745,7 @@ private:
 			pb.footprint = ImVec2(settings_.bar_width, settings_.bar_height);
 
 			pending_.push_back(std::move(pb));
+			++i;
 		}
 	}
 
@@ -824,7 +890,7 @@ private:
 		else {
 			std::optional<ImU32> profession_fill_color;
 			if (settings_.recolor_enemy_nameplates_by_profession && living->allegiance == GW::Constants::Allegiance::Enemy) {
-				profession_fill_color = TryGetProfessionColor(GetAgentProfession(living));
+				profession_fill_color = TryGetProfessionColor(pb.profession);
 			}
 			fill_color = profession_fill_color ? *profession_fill_color : ColorFor(living->allegiance);
 		}
@@ -876,12 +942,6 @@ private:
 		}
 	}
 
-	[[nodiscard]] static GW::Constants::ProfessionByte GetAgentProfession(const GW::AgentLiving* living) {
-		if (living->primary != GW::Constants::ProfessionByte::None) return living->primary;
-		const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
-		return npc ? static_cast<GW::Constants::ProfessionByte>(npc->primary) : GW::Constants::ProfessionByte::None;
-	}
-
 	[[nodiscard]] std::optional<ImU32> TryGetProfessionColor(GW::Constants::ProfessionByte prof) const {
 		const size_t index = static_cast<size_t>(prof);
 		if (index == 0 || index >= settings_.profession_colors.size()) return std::nullopt;
@@ -930,8 +990,7 @@ private:
 
 	static void OnQuestUpdate(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
 		if (msgid != GW::UI::UIMessage::kQuestAdded
-			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged
-			&& msgid != GW::UI::UIMessage::kSendAbandonQuest) return;
+			&& msgid != GW::UI::UIMessage::kQuestDetailsChanged) return;
 		RefreshAllNametags();
 		RefreshTargetedNametagViaRetarget();
 	}
@@ -959,13 +1018,13 @@ private:
 		}
 
 		if (is_enemy) {
-			const auto name_lookup = name_cache_.Get(living->agent_id, GW::Agents::GetAgentEncName(living->agent_id));
+			const auto name_lookup = name_cache_.Get(living);
 			if (const auto color = GetPriorityColor(*name_lookup.lower, *name_lookup.words)) {
 				tag->text_color = *color;
 				return;
 			}
 			if (settings_.recolor_enemy_nameplates_by_profession) {
-				if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
+				if (const auto color = TryGetProfessionColor(name_lookup.profession)) {
 					tag->text_color = *color;
 				}
 			}
