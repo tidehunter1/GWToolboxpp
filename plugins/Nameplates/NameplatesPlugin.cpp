@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 
@@ -770,9 +771,14 @@ private:
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
 	}
 
-	static void DrawCheckboxWithColor(const char* label, bool& toggle, uint32_t& color, const char* color_id) {
-		ImGui::Checkbox(label, &toggle);
+	static void RightAlignNextItem(float item_width) {
 		ImGui::SameLine();
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - item_width);
+	}
+
+	static void DrawCheckboxWithColorRightAligned(const char* label, bool& toggle, uint32_t& color, const char* color_id) {
+		ImGui::Checkbox(label, &toggle);
+		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
 		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			color = ImGui::ColorConvertFloat4ToU32(color_vec);
@@ -979,18 +985,15 @@ private:
 		}
 	}
 
-	void DrawPriorityInput(const char* label, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
-		ImGui::PushStyleColor(ImGuiCol_Text, ImColor(color).Value);
-		const bool changed = ImGui::InputText(label, buf, 512);
-		ImGui::PopStyleColor();
-		if (changed) {
+	void DrawPriorityInput(const char* input_id, const char* hint, const char* color_id, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
+		ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x));
+		if (ImGui::InputTextWithHint(input_id, hint, buf, 512)) {
 			raw = buf;
 			names = ParseSemicolonNameList(raw);
 		}
 		ImGui::SameLine();
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
-		const std::string picker_id = std::string("##color_") + label;
-		if (ImGui::ColorEdit3(picker_id.c_str(), &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			color = ImGui::ColorConvertFloat4ToU32(color_vec);
 		}
 	}
@@ -998,74 +1001,129 @@ private:
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Explorable Areas");
 
-		DrawCheckboxWithColor("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
-		DrawCheckboxWithColor("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
+		DrawCheckboxWithColorRightAligned("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
+		DrawCheckboxWithColorRightAligned("Show friendly nameplates", settings_.show_friendlies, settings_.friendly_color, "##color_friendly");
 
 		ImGui::Checkbox("Show summoned friendly nameplates", &settings_.show_summoned_allies);
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
+		ImGui::Checkbox("Color nameplate text by combat status", &settings_.color_nameplate_text_by_combat);
+		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
+		RightAlignNextItem(ImGui::GetFrameHeight());
+		ImVec4 combat_text_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.combat_text_color);
+		if (ImGui::ColorEdit3("##color_combat_text", &combat_text_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.combat_text_color = ImGui::ColorConvertFloat4ToU32(combat_text_color_vec);
+		}
+
+		ImGui::Checkbox("Color by boss", &settings_.color_by_boss);
+		ShowHelpMarker("Overrides other nameplate coloring (except Priority) for agents with the boss glow");
+		RightAlignNextItem(ImGui::GetFrameHeight());
+		ImVec4 boss_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.boss_color);
+		if (ImGui::ColorEdit3("##color_by_boss", &boss_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.boss_color = ImGui::ColorConvertFloat4ToU32(boss_color_vec);
+		}
+
+		ImGui::Spacing();
+		ImGui::TextUnformatted("Priority nameplate coloring");
+		ShowHelpMarker("Priority 1 matches full names exactly, semicolon-separated. \nPriority 2 matches whole words only, e.g. \"Monk\" matches \"Charr Monk\" but not \"Charrmonk\".");
+
+		static constexpr std::array<const char*, 2> kPriorityHints = {
+			"Keeper of Souls; Kournan Taskmaster",
+			"monk; healer; priest; mender"
+		};
+		static constexpr std::array<const char*, 2> kPriorityInputIds = { "##priority_input_0", "##priority_input_1" };
+		static constexpr std::array<const char*, 2> kPriorityColorIds = { "##priority_color_0", "##priority_color_1" };
+		for (size_t i = 0; i < 2; ++i) {
+			DrawPriorityInput(kPriorityInputIds[i], kPriorityHints[i], kPriorityColorIds[i], settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
+		}
+
+		ImGui::Spacing();
 		const bool alpha_enabled = settings_.fade_enemies_by_range;
 		ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
 		ShowHelpMarker("Fades enemy nameplates in steps based on distance, using the thresholds and opacity below.");
-		ImGui::SameLine();
-		ImGui::Text("%.0f-%.0f: 100%%  |  %.0f-%.0f: %.0f%%  |  %.0f+: %.0f%%",
-			0.f, settings_.fade_distance_near,
-			settings_.fade_distance_near, settings_.fade_distance_far, settings_.fade_opacity_mid * 100.f,
-			settings_.fade_distance_far, settings_.fade_opacity_far * 100.f);
 
 		if (!alpha_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
 
+		ImGui::TextUnformatted("Fade nameplates by distance");
+
+		ImGui::TextUnformatted("Fade distance thresholds");
 		float fade_distances[2] = { settings_.fade_distance_near, settings_.fade_distance_far };
-		if (ImGui::DragFloat2("Fade distance thresholds", fade_distances, 5.f, 0.f, 5000.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		if (ImGui::DragFloat2("##fade_distance_thresholds", fade_distances, 5.f, 0.f, 5000.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
 			if (fade_distances[1] < fade_distances[0]) fade_distances[1] = fade_distances[0];
 			settings_.fade_distance_near = fade_distances[0];
 			settings_.fade_distance_far = fade_distances[1];
 		}
 
+		ImGui::TextUnformatted("Fade opacity");
 		float fade_opacities[2] = { settings_.fade_opacity_mid * 100.f, settings_.fade_opacity_far * 100.f };
-		if (ImGui::SliderFloat2("Fade opacity", fade_opacities, 0.f, 100.f, "%.0f%%")) {
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		if (ImGui::DragFloat2("##fade_opacity", fade_opacities, 0.5f, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
 			settings_.fade_opacity_mid = fade_opacities[0] / 100.f;
 			settings_.fade_opacity_far = fade_opacities[1] / 100.f;
 		}
 
+		char fade_summary[160];
+		snprintf(fade_summary, sizeof(fade_summary), "0-%.0f: 100%%  \xe2\x80\xa2  %.0f-%.0f: %.0f%%  \xe2\x80\xa2  %.0f+: %.0f%%",
+			settings_.fade_distance_near,
+			settings_.fade_distance_near, settings_.fade_distance_far, settings_.fade_opacity_mid * 100.f,
+			settings_.fade_distance_far, settings_.fade_opacity_far * 100.f);
+		const float fade_summary_width = ImGui::CalcTextSize(fade_summary).x;
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, (ImGui::GetContentRegionAvail().x - fade_summary_width) / 2.f));
+		ImGui::TextUnformatted(fade_summary);
+
 		if (!alpha_enabled) ImGui::PopStyleVar();
 
-		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
-		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
+		ImGui::Separator();
 
-		const float border_thickness_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
-		ImGui::SetNextItemWidth(border_thickness_width);
-		ImGui::DragFloat("##border_thickness", &settings_.border_thickness, 0.02f, 1.0f, 3.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SameLine();
-		ImGui::TextUnformatted("Border thickness");
-		ImGui::SameLine();
-		ImVec4 border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.border_color);
-		if (ImGui::ColorEdit3("##color_border", &border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.border_color = ImGui::ColorConvertFloat4ToU32(border_color_vec);
-		}
-		ImGui::SameLine();
-		ImGui::TextUnformatted("Target border color");
-		ImGui::SameLine();
-		ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
-		if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
+		if (ImGui::BeginTable("##border_row", 3)) {
+			ImGui::TableSetupColumn("##thickness_col", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+			ImGui::TableSetupColumn("##bordercolor_col", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("##targetcolor_col", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted("Border thickness");
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted("Border color");
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted("Target color");
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			ImGui::DragFloat("##border_thickness", &settings_.border_thickness, 0.02f, 1.0f, 3.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::TableNextColumn();
+			ImVec4 border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.border_color);
+			if (ImGui::ColorEdit3("##color_border", &border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+				settings_.border_color = ImGui::ColorConvertFloat4ToU32(border_color_vec);
+			}
+			ImGui::TableNextColumn();
+			ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
+			if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+				settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
+			}
+			ImGui::EndTable();
 		}
 
+		ImGui::TextUnformatted("NPC & ally visibility threshold");
+		ShowHelpMarker("0 = off, 100 = on");
 		int thresholds[2] = {
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
 			static_cast<int>(std::lround(settings_.allied_health_threshold))
 		};
-		if (ImGui::DragInt2("NPC & ally visibility threshold", thresholds, 1.f, 0, 100, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		if (ImGui::DragInt2("##npc_ally_threshold", thresholds, 1.f, 0, 100, "%d", ImGuiSliderFlags_AlwaysClamp)) {
 			settings_.npc_health_threshold = static_cast<float>(thresholds[0]);
 			settings_.allied_health_threshold = static_cast<float>(thresholds[1]);
 		}
-		ShowHelpMarker("0 = off, 100 = on");
 
-		if (ImGui::DragFloat("Max range", &settings_.max_range, 5.f, 500.f, 5000.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
+		ImGui::TextUnformatted("Max range");
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		if (ImGui::DragFloat("##max_range", &settings_.max_range, 5.f, 500.f, 5000.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
 			settings_.max_range = std::round(settings_.max_range);
 		}
 
-		const float half_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
+		ImGui::TextUnformatted("Bar width & height");
+		const float half_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
 		ImGui::PushItemWidth(half_width);
 		if (ImGui::DragFloat("##bar_width", &settings_.bar_width, 1.f, 50.f, 300.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
 			settings_.bar_width = std::round(settings_.bar_width);
@@ -1075,27 +1133,13 @@ private:
 			settings_.bar_height = std::round(settings_.bar_height);
 		}
 		ImGui::PopItemWidth();
-		ImGui::SameLine();
-		ImGui::TextUnformatted("Bar width & height");
-
-		ImGui::Separator();
-		ImGui::TextUnformatted("Priority nameplate coloring");
-		ShowHelpMarker("Priority 1 matches full names exactly, semicolon-separated. \nPriority 2 matches whole words only, e.g. \"Monk\" matches \"Charr Monk\" but not \"Charrmonk\".");
-
-		for (size_t i = 0; i < 2; ++i) {
-			const std::string label = "Priority " + std::to_string(i + 1);
-			DrawPriorityInput(label.c_str(), settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
-		}
-
-		DrawCheckboxWithColor("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
-		ShowHelpMarker("Overrides other nameplate coloring (except Priority) for agents with the boss glow");
 
 		ImGui::SeparatorText("All Areas");
 
-		DrawCheckboxWithColor("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
+		DrawCheckboxWithColorRightAligned("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
 
 		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
-		ImGui::SameLine();
+
 		ImGui::Checkbox("Color enemy nameplates by profession", &settings_.recolor_enemy_nameplates_by_profession);
 		ShowHelpMarker("Works on Players/Heroes/Henchmen (nametags) and enemy nameplates. Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
