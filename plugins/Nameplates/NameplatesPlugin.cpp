@@ -1016,7 +1016,7 @@ private:
 		if (!alpha_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
 
 		float fade_distances[2] = { settings_.fade_distance_near, settings_.fade_distance_far };
-		if (ImGui::DragFloat2("Fade distance thresholds", fade_distances, 5.f, 0.f, 5000.f, "%.0f")) {
+		if (ImGui::DragFloat2("Fade distance thresholds", fade_distances, 5.f, 0.f, 5000.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
 			if (fade_distances[1] < fade_distances[0]) fade_distances[1] = fade_distances[0];
 			settings_.fade_distance_near = fade_distances[0];
 			settings_.fade_distance_far = fade_distances[1];
@@ -1035,7 +1035,7 @@ private:
 
 		const float border_thickness_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
 		ImGui::SetNextItemWidth(border_thickness_width);
-		ImGui::DragFloat("##border_thickness", &settings_.border_thickness, 0.02f, 1.0f, 3.0f, "%.1f");
+		ImGui::DragFloat("##border_thickness", &settings_.border_thickness, 0.02f, 1.0f, 3.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		ImGui::SameLine();
 		ImGui::TextUnformatted("Border thickness");
 		ImGui::SameLine();
@@ -1055,23 +1055,23 @@ private:
 			static_cast<int>(std::lround(settings_.npc_health_threshold)),
 			static_cast<int>(std::lround(settings_.allied_health_threshold))
 		};
-		if (ImGui::DragInt2("NPC & ally visibility threshold", thresholds, 1.f, 0, 100)) {
+		if (ImGui::DragInt2("NPC & ally visibility threshold", thresholds, 1.f, 0, 100, "%d", ImGuiSliderFlags_AlwaysClamp)) {
 			settings_.npc_health_threshold = static_cast<float>(thresholds[0]);
 			settings_.allied_health_threshold = static_cast<float>(thresholds[1]);
 		}
 		ShowHelpMarker("0 = off, 100 = on");
 
-		if (ImGui::DragFloat("Max range", &settings_.max_range, 5.f, 500.f, 5000.f, "%.0f")) {
+		if (ImGui::DragFloat("Max range", &settings_.max_range, 5.f, 500.f, 5000.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
 			settings_.max_range = std::round(settings_.max_range);
 		}
 
 		const float half_width = (ImGui::CalcItemWidth() - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
 		ImGui::PushItemWidth(half_width);
-		if (ImGui::DragFloat("##bar_width", &settings_.bar_width, 1.f, 50.f, 300.f, "%.0f")) {
+		if (ImGui::DragFloat("##bar_width", &settings_.bar_width, 1.f, 50.f, 300.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
 			settings_.bar_width = std::round(settings_.bar_width);
 		}
 		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
-		if (ImGui::DragFloat("##bar_height", &settings_.bar_height, 0.2f, 15.f, 30.f, "%.0f")) {
+		if (ImGui::DragFloat("##bar_height", &settings_.bar_height, 0.2f, 15.f, 30.f, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
 			settings_.bar_height = std::round(settings_.bar_height);
 		}
 		ImGui::PopItemWidth();
