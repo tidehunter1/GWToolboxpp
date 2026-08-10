@@ -307,6 +307,8 @@ struct NameplateSettings {
 	bool recolor_enemy_nameplates_by_profession = false;
 	uint32_t combat_text_color = IM_COL32(255, 255, 0, 255);
 	float max_range = 3500.0f, bar_width = 200.0f, bar_height = 20.0f, npc_health_threshold = 60.0f, allied_health_threshold = 60.0f;
+	float fade_distance_near = 1500.0f, fade_distance_far = 2500.0f;
+	float fade_opacity_mid = 0.75f, fade_opacity_far = 0.50f;
 	float border_thickness = 1.0f;
 	uint32_t enemy_color = IM_COL32(220, 40, 40, 255), quest_color = IM_COL32(255, 179, 71, 255), friendly_color = IM_COL32(0, 255, 152, 255);
 	uint32_t target_border_color = IM_COL32(255, 255, 0, 255);
@@ -363,6 +365,7 @@ public:
 		ToolboxPlugin::LoadSettings(folder);
 		#define L_SET(var) LoadSetting(#var, settings_.var)
 		L_SET(show_enemies); L_SET(max_range); L_SET(bar_width); L_SET(bar_height); L_SET(border_thickness);
+		L_SET(fade_distance_near); L_SET(fade_distance_far); L_SET(fade_opacity_mid); L_SET(fade_opacity_far);
 		L_SET(npc_health_threshold); L_SET(allied_health_threshold);
 		L_SET(show_summoned_allies);
 		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
@@ -389,6 +392,7 @@ public:
 	void SaveSettings(const wchar_t* folder) override {
 		#define S_SET(var) SaveSetting(#var, settings_.var)
 		S_SET(show_enemies); S_SET(max_range); S_SET(bar_width); S_SET(bar_height); S_SET(border_thickness);
+		S_SET(fade_distance_near); S_SET(fade_distance_far); S_SET(fade_opacity_mid); S_SET(fade_opacity_far);
 		S_SET(npc_health_threshold); S_SET(allied_health_threshold);
 		S_SET(show_summoned_allies);
 		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
@@ -456,13 +460,12 @@ private:
 	static constexpr float kZNear = 46.875f;
 	static constexpr float kZFar  = 48000.f;
 
-	static constexpr float kFadeRange1Sq = 1500.f * 1500.f;
-	static constexpr float kFadeRange2Sq = 2500.f * 2500.f;
-
-	[[nodiscard]] static float GetRangeOpacityMultiplier(float dist_sq) {
-		if (dist_sq <= kFadeRange1Sq)   return 1.00f;
-		if (dist_sq <= kFadeRange2Sq)   return 0.75f;
-		return 0.50f;
+	[[nodiscard]] float GetRangeOpacityMultiplier(float dist_sq) const {
+		const float near_sq = settings_.fade_distance_near * settings_.fade_distance_near;
+		const float far_sq = settings_.fade_distance_far * settings_.fade_distance_far;
+		if (dist_sq <= near_sq) return 1.00f;
+		if (dist_sq <= far_sq) return settings_.fade_opacity_mid;
+		return settings_.fade_opacity_far;
 	}
 
 	void RefreshPriorityBuffersAndLists() {
@@ -776,17 +779,19 @@ private:
 		}
 	}
 
-	void DrawProfessionCell(size_t index, float swatch_offset) {
+	void DrawProfessionCell(size_t index) {
 		ProfessionColorConfig& cfg = settings_.profession_colors[index];
 		ImGui::PushID(static_cast<int>(index));
 		const bool was_enabled = cfg.enabled;
 		if (!was_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
-		ImGui::Checkbox(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)), &cfg.enabled);
-		ImGui::SameLine(swatch_offset);
+		ImGui::Checkbox("##enabled", &cfg.enabled);
+		ImGui::SameLine();
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(cfg.color);
 		if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			cfg.color = ImGui::ColorConvertFloat4ToU32(color_vec);
 		}
+		ImGui::SameLine();
+		ImGui::TextUnformatted(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)));
 		if (!was_enabled) ImGui::PopStyleVar();
 		ImGui::PopID();
 	}
@@ -1000,7 +1005,25 @@ private:
 		ShowHelpMarker("Show spirits, minions & summoning stones, minipets are always hidden");
 
 		ImGui::Checkbox("Use nameplate alpha", &settings_.fade_enemies_by_range);
-		ShowHelpMarker("Nameplates fade in steps: \n0-1500 range, 100% opaque \n1500-2500 range, 75% transparency \n2500 range and above, 50% transparency");
+		ShowHelpMarker("Fades enemy nameplates in steps based on distance, using the thresholds and opacity below.");
+
+		float fade_distances[2] = { settings_.fade_distance_near, settings_.fade_distance_far };
+		if (ImGui::SliderFloat2("Fade distance thresholds", fade_distances, 500.f, 5000.f, "%.0f")) {
+			if (fade_distances[1] < fade_distances[0]) fade_distances[1] = fade_distances[0];
+			settings_.fade_distance_near = fade_distances[0];
+			settings_.fade_distance_far = fade_distances[1];
+		}
+
+		float fade_opacities[2] = { settings_.fade_opacity_mid * 100.f, settings_.fade_opacity_far * 100.f };
+		if (ImGui::SliderFloat2("Fade opacity", fade_opacities, 0.f, 100.f, "%.0f%%")) {
+			settings_.fade_opacity_mid = fade_opacities[0] / 100.f;
+			settings_.fade_opacity_far = fade_opacities[1] / 100.f;
+		}
+
+		ImGui::Text("%.0f-%.0f: 100%%  |  %.0f-%.0f: %.0f%%  |  %.0f+: %.0f%%",
+			0.f, settings_.fade_distance_near,
+			settings_.fade_distance_near, settings_.fade_distance_far, settings_.fade_opacity_mid * 100.f,
+			settings_.fade_distance_far, settings_.fade_opacity_far * 100.f);
 
 		DrawCheckboxWithColor("Color nameplate text by combat status", settings_.color_nameplate_text_by_combat, settings_.combat_text_color, "##color_combat_text");
 		ShowHelpMarker("Enemies that are in-combat stance regardless of distance have their name colored, \nenemies within earshot and are moving are also colored this way");
@@ -1098,12 +1121,6 @@ private:
 		}
 		ImGui::PopStyleColor();
 
-		float max_acronym_width = 0.f;
-		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
-			max_acronym_width = std::max(max_acronym_width, ImGui::CalcTextSize(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(i))).x);
-		}
-		const float profession_swatch_offset = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + max_acronym_width + ImGui::GetStyle().ItemInnerSpacing.x * 2.f;
-
 		if (ImGui::BeginTable("##profession_colors_table", 5)) {
 			for (int c = 0; c < 5; ++c) {
 				ImGui::TableSetupColumn("##pcol", ImGuiTableColumnFlags_WidthStretch);
@@ -1112,7 +1129,7 @@ private:
 				ImGui::TableNextRow();
 				for (size_t col = 0; col < 5; ++col) {
 					ImGui::TableNextColumn();
-					DrawProfessionCell(row * 5 + col + 1, profession_swatch_offset);
+					DrawProfessionCell(row * 5 + col + 1);
 				}
 			}
 			ImGui::EndTable();
