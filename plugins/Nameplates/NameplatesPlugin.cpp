@@ -1074,16 +1074,16 @@ private:
 
 		ImGui::Separator();
 
-		ImGui::TextUnformatted("Border thickness");
+		ImGui::TextUnformatted("Nameplate border thickness");
 		const float border_thickness_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemInnerSpacing.x) / 2.f;
 		ImGui::SetNextItemWidth(border_thickness_width);
 		ImGui::DragFloat("##border_thickness", &settings_.border_thickness, 0.02f, 1.0f, 3.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 
 		const float swatch_w = ImGui::GetFrameHeight();
-		const float border_label_w = ImGui::CalcTextSize("Border").x;
-		const float target_label_w = ImGui::CalcTextSize("Target").x;
+		const float default_label_w = ImGui::CalcTextSize("Default Color").x;
+		const float target_label_w = ImGui::CalcTextSize("Target Color").x;
 		const float inner_spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-		const float border_group_width = swatch_w + inner_spacing + border_label_w + inner_spacing * 2.f + swatch_w + inner_spacing + target_label_w;
+		const float border_group_width = swatch_w + inner_spacing + default_label_w + inner_spacing * 2.f + swatch_w + inner_spacing + target_label_w;
 		ImGui::SameLine();
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - border_group_width);
 
@@ -1091,15 +1091,15 @@ private:
 		if (ImGui::ColorEdit3("##color_border", &border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.border_color = ImGui::ColorConvertFloat4ToU32(border_color_vec);
 		}
-		ImGui::SameLine();
-		ImGui::TextUnformatted("Border");
-		ImGui::SameLine();
+		ImGui::SameLine(0.f, inner_spacing);
+		ImGui::TextUnformatted("Default Color");
+		ImGui::SameLine(0.f, inner_spacing * 2.f);
 		ImVec4 target_border_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.target_border_color);
 		if (ImGui::ColorEdit3("##color_target_border", &target_border_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.target_border_color = ImGui::ColorConvertFloat4ToU32(target_border_color_vec);
 		}
-		ImGui::SameLine();
-		ImGui::TextUnformatted("Target");
+		ImGui::SameLine(0.f, inner_spacing);
+		ImGui::TextUnformatted("Target Color");
 
 		ImGui::TextUnformatted("NPC & ally visibility threshold");
 		ShowHelpMarker("0 = off, 100 = on");
