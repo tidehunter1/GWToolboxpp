@@ -195,6 +195,12 @@ public:
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
 
+	void Clear() {
+		cache_.clear();
+		tick_ = 0;
+		last_prune_tick_ = 0;
+	}
+
 private:
 	static constexpr uint64_t kPruneIntervalTicks = 1800;
 	struct Entry {
@@ -258,6 +264,12 @@ public:
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
+
+	void Clear() {
+		cache_.clear();
+		tick_ = 0;
+		last_prune_tick_ = 0;
+	}
 
 private:
 	static constexpr size_t kBufferLen = 256;
@@ -364,6 +376,7 @@ public:
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&target_hook_entry_, GW::UI::UIMessage::kChangeTarget, OnTargetChanged);
+		GW::UI::RegisterUIMessageCallback(&map_hook_entry_, GW::UI::UIMessage::kMapLoaded, OnMapLoaded);
 		GW::GameThread::Enqueue([] {
 			GW::UI::SetPreference(GW::UI::FlagPreference::AutoTargetNPCs, false);
 		});
@@ -437,6 +450,7 @@ public:
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&target_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&map_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9* ) override { DrawNameplates(); }
@@ -452,6 +466,7 @@ private:
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry target_hook_entry_;
+	GW::HookEntry map_hook_entry_;
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
@@ -1001,6 +1016,15 @@ private:
 		if (!packet) return;
 		if (!packet->has_evaluated_target_changed && !packet->has_auto_target_changed && !packet->has_manual_target_changed) return;
 		RefreshAllNametags();
+	}
+
+	static void OnMapLoaded(GW::HookStatus*, GW::UI::UIMessage msgid, void*, void*) {
+		if (msgid != GW::UI::UIMessage::kMapLoaded) return;
+		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
+		self->name_cache_.Clear();
+		self->stack_y_smoother_.Clear();
+		self->discovered_agent_ids_.clear();
+		self->last_discovery_tick_ = 0;
 	}
 
 	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
