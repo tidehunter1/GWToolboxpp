@@ -461,6 +461,24 @@ private:
 		RefreshAllNametags();
 	}
 
+	static void OnDiagnosticPacket(GW::HookStatus*, GW::Packet::StoC::PacketBase* packet) {
+		if (!packet) return;
+		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
+		self->LogDiagnosticPacket(packet->header);
+	}
+
+	void LogDiagnosticPacket(uint32_t header) {
+		diag_log_.push_back({header, GetTickCount64()});
+		if (diag_log_.size() > kDiagLogCap) diag_log_.erase(diag_log_.begin());
+	}
+
+	[[nodiscard]] const char* DiagOpcodeLabel(uint32_t header) const {
+		for (const auto& info : kDiagOpcodes) {
+			if (info.header == header) return info.label;
+		}
+		return "Unknown";
+	}
+
 	void HandleAgentNameTag(GW::HookStatus*, GW::UI::AgentNameTagInfo* tag) {
 		if (!tag) return;
 
@@ -523,9 +541,19 @@ private:
 		ImGui::TextUnformatted(label);
 	}
 
+	void DrawDiagnosticPacketLog() {
+		ImGui::TextUnformatted("Recent quest/NPC-related packets:");
+		char line[64];
+		for (auto it = diag_log_.rbegin(); it != diag_log_.rend(); ++it) {
+			snprintf(line, sizeof(line), "[%llu] %s (0x%04X)", static_cast<unsigned long long>(it->tick_ms), DiagOpcodeLabel(it->header), it->header);
+			ImGui::TextUnformatted(line);
+		}
+	}
+
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Debug");
 		DrawTargetProfessionDebug();
+		DrawDiagnosticPacketLog();
 
 		ImGui::SeparatorText("Nametags");
 
