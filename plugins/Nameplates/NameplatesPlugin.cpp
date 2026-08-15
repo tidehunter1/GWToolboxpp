@@ -190,7 +190,7 @@ inline bool SetAgentName(uint32_t agent_id, const wchar_t* name) {
 	GW::Packet::StoC::AgentName packet;
 	packet.header = GW::Packet::StoC::AgentName::STATIC_HEADER;
 	packet.agent_id = agent_id;
-	wcscpy(packet.name_enc, name);
+	wcscpy_s(packet.name_enc, _countof(packet.name_enc), name);
 	GW::StoC::EmulatePacket(&packet);
 	return true;
 }
