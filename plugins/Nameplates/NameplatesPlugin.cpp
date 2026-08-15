@@ -1060,7 +1060,7 @@ private:
 			renamed_agent_ids_.insert(living->agent_id);
 			const uint32_t agent_id = living->agent_id;
 			GW::GameThread::Enqueue([agent_id] {
-				static constexpr wchar_t kTestRenameEnc[] = L"\x108\x107<c=#FF0000>A</c><c=#00FF00>B</c>\x1";
+				static constexpr wchar_t kTestRenameEnc[] = L"\x108\x107<c=#FF0000>A<c=#00FF00>B<c=#0000FF>C\x1";
 				if (SetAgentName(agent_id, kTestRenameEnc)) {
 					RefreshAllNametags();
 				}
