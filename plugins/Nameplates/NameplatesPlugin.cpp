@@ -24,6 +24,8 @@
 #include <GWCA/Managers/QuestMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
+#include <GWCA/Context/WorldContext.h>
+#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -181,6 +183,27 @@ inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
 	return out;
 }
 
+inline void LogAgentInfoIndexCheck(uint32_t agent_id) {
+	wchar_t buf[256];
+	auto* ctx = GW::GetWorldContext();
+	if (!ctx) {
+		swprintf_s(buf, L"[index-check] agent %u: no WorldContext", agent_id);
+		GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
+		return;
+	}
+	const GW::AgentInfo* info = ctx->agent_infos.get(agent_id);
+	const wchar_t* via_getter = GW::Agents::GetAgentEncName(agent_id);
+	if (!info) {
+		swprintf_s(buf, L"[index-check] agent %u: index out of bounds (array size %u)", agent_id, ctx->agent_infos.size());
+		GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
+		return;
+	}
+	swprintf_s(buf, L"[index-check] agent %u: agent_infos.name_enc=%p GetAgentEncName=%p match=%s",
+		agent_id, static_cast<const void*>(info->name_enc), static_cast<const void*>(via_getter),
+		info->name_enc == via_getter ? L"YES" : L"NO");
+	GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
+}
+
 inline bool SetAgentName(uint32_t agent_id, const wchar_t* name) {
 	const auto* a = static_cast<GW::AgentLiving*>(GW::Agents::GetAgentByID(agent_id));
 	if (!a || !name) return false;
@@ -194,6 +217,42 @@ inline bool SetAgentName(uint32_t agent_id, const wchar_t* name) {
 	wcscpy_s(packet.name_enc, _countof(packet.name_enc), name);
 	GW::StoC::EmulatePacket(&packet);
 	return true;
+}
+
+inline void ColorToHex(ImU32 color, wchar_t out[7]) {
+	const ImVec4 c = ImGui::ColorConvertU32ToFloat4(color);
+	const uint8_t r = static_cast<uint8_t>(std::round(c.x * 255.f));
+	const uint8_t g = static_cast<uint8_t>(std::round(c.y * 255.f));
+	const uint8_t b = static_cast<uint8_t>(std::round(c.z * 255.f));
+	swprintf_s(out, 7, L"%02X%02X%02X", r, g, b);
+}
+
+inline ImU32 DimColor(ImU32 color, float factor) {
+	ImVec4 c = ImGui::ColorConvertU32ToFloat4(color);
+	c.x *= factor;
+	c.y *= factor;
+	c.z *= factor;
+	return ImGui::ColorConvertFloat4ToU32(c);
+}
+
+inline std::wstring BuildHpSplitNameEnc(const std::wstring& name, int split_index, ImU32 full_color, ImU32 damaged_color, bool& out_fits) {
+	wchar_t full_hex[7], damaged_hex[7];
+	ColorToHex(full_color, full_hex);
+	ColorToHex(damaged_color, damaged_hex);
+
+	std::wstring result = L"\x108\x107<c=#";
+	result += full_hex;
+	result += L">";
+	result += name.substr(0, static_cast<size_t>(split_index));
+	if (static_cast<size_t>(split_index) < name.size()) {
+		result += L"<c=#";
+		result += damaged_hex;
+		result += name.substr(static_cast<size_t>(split_index));
+	}
+	result += L"\x1";
+
+	out_fits = result.size() < 40;
+	return result;
 }
 
 class StackYSmoother {
@@ -363,6 +422,9 @@ struct NameplateSettings {
 	bool color_by_boss = false;
 	uint32_t boss_color = IM_COL32(255, 215, 0, 255);
 
+	bool hp_split_naming = false;
+	uint32_t hp_split_full_color = IM_COL32(255, 255, 0, 255);
+
 	std::array<ProfessionColorConfig, 11> profession_colors = {{
 		{false, IM_COL32(221, 221, 221, 255)},
 		{true, IM_COL32(255, 255, 136, 255)},
@@ -418,6 +480,7 @@ public:
 		L_SET(recolor_enemy_nameplates_by_profession);
 		L_SET(show_friendlies); L_SET(friendly_color); L_SET(enemy_color); L_SET(quest_color); L_SET(target_border_color); L_SET(border_color);
 		L_SET(color_by_boss); L_SET(boss_color);
+		L_SET(hp_split_naming); L_SET(hp_split_full_color);
 		L_SET(fade_enemies_by_range); L_SET(color_nameplate_text_by_combat); L_SET(combat_text_color);
 		LoadSetting("visible", visible_);
 		#undef L_SET
@@ -445,6 +508,7 @@ public:
 		S_SET(recolor_enemy_nameplates_by_profession);
 		S_SET(show_friendlies); S_SET(friendly_color); S_SET(enemy_color); S_SET(quest_color); S_SET(target_border_color); S_SET(border_color);
 		S_SET(color_by_boss); S_SET(boss_color);
+		S_SET(hp_split_naming); S_SET(hp_split_full_color);
 		S_SET(fade_enemies_by_range); S_SET(color_nameplate_text_by_combat); S_SET(combat_text_color);
 		SaveSetting("visible", visible_);
 		#undef S_SET
@@ -489,8 +553,12 @@ private:
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
 
-	bool test_rename_enemies_ = true;
-	std::unordered_set<uint32_t> renamed_agent_ids_;
+	std::unordered_map<uint32_t, int> hp_split_last_index_;
+
+	bool test_agent_info_index_check_ = true;
+	int agent_info_index_check_count_ = 0;
+	static constexpr int kMaxAgentInfoIndexChecks = 6;
+	std::unordered_set<uint32_t> agent_info_index_checked_;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -756,6 +824,10 @@ private:
 
 			const auto name_lookup = name_cache_.Get(living);
 
+			if (settings_.hp_split_naming && living->allegiance == GW::Constants::Allegiance::Enemy) {
+				UpdateHpSplitName(living, *name_lookup.display);
+			}
+
 			PendingBar pb;
 			pb.living = living;
 			pb.screen = screen;
@@ -783,6 +855,29 @@ private:
 			pending_.push_back(std::move(pb));
 			++i;
 		}
+	}
+
+	void UpdateHpSplitName(const GW::AgentLiving* living, const std::wstring& display_name) {
+		if (display_name.empty() || living->GetIsDead()) return;
+
+		const float hp = std::clamp(living->hp, 0.f, 1.f);
+		const int name_len = static_cast<int>(display_name.size());
+		const int split_index = std::clamp(static_cast<int>(std::lround(hp * static_cast<float>(name_len))), 0, name_len);
+
+		int& last_index = hp_split_last_index_[living->agent_id];
+		if (last_index == split_index) return;
+		last_index = split_index;
+
+		bool fits = false;
+		std::wstring enc = BuildHpSplitNameEnc(display_name, split_index, settings_.hp_split_full_color, DimColor(settings_.hp_split_full_color, 0.45f), fits);
+		if (!fits) return;
+
+		const uint32_t agent_id = living->agent_id;
+		GW::GameThread::Enqueue([agent_id, enc] {
+			if (SetAgentName(agent_id, enc.c_str())) {
+				RefreshAllNametags();
+			}
+		});
 	}
 
 	void ApplyStackSmoothing() {
@@ -1046,7 +1141,9 @@ private:
 		self->stack_y_smoother_.Clear();
 		self->discovered_agent_ids_.clear();
 		self->last_discovery_tick_ = 0;
-		self->renamed_agent_ids_.clear();
+		self->hp_split_last_index_.clear();
+		self->agent_info_index_checked_.clear();
+		self->agent_info_index_check_count_ = 0;
 	}
 
 	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
@@ -1056,15 +1153,10 @@ private:
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
 
-		if (test_rename_enemies_ && living->allegiance == GW::Constants::Allegiance::Enemy && !renamed_agent_ids_.count(living->agent_id)) {
-			renamed_agent_ids_.insert(living->agent_id);
-			const uint32_t agent_id = living->agent_id;
-			GW::GameThread::Enqueue([agent_id] {
-				static constexpr wchar_t kTestRenameEnc[] = L"\x108\x107<c=#FF0000>A<c=#00FF00>B<c=#0000FF>C\x1";
-				if (SetAgentName(agent_id, kTestRenameEnc)) {
-					RefreshAllNametags();
-				}
-			});
+		if (test_agent_info_index_check_ && agent_info_index_check_count_ < kMaxAgentInfoIndexChecks && !agent_info_index_checked_.count(living->agent_id)) {
+			agent_info_index_checked_.insert(living->agent_id);
+			++agent_info_index_check_count_;
+			LogAgentInfoIndexCheck(living->agent_id);
 		}
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
@@ -1115,8 +1207,8 @@ private:
 	}
 
 	void DrawSettingsInternal() {
-		ImGui::Checkbox("Experimental: rename enemy nametags (packet emulation)", &test_rename_enemies_);
-		ShowHelpMarker("Renames each newly-seen enemy to a test string via GW::StoC::EmulatePacket, the same mechanism used for summon renaming.");
+		DrawCheckboxWithColorRightAligned("Color enemy names by remaining health", settings_.hp_split_naming, settings_.hp_split_full_color, "##color_hp_split");
+		ShowHelpMarker("Splits each enemy's name into a bright and dim portion of this color, moving with their current HP. Renames via packet emulation, so names longer than ~14 characters won't fit and are left unchanged.");
 		ImGui::Separator();
 
 		ImGui::SeparatorText("Explorable Areas");
