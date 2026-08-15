@@ -25,7 +25,6 @@
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
 #include <GWCA/Context/WorldContext.h>
-#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -36,7 +35,6 @@
 #include <string_view>
 #include <sstream>
 #include <unordered_map>
-#include <unordered_set>
 #include <cwchar>
 #include <optional>
 #include <cfloat>
@@ -183,27 +181,6 @@ inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
 	return out;
 }
 
-inline void LogAgentInfoIndexCheck(uint32_t agent_id) {
-	wchar_t buf[256];
-	auto* ctx = GW::GetWorldContext();
-	if (!ctx) {
-		swprintf_s(buf, L"[index-check] agent %u: no WorldContext", agent_id);
-		GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
-		return;
-	}
-	const GW::AgentInfo* info = ctx->agent_infos.get(agent_id);
-	const wchar_t* via_getter = GW::Agents::GetAgentEncName(agent_id);
-	if (!info) {
-		swprintf_s(buf, L"[index-check] agent %u: index out of bounds (array size %u)", agent_id, ctx->agent_infos.size());
-		GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
-		return;
-	}
-	swprintf_s(buf, L"[index-check] agent %u: agent_infos.name_enc=%p GetAgentEncName=%p match=%s",
-		agent_id, static_cast<const void*>(info->name_enc), static_cast<const void*>(via_getter),
-		info->name_enc == via_getter ? L"YES" : L"NO");
-	GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
-}
-
 inline bool SetAgentName(uint32_t agent_id, const wchar_t* name) {
 	const auto* a = static_cast<GW::AgentLiving*>(GW::Agents::GetAgentByID(agent_id));
 	if (!a || !name) return false;
@@ -235,7 +212,7 @@ inline ImU32 DimColor(ImU32 color, float factor) {
 	return ImGui::ColorConvertFloat4ToU32(c);
 }
 
-inline std::wstring BuildHpSplitNameEnc(const std::wstring& name, int split_index, ImU32 full_color, ImU32 damaged_color, bool& out_fits) {
+inline std::wstring BuildHpSplitNameEnc(const std::wstring& name, int split_index, ImU32 full_color, ImU32 damaged_color, bool& out_fits, size_t max_len) {
 	wchar_t full_hex[7], damaged_hex[7];
 	ColorToHex(full_color, full_hex);
 	ColorToHex(damaged_color, damaged_hex);
@@ -251,7 +228,7 @@ inline std::wstring BuildHpSplitNameEnc(const std::wstring& name, int split_inde
 	}
 	result += L"\x1";
 
-	out_fits = result.size() < 40;
+	out_fits = result.size() < max_len;
 	return result;
 }
 
@@ -555,10 +532,8 @@ private:
 
 	std::unordered_map<uint32_t, int> hp_split_last_index_;
 
-	bool test_agent_info_index_check_ = true;
-	int agent_info_index_check_count_ = 0;
-	static constexpr int kMaxAgentInfoIndexChecks = 6;
-	std::unordered_set<uint32_t> agent_info_index_checked_;
+	bool test_agent_info_direct_write_ = true;
+	std::unordered_map<uint32_t, std::vector<wchar_t>> agent_info_name_buffers_;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -868,8 +843,15 @@ private:
 		if (last_index == split_index) return;
 		last_index = split_index;
 
+		const ImU32 damaged_color = DimColor(settings_.hp_split_full_color, 0.45f);
+
+		if (test_agent_info_direct_write_) {
+			UpdateHpSplitNameDirect(living, display_name, split_index, damaged_color);
+			return;
+		}
+
 		bool fits = false;
-		std::wstring enc = BuildHpSplitNameEnc(display_name, split_index, settings_.hp_split_full_color, DimColor(settings_.hp_split_full_color, 0.45f), fits);
+		std::wstring enc = BuildHpSplitNameEnc(display_name, split_index, settings_.hp_split_full_color, damaged_color, fits, 40);
 		if (!fits) return;
 
 		const uint32_t agent_id = living->agent_id;
@@ -877,6 +859,27 @@ private:
 			if (SetAgentName(agent_id, enc.c_str())) {
 				RefreshAllNametags();
 			}
+		});
+	}
+
+	void UpdateHpSplitNameDirect(const GW::AgentLiving* living, const std::wstring& display_name, int split_index, ImU32 damaged_color) {
+		bool fits = false;
+		std::wstring enc = BuildHpSplitNameEnc(display_name, split_index, settings_.hp_split_full_color, damaged_color, fits, 256);
+		if (!fits) return;
+
+		const uint32_t agent_id = living->agent_id;
+		GW::GameThread::Enqueue([this, agent_id, enc] {
+			auto* ctx = GW::GetWorldContext();
+			if (!ctx) return;
+			GW::AgentInfo* info = ctx->agent_infos.get(agent_id);
+			if (!info) return;
+
+			auto& buffer = agent_info_name_buffers_[agent_id];
+			buffer.assign(enc.begin(), enc.end());
+			buffer.push_back(L'\0');
+			info->name_enc = buffer.data();
+
+			RefreshAllNametags();
 		});
 	}
 
@@ -1142,8 +1145,7 @@ private:
 		self->discovered_agent_ids_.clear();
 		self->last_discovery_tick_ = 0;
 		self->hp_split_last_index_.clear();
-		self->agent_info_index_checked_.clear();
-		self->agent_info_index_check_count_ = 0;
+		self->agent_info_name_buffers_.clear();
 	}
 
 	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
@@ -1152,12 +1154,6 @@ private:
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
-
-		if (test_agent_info_index_check_ && agent_info_index_check_count_ < kMaxAgentInfoIndexChecks && !agent_info_index_checked_.count(living->agent_id)) {
-			agent_info_index_checked_.insert(living->agent_id);
-			++agent_info_index_check_count_;
-			LogAgentInfoIndexCheck(living->agent_id);
-		}
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
 
@@ -1209,6 +1205,8 @@ private:
 	void DrawSettingsInternal() {
 		DrawCheckboxWithColorRightAligned("Color enemy names by remaining health", settings_.hp_split_naming, settings_.hp_split_full_color, "##color_hp_split");
 		ShowHelpMarker("Splits each enemy's name into a bright and dim portion of this color, moving with their current HP. Renames via packet emulation, so names longer than ~14 characters won't fit and are left unchanged.");
+		ImGui::Checkbox("Experimental: bypass 40-char limit via direct AgentInfo write", &test_agent_info_direct_write_);
+		ShowHelpMarker("Writes directly into the client's own per-agent name pointer instead of emulating a rename packet. Untested long-term stability - allows much longer names (up to 256 chars) but carries more risk. Uncheck to fall back to the proven packet-emulation method.");
 		ImGui::Separator();
 
 		ImGui::SeparatorText("Explorable Areas");
