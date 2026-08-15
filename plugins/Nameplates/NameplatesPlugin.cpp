@@ -195,8 +195,9 @@ public:
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&target_hook_entry_, GW::UI::UIMessage::kChangeTarget, OnTargetChanged);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceChanged, 1);
-		GW::StoC::RegisterPacketCallback(&quest_marker_hook_entry_, GAME_SMSG_QUEST_UPDATE_MARKER, OnQuestMarkerUpdate, 1);
-		GW::StoC::RegisterPacketCallback(&quest_marker_hook_entry_, GAME_SMSG_QUEST_ADD_MARKER, OnQuestMarkerUpdate, 1);
+		for (const auto& info : kDiagOpcodes) {
+			GW::StoC::RegisterPacketCallback(&diag_hook_entry_, info.header, OnDiagnosticPacket, 1);
+		}
 	}
 
 	const char* Name() const override { return "Nameplates"; }
@@ -258,7 +259,7 @@ public:
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&target_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
-		GW::StoC::RemoveCallbacks(&quest_marker_hook_entry_);
+		GW::StoC::RemoveCallbacks(&diag_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -291,7 +292,30 @@ private:
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry target_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
-	GW::HookEntry quest_marker_hook_entry_;
+	GW::HookEntry diag_hook_entry_;
+
+	struct DiagOpcodeInfo {
+		uint32_t header;
+		const char* label;
+	};
+	static constexpr std::array<DiagOpcodeInfo, 9> kDiagOpcodes = {{
+		{GAME_SMSG_QUEST_ADD, "QUEST_ADD"},
+		{GAME_SMSG_QUEST_GENERAL_INFO, "QUEST_GENERAL_INFO"},
+		{GAME_SMSG_QUEST_UPDATE_MARKER, "QUEST_UPDATE_MARKER"},
+		{GAME_SMSG_QUEST_REMOVE, "QUEST_REMOVE"},
+		{GAME_SMSG_QUEST_ADD_MARKER, "QUEST_ADD_MARKER"},
+		{GAME_SMSG_QUEST_UPDATE_NAME, "QUEST_UPDATE_NAME"},
+		{GAME_SMSG_NPC_UPDATE_PROPERTIES, "NPC_UPDATE_PROPERTIES"},
+		{GAME_SMSG_AGENT_UPDATE_NPC_NAME, "AGENT_UPDATE_NPC_NAME"},
+		{GAME_SMSG_AGENT_DISPLAY_DIALOG, "AGENT_DISPLAY_DIALOG"}
+	}};
+
+	struct DiagLogEntry {
+		uint32_t header;
+		uint64_t tick_ms;
+	};
+	std::vector<DiagLogEntry> diag_log_;
+	static constexpr size_t kDiagLogCap = 30;
 
 	AgentNameCache name_cache_;
 
@@ -434,10 +458,6 @@ private:
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance*) {
-		RefreshAllNametags();
-	}
-
-	static void OnQuestMarkerUpdate(GW::HookStatus*, GW::Packet::StoC::PacketBase*) {
 		RefreshAllNametags();
 	}
 
