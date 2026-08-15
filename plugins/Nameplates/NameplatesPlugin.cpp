@@ -691,6 +691,10 @@ private:
 			last_quest_count_ = quest_count;
 		}
 
+		if (!in_outpost && settings_.hp_split_naming) {
+			UpdateHpSplitNamingForEnemies(agents, me);
+		}
+
 		if (in_outpost || (!settings_.show_enemies && !settings_.show_friendlies)) return;
 
 		const uint64_t now = GetTickCount64();
@@ -726,6 +730,24 @@ private:
 
 		name_cache_.MaybePrune();
 		stack_y_smoother_.MaybePrune();
+	}
+
+	void UpdateHpSplitNamingForEnemies(GW::AgentArray* agents, GW::AgentLiving* me) {
+		if (!agents) return;
+		const float max_range_sq = settings_.max_range * settings_.max_range;
+
+		for (GW::Agent* agent : *agents) {
+			if (!agent || !agent->GetIsLivingType()) continue;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) continue;
+			if (living->allegiance != GW::Constants::Allegiance::Enemy) continue;
+
+			float dist_sq = -1.f;
+			if (!WithinRange(living, me, max_range_sq, dist_sq)) continue;
+
+			const auto name_lookup = name_cache_.Get(living);
+			UpdateHpSplitName(living, *name_lookup.display);
+		}
 	}
 
 	void DiscoverQualifyingAgents(GW::AgentArray* agents, GW::AgentLiving* me) {
@@ -798,10 +820,6 @@ private:
 			}
 
 			const auto name_lookup = name_cache_.Get(living);
-
-			if (settings_.hp_split_naming && living->allegiance == GW::Constants::Allegiance::Enemy) {
-				UpdateHpSplitName(living, *name_lookup.display);
-			}
 
 			PendingBar pb;
 			pb.living = living;
