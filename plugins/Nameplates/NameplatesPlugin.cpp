@@ -22,6 +22,7 @@
 #include <GWCA/Managers/QuestMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
+#include <GWCA/Utilities/Scanner.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -366,6 +367,32 @@ private:
 	}
 
 	static void RefreshAllNametags() {
+		using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
+		static bool tried_resolve = false;
+		static SetGlobalNameTagVisibility_pt set_func = nullptr;
+		static uint32_t* flags_ptr = nullptr;
+		if (!tried_resolve) {
+			tried_resolve = true;
+			uintptr_t address = GW::Scanner::Find("\x81\xce\xa0\x06\x00\x00", "xxxxxx");
+			if (address) address = GW::Scanner::FunctionFromNearCall(GW::Scanner::FindInRange("\xe8", "x", 0, address, address + 0xff));
+			if (address) {
+				set_func = reinterpret_cast<SetGlobalNameTagVisibility_pt>(address);
+				if (GW::Scanner::IsValidPtr(*reinterpret_cast<uintptr_t*>(address + 0xa))) {
+					flags_ptr = *reinterpret_cast<uint32_t**>(address + 0xa);
+				}
+				else if (GW::Scanner::IsValidPtr(*reinterpret_cast<uintptr_t*>(address + 0xb))) {
+					flags_ptr = *reinterpret_cast<uint32_t**>(address + 0xb);
+				}
+			}
+		}
+		if (set_func && flags_ptr) {
+			GW::GameThread::Enqueue([] {
+				const uint32_t prev_flags = *flags_ptr;
+				set_func(0);
+				set_func(prev_flags);
+			});
+			return;
+		}
 		GW::GameThread::Enqueue([] {
 			FlashFlagPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
 			FlashFlagPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
