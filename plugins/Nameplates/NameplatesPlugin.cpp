@@ -178,6 +178,45 @@ inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
 	return out;
 }
 
+inline void HSVToRGB(float h, float s, float v, uint8_t& r, uint8_t& g, uint8_t& b) {
+	const float i = std::floor(h * 6.f);
+	const float f = h * 6.f - i;
+	const float p = v * (1.f - s);
+	const float q = v * (1.f - f * s);
+	const float t = v * (1.f - (1.f - f) * s);
+	float rf = 0.f, gf = 0.f, bf = 0.f;
+	switch (static_cast<int>(i) % 6) {
+		case 0: rf = v; gf = t; bf = p; break;
+		case 1: rf = q; gf = v; bf = p; break;
+		case 2: rf = p; gf = v; bf = t; break;
+		case 3: rf = p; gf = q; bf = v; break;
+		case 4: rf = t; gf = p; bf = v; break;
+		default: rf = v; gf = p; bf = q; break;
+	}
+	r = static_cast<uint8_t>(std::round(rf * 255.f));
+	g = static_cast<uint8_t>(std::round(gf * 255.f));
+	b = static_cast<uint8_t>(std::round(bf * 255.f));
+}
+
+inline std::wstring BuildRainbowNameEncString(const std::wstring& text) {
+	std::wstring result;
+	const size_t length = text.size();
+	if (length == 0) return result;
+	for (size_t i = 0; i < length; ++i) {
+		const float hue = static_cast<float>(i) / static_cast<float>(length > 1 ? length : 1);
+		uint8_t r, g, b;
+		HSVToRGB(hue, 1.f, 1.f, r, g, b);
+		wchar_t hex[8];
+		swprintf_s(hex, L"%02X%02X%02X", r, g, b);
+		result += L"\x2\x102\x2\x108\x107<c=#";
+		result += hex;
+		result += L">";
+		result += text[i];
+		result += L"</c>\x1";
+	}
+	return result;
+}
+
 class StackYSmoother {
 public:
 	float Update(uint32_t agent_id, float target_y, float alpha) {
@@ -470,6 +509,9 @@ private:
 
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
+
+	bool test_rainbow_nametags_ = true;
+	std::unordered_map<uint32_t, std::wstring> rainbow_name_buffer_;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -1025,6 +1067,7 @@ private:
 		self->stack_y_smoother_.Clear();
 		self->discovered_agent_ids_.clear();
 		self->last_discovery_tick_ = 0;
+		self->rainbow_name_buffer_.clear();
 	}
 
 	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
@@ -1033,6 +1076,14 @@ private:
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
+
+		if (test_rainbow_nametags_) {
+			const auto name_lookup = name_cache_.Get(living);
+			std::wstring& buf = rainbow_name_buffer_[living->agent_id];
+			buf = BuildRainbowNameEncString(*name_lookup.display);
+			tag->name_enc = buf.data();
+			return;
+		}
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
 
@@ -1082,6 +1133,10 @@ private:
 	}
 
 	void DrawSettingsInternal() {
+		ImGui::Checkbox("Experimental: rainbow nametag test", &test_rainbow_nametags_);
+		ShowHelpMarker("Tests per-letter colored native nametags via an embedded color-tag encoding. Unverified technique, may render incorrectly or be unstable.");
+		ImGui::Separator();
+
 		ImGui::SeparatorText("Explorable Areas");
 
 		DrawCheckboxWithColorRightAligned("Show enemy nameplates", settings_.show_enemies, settings_.enemy_color, "##color_show_enemies");
