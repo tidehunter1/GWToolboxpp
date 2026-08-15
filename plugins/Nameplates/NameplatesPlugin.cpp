@@ -22,6 +22,7 @@
 #include <GWCA/Managers/QuestMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
+#include <GWCA/Packets/Opcodes.h>
 #include <GWCA/Utilities/Scanner.h>
 
 #include <ToolboxPlugin.h>
@@ -194,6 +195,8 @@ public:
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&target_hook_entry_, GW::UI::UIMessage::kChangeTarget, OnTargetChanged);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceChanged, 1);
+		GW::StoC::RegisterPacketCallback(&quest_marker_hook_entry_, GAME_SMSG_QUEST_UPDATE_MARKER, OnQuestMarkerUpdate, 1);
+		GW::StoC::RegisterPacketCallback(&quest_marker_hook_entry_, GAME_SMSG_QUEST_ADD_MARKER, OnQuestMarkerUpdate, 1);
 	}
 
 	const char* Name() const override { return "Nameplates"; }
@@ -255,6 +258,7 @@ public:
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&target_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
+		GW::StoC::RemoveCallbacks(&quest_marker_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -287,6 +291,7 @@ private:
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry target_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
+	GW::HookEntry quest_marker_hook_entry_;
 
 	AgentNameCache name_cache_;
 
@@ -360,12 +365,6 @@ private:
 		ImGui::PopID();
 	}
 
-	static void FlashFlagPreference(GW::UI::FlagPreference pref) {
-		const bool current = GW::UI::GetPreference(pref);
-		GW::UI::SetPreference(pref, !current);
-		GW::UI::SetPreference(pref, current);
-	}
-
 	static void RefreshAllNametags() {
 		using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
 		static bool tried_resolve = false;
@@ -385,17 +384,11 @@ private:
 				}
 			}
 		}
-		if (set_func && flags_ptr) {
-			GW::GameThread::Enqueue([] {
-				const uint32_t prev_flags = *flags_ptr;
-				set_func(0);
-				set_func(prev_flags);
-			});
-			return;
-		}
+		if (!set_func || !flags_ptr) return;
 		GW::GameThread::Enqueue([] {
-			FlashFlagPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
-			FlashFlagPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
+			const uint32_t prev_flags = *flags_ptr;
+			set_func(0);
+			set_func(prev_flags);
 		});
 	}
 
@@ -441,6 +434,10 @@ private:
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance*) {
+		RefreshAllNametags();
+	}
+
+	static void OnQuestMarkerUpdate(GW::HookStatus*, GW::Packet::StoC::PacketBase*) {
 		RefreshAllNametags();
 	}
 
