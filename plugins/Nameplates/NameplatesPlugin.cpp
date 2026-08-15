@@ -22,7 +22,8 @@
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/QuestMgr.h>
-#include <GWCA/Managers/ChatMgr.h>
+#include <GWCA/Managers/StoCMgr.h>
+#include <GWCA/Packets/StoC.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -180,38 +181,18 @@ inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
 	return out;
 }
 
-inline const wchar_t* ProtectFlagToString(DWORD protect) {
-	switch (protect & 0xFF) {
-		case PAGE_NOACCESS: return L"NOACCESS";
-		case PAGE_READONLY: return L"READONLY";
-		case PAGE_READWRITE: return L"READWRITE";
-		case PAGE_WRITECOPY: return L"WRITECOPY";
-		case PAGE_EXECUTE: return L"EXECUTE";
-		case PAGE_EXECUTE_READ: return L"EXECUTE_READ";
-		case PAGE_EXECUTE_READWRITE: return L"EXECUTE_READWRITE";
-		case PAGE_EXECUTE_WRITECOPY: return L"EXECUTE_WRITECOPY";
-		default: return L"UNKNOWN";
-	}
-}
-
-inline void LogNameEncMemoryInfo(uint32_t agent_id, const wchar_t* label, const wchar_t* ptr) {
-	wchar_t buf[256];
-	if (!ptr) {
-		swprintf_s(buf, L"[probe] agent %u %s: null pointer", agent_id, label);
-		GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
-		return;
-	}
-	MEMORY_BASIC_INFORMATION mbi = {};
-	if (!VirtualQuery(ptr, &mbi, sizeof(mbi))) {
-		swprintf_s(buf, L"[probe] agent %u %s: VirtualQuery failed", agent_id, label);
-		GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
-		return;
-	}
-	const auto* region_end = static_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
-	const ptrdiff_t remaining_bytes = region_end - reinterpret_cast<const uint8_t*>(ptr);
-	const ptrdiff_t remaining_wchars = remaining_bytes / static_cast<ptrdiff_t>(sizeof(wchar_t));
-	swprintf_s(buf, L"[probe] agent %u %s: protect=%s remaining=%lld wchars", agent_id, label, ProtectFlagToString(mbi.Protect), static_cast<long long>(remaining_wchars));
-	GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
+inline bool SetAgentName(uint32_t agent_id, const wchar_t* name) {
+	const auto* a = static_cast<GW::AgentLiving*>(GW::Agents::GetAgentByID(agent_id));
+	if (!a || !name) return false;
+	const wchar_t* current_name = GW::Agents::GetAgentEncName(a);
+	if (!current_name) return false;
+	if (wcscmp(name, current_name) == 0) return true;
+	GW::Packet::StoC::AgentName packet;
+	packet.header = GW::Packet::StoC::AgentName::STATIC_HEADER;
+	packet.agent_id = agent_id;
+	wcscpy(packet.name_enc, name);
+	GW::StoC::EmulatePacket(&packet);
+	return true;
 }
 
 class StackYSmoother {
@@ -507,10 +488,8 @@ private:
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
 
-	bool test_probe_name_enc_ = true;
-	int name_enc_probe_count_ = 0;
-	std::unordered_set<uint32_t> probed_agent_ids_;
-	static constexpr int kMaxNameEncProbes = 6;
+	bool test_rename_enemies_ = true;
+	std::unordered_set<uint32_t> renamed_agent_ids_;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -1066,8 +1045,7 @@ private:
 		self->stack_y_smoother_.Clear();
 		self->discovered_agent_ids_.clear();
 		self->last_discovery_tick_ = 0;
-		self->probed_agent_ids_.clear();
-		self->name_enc_probe_count_ = 0;
+		self->renamed_agent_ids_.clear();
 	}
 
 	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
@@ -1077,13 +1055,15 @@ private:
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
 
-		if (test_probe_name_enc_ && name_enc_probe_count_ < kMaxNameEncProbes && !probed_agent_ids_.count(living->agent_id)) {
-			probed_agent_ids_.insert(living->agent_id);
-			++name_enc_probe_count_;
-			LogNameEncMemoryInfo(living->agent_id, L"tag->name_enc", tag->name_enc);
-			if (const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number)) {
-				LogNameEncMemoryInfo(living->agent_id, L"NPC::name_enc", npc->name_enc);
-			}
+		if (test_rename_enemies_ && living->allegiance == GW::Constants::Allegiance::Enemy && !renamed_agent_ids_.count(living->agent_id)) {
+			renamed_agent_ids_.insert(living->agent_id);
+			const uint32_t agent_id = living->agent_id;
+			GW::GameThread::Enqueue([agent_id] {
+				static constexpr wchar_t kTestRenameEnc[] = L"\x108\x107TestRename\x1";
+				if (SetAgentName(agent_id, kTestRenameEnc)) {
+					RefreshAllNametags();
+				}
+			});
 		}
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
@@ -1134,8 +1114,8 @@ private:
 	}
 
 	void DrawSettingsInternal() {
-		ImGui::Checkbox("Diagnostic: probe name_enc memory (read-only, safe)", &test_probe_name_enc_);
-		ShowHelpMarker("Logs memory protection info for the first few agents' name_enc pointers to chat. Read-only, cannot crash the client.");
+		ImGui::Checkbox("Experimental: rename enemy nametags (packet emulation)", &test_rename_enemies_);
+		ShowHelpMarker("Renames each newly-seen enemy to a test string via GW::StoC::EmulatePacket, the same mechanism used for summon renaming.");
 		ImGui::Separator();
 
 		ImGui::SeparatorText("Explorable Areas");
