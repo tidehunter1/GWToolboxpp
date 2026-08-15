@@ -91,6 +91,7 @@ public:
 			wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
 			entry.buffer[0] = L'\0';
 			entry.converted = false;
+			entry.profession_resolved = false;
 			GW::UI::AsyncDecodeStr(enc_name, entry.buffer, kBufferLen);
 		}
 		if (!entry.converted && entry.buffer[0] != L'\0') {
