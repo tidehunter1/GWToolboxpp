@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cstddef>
 #include <cstdlib>
@@ -460,7 +461,18 @@ private:
 		}
 	}
 
+	void DrawTargetProfessionDebug() {
+		GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
+		const GW::Constants::ProfessionByte prof = target ? GetAgentProfession(target) : GW::Constants::ProfessionByte::None;
+		char label[64];
+		snprintf(label, sizeof(label), "Target profession: %s", GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(prof)));
+		ImGui::TextUnformatted(label);
+	}
+
 	void DrawSettingsInternal() {
+		ImGui::SeparatorText("Debug");
+		DrawTargetProfessionDebug();
+
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color nametags by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
