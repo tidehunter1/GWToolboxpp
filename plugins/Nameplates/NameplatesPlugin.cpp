@@ -188,6 +188,7 @@ inline bool SetAgentName(uint32_t agent_id, const wchar_t* name) {
 	if (!current_name) return false;
 	if (wcscmp(name, current_name) == 0) return true;
 	GW::Packet::StoC::AgentName packet;
+	if (wcslen(name) >= _countof(packet.name_enc)) return false;
 	packet.header = GW::Packet::StoC::AgentName::STATIC_HEADER;
 	packet.agent_id = agent_id;
 	wcscpy_s(packet.name_enc, _countof(packet.name_enc), name);
@@ -1059,7 +1060,7 @@ private:
 			renamed_agent_ids_.insert(living->agent_id);
 			const uint32_t agent_id = living->agent_id;
 			GW::GameThread::Enqueue([agent_id] {
-				static constexpr wchar_t kTestRenameEnc[] = L"\x108\x107<c=#00FFFF>TestRename</c>\x1";
+				static constexpr wchar_t kTestRenameEnc[] = L"\x108\x107<c=#FF0000>A</c><c=#00FF00>B</c>\x1";
 				if (SetAgentName(agent_id, kTestRenameEnc)) {
 					RefreshAllNametags();
 				}
