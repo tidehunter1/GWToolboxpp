@@ -22,6 +22,7 @@
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/QuestMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <imgui.h>
@@ -32,6 +33,7 @@
 #include <string_view>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <cwchar>
 #include <optional>
 #include <cfloat>
@@ -178,43 +180,38 @@ inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
 	return out;
 }
 
-inline void HSVToRGB(float h, float s, float v, uint8_t& r, uint8_t& g, uint8_t& b) {
-	const float i = std::floor(h * 6.f);
-	const float f = h * 6.f - i;
-	const float p = v * (1.f - s);
-	const float q = v * (1.f - f * s);
-	const float t = v * (1.f - (1.f - f) * s);
-	float rf = 0.f, gf = 0.f, bf = 0.f;
-	switch (static_cast<int>(i) % 6) {
-		case 0: rf = v; gf = t; bf = p; break;
-		case 1: rf = q; gf = v; bf = p; break;
-		case 2: rf = p; gf = v; bf = t; break;
-		case 3: rf = p; gf = q; bf = v; break;
-		case 4: rf = t; gf = p; bf = v; break;
-		default: rf = v; gf = p; bf = q; break;
+inline const wchar_t* ProtectFlagToString(DWORD protect) {
+	switch (protect & 0xFF) {
+		case PAGE_NOACCESS: return L"NOACCESS";
+		case PAGE_READONLY: return L"READONLY";
+		case PAGE_READWRITE: return L"READWRITE";
+		case PAGE_WRITECOPY: return L"WRITECOPY";
+		case PAGE_EXECUTE: return L"EXECUTE";
+		case PAGE_EXECUTE_READ: return L"EXECUTE_READ";
+		case PAGE_EXECUTE_READWRITE: return L"EXECUTE_READWRITE";
+		case PAGE_EXECUTE_WRITECOPY: return L"EXECUTE_WRITECOPY";
+		default: return L"UNKNOWN";
 	}
-	r = static_cast<uint8_t>(std::round(rf * 255.f));
-	g = static_cast<uint8_t>(std::round(gf * 255.f));
-	b = static_cast<uint8_t>(std::round(bf * 255.f));
 }
 
-inline std::wstring BuildRainbowNameEncString(const std::wstring& text) {
-	std::wstring result;
-	const size_t length = text.size();
-	if (length == 0) return result;
-	for (size_t i = 0; i < length; ++i) {
-		const float hue = static_cast<float>(i) / static_cast<float>(length > 1 ? length : 1);
-		uint8_t r, g, b;
-		HSVToRGB(hue, 1.f, 1.f, r, g, b);
-		wchar_t hex[8];
-		swprintf_s(hex, L"%02X%02X%02X", r, g, b);
-		result += L"\x2\x102\x2\x108\x107<c=#";
-		result += hex;
-		result += L">";
-		result += text[i];
-		result += L"</c>\x1";
+inline void LogNameEncMemoryInfo(uint32_t agent_id, const wchar_t* label, const wchar_t* ptr) {
+	wchar_t buf[256];
+	if (!ptr) {
+		swprintf_s(buf, L"[probe] agent %u %s: null pointer", agent_id, label);
+		GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
+		return;
 	}
-	return result;
+	MEMORY_BASIC_INFORMATION mbi = {};
+	if (!VirtualQuery(ptr, &mbi, sizeof(mbi))) {
+		swprintf_s(buf, L"[probe] agent %u %s: VirtualQuery failed", agent_id, label);
+		GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
+		return;
+	}
+	const auto* region_end = static_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
+	const ptrdiff_t remaining_bytes = region_end - reinterpret_cast<const uint8_t*>(ptr);
+	const ptrdiff_t remaining_wchars = remaining_bytes / static_cast<ptrdiff_t>(sizeof(wchar_t));
+	swprintf_s(buf, L"[probe] agent %u %s: protect=%s remaining=%lld wchars", agent_id, label, ProtectFlagToString(mbi.Protect), static_cast<long long>(remaining_wchars));
+	GW::Chat::WriteChat(GW::Chat::Channel::CHANNEL_GWCA1, buf);
 }
 
 class StackYSmoother {
@@ -510,8 +507,10 @@ private:
 	AgentNameCache name_cache_;
 	StackYSmoother stack_y_smoother_;
 
-	bool test_rainbow_nametags_ = true;
-	std::unordered_map<uint32_t, std::wstring> rainbow_name_buffer_;
+	bool test_probe_name_enc_ = true;
+	int name_enc_probe_count_ = 0;
+	std::unordered_set<uint32_t> probed_agent_ids_;
+	static constexpr int kMaxNameEncProbes = 6;
 
 	struct PriorityState {
 		char buf[512] = {};
@@ -1067,7 +1066,8 @@ private:
 		self->stack_y_smoother_.Clear();
 		self->discovered_agent_ids_.clear();
 		self->last_discovery_tick_ = 0;
-		self->rainbow_name_buffer_.clear();
+		self->probed_agent_ids_.clear();
+		self->name_enc_probe_count_ = 0;
 	}
 
 	void HandleAgentNameTag(GW::HookStatus* status, GW::UI::AgentNameTagInfo* tag) {
@@ -1077,12 +1077,13 @@ private:
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
 
-		if (test_rainbow_nametags_) {
-			const auto name_lookup = name_cache_.Get(living);
-			std::wstring& buf = rainbow_name_buffer_[living->agent_id];
-			buf = BuildRainbowNameEncString(*name_lookup.display);
-			tag->name_enc = buf.data();
-			return;
+		if (test_probe_name_enc_ && name_enc_probe_count_ < kMaxNameEncProbes && !probed_agent_ids_.count(living->agent_id)) {
+			probed_agent_ids_.insert(living->agent_id);
+			++name_enc_probe_count_;
+			LogNameEncMemoryInfo(living->agent_id, L"tag->name_enc", tag->name_enc);
+			if (const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number)) {
+				LogNameEncMemoryInfo(living->agent_id, L"NPC::name_enc", npc->name_enc);
+			}
 		}
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
@@ -1133,8 +1134,8 @@ private:
 	}
 
 	void DrawSettingsInternal() {
-		ImGui::Checkbox("Experimental: rainbow nametag test", &test_rainbow_nametags_);
-		ShowHelpMarker("Tests per-letter colored native nametags via an embedded color-tag encoding. Unverified technique, may render incorrectly or be unstable.");
+		ImGui::Checkbox("Diagnostic: probe name_enc memory (read-only, safe)", &test_probe_name_enc_);
+		ShowHelpMarker("Logs memory protection info for the first few agents' name_enc pointers to chat. Read-only, cannot crash the client.");
 		ImGui::Separator();
 
 		ImGui::SeparatorText("Explorable Areas");
