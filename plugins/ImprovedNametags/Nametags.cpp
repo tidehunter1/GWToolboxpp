@@ -1,5 +1,4 @@
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <cstddef>
 #include <cstdlib>
@@ -278,9 +277,6 @@ private:
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry marker_hook_entry_;
 
-	static inline bool suppress_toggle_addrs_valid_ = false;
-	static inline int suppress_toggle_call_count_ = 0;
-
 	AgentNameCache name_cache_;
 
 	uint64_t frame_counter_ = 0;
@@ -459,16 +455,52 @@ private:
 			GW::AgentLiving* target_living = target_agent ? target_agent->GetAsAgentLiving() : nullptr;
 			if (!target_living) return;
 			if (!allow_enemy && target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
-			using SuppressToggle_pt = void(__cdecl*)();
-			constexpr uintptr_t kHideAllAddr = 0x00802f70;
-			constexpr uintptr_t kShowAllAddr = 0x00802f20;
-			const bool valid = GW::Scanner::IsValidPtr(kHideAllAddr, GW::Section_TEXT) && GW::Scanner::IsValidPtr(kShowAllAddr, GW::Section_TEXT);
-			suppress_toggle_addrs_valid_ = valid;
-			if (valid) {
-				suppress_toggle_call_count_++;
-				reinterpret_cast<SuppressToggle_pt>(kHideAllAddr)();
-				reinterpret_cast<SuppressToggle_pt>(kShowAllAddr)();
+
+			using SetNameTagFlags_pt = void(__fastcall*)(void* render_info, void* edx, uint32_t flags, uint32_t enable);
+			struct AgentRenderInfoStub {
+				void** vtable;
+				uint32_t h0004[10];
+				uint32_t agent_id;
+				uint32_t h0030[10];
+				uint32_t name_tag_flags;
+			};
+			static_assert(offsetof(AgentRenderInfoStub, agent_id) == 0x2c);
+			static_assert(offsetof(AgentRenderInfoStub, name_tag_flags) == 0x58);
+			constexpr uint32_t kNameTagFlags_Suppressed = 0x200;
+
+			static bool tried_resolve_array = false;
+			static void*** render_info_array_ptr = nullptr;
+			static uint32_t* render_info_capacity_ptr = nullptr;
+			if (!tried_resolve_array) {
+				tried_resolve_array = true;
+				const uintptr_t address = GW::Scanner::Find("\xa1\x00\x00\x00\x00\x56\x8b\x35\x00\x00\x00\x00\x8d\x04\x86", "x????xxx????xxx");
+				if (address) {
+					render_info_capacity_ptr = *reinterpret_cast<uint32_t**>(address + 0x1);
+					render_info_array_ptr = *reinterpret_cast<void****>(address + 0x8);
+				}
 			}
+			if (!render_info_array_ptr || !render_info_capacity_ptr) return;
+			void** render_info_array = *render_info_array_ptr;
+			const uint32_t capacity = *render_info_capacity_ptr;
+			if (!render_info_array || target_id >= capacity) return;
+			void* render_info = render_info_array[target_id];
+			if (!render_info) return;
+			const auto* render_info_stub = static_cast<AgentRenderInfoStub*>(render_info);
+			if (render_info_stub->name_tag_flags & kNameTagFlags_Suppressed) return;
+
+			static bool tried_resolve_func = false;
+			static SetNameTagFlags_pt set_func = nullptr;
+			if (!tried_resolve_func) {
+				tried_resolve_func = true;
+				const uintptr_t address = GW::Scanner::Find("\x50\x68\x00\x04\x00\x00\x8b\xcf\xe8", "xxxxxxxxx", 0x8);
+				if (address) {
+					set_func = reinterpret_cast<SetNameTagFlags_pt>(GW::Scanner::FunctionFromNearCall(address));
+				}
+			}
+			if (!set_func) return;
+
+			set_func(render_info, nullptr, kNameTagFlags_Suppressed, 1);
+			set_func(render_info, nullptr, kNameTagFlags_Suppressed, 0);
 		});
 	}
 
@@ -553,16 +585,7 @@ private:
 		}
 	}
 
-	void DrawSuppressToggleDiag() {
-		char line[96];
-		snprintf(line, sizeof(line), "0x200 test: addrs_valid=%d call_count=%d", suppress_toggle_addrs_valid_ ? 1 : 0, suppress_toggle_call_count_);
-		ImGui::TextUnformatted(line);
-	}
-
 	void DrawSettingsInternal() {
-		ImGui::SeparatorText("Debug");
-		DrawSuppressToggleDiag();
-
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
