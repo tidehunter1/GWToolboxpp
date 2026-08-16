@@ -306,7 +306,7 @@ private:
 			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 			if (living && living->GetHasBossGlow()) {
 				RefreshAllNametags();
-				RefreshTargetedNametagViaRetarget();
+				RefreshTargetedNametagViaRetarget(true);
 			}
 		}
 	}
