@@ -253,11 +253,11 @@ public:
 	}
 
 	void Draw(IDirect3DDevice9*) override {
-		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions);
+		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions, true);
 		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, true);
-		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
+		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession, true);
 		RefreshAllNametagsOnChange(last_color_by_boss_state_, settings_.color_by_boss);
-		RefreshAllNametagsOnChange(last_priority_enabled_state_, settings_.priority_enabled);
+		RefreshAllNametagsOnChange(last_priority_enabled_state_, settings_.priority_enabled, true);
 
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
 			const int quest_count = static_cast<int>(quest_log->size());
@@ -363,12 +363,19 @@ private:
 	void DrawProfessionCell(size_t index) {
 		ProfessionColorConfig& cfg = settings_.profession_colors[index];
 		ImGui::PushID(static_cast<int>(index));
-		ImGui::Checkbox("##enabled", &cfg.enabled);
+		if (ImGui::Checkbox("##enabled", &cfg.enabled)) {
+			RefreshAllNametags();
+			RefreshTargetedNametagViaRetarget();
+		}
 		ImGui::SameLine();
 		ImGui::BeginDisabled(!cfg.enabled);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(cfg.color);
 		if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			cfg.color = ImGui::ColorConvertFloat4ToU32(color_vec);
+		}
+		if (ImGui::IsItemDeactivatedAfterEdit()) {
+			RefreshAllNametags();
+			RefreshTargetedNametagViaRetarget();
 		}
 		ImGui::SameLine();
 		ImGui::TextUnformatted(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)));
@@ -530,6 +537,10 @@ private:
 		ImVec4 priority_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.priority.color);
 		if (ImGui::ColorEdit3("##priority_color", &priority_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.priority.color = ImGui::ColorConvertFloat4ToU32(priority_color_vec);
+		}
+		if (ImGui::IsItemDeactivatedAfterEdit()) {
+			RefreshAllNametags();
+			RefreshTargetedNametagViaRetarget();
 		}
 
 		DrawPriorityInput("##priority_input", priority_state_, settings_.priority.raw);
