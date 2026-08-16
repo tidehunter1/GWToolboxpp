@@ -178,6 +178,7 @@ struct NameplateSettings {
 		{true, IM_COL32(221, 221, 255, 255)}
 	}};
 
+	bool priority_enabled = false;
 	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
 };
 
@@ -210,6 +211,7 @@ public:
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
+		LoadSetting("priority_enabled", settings_.priority_enabled);
 		LoadSetting("priority_raw", settings_.priority.raw);
 		LoadSetting("priority_color", settings_.priority.color);
 		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
@@ -229,6 +231,7 @@ public:
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
+		SaveSetting("priority_enabled", settings_.priority_enabled);
 		SaveSetting("priority_raw", settings_.priority.raw);
 		SaveSetting("priority_color", settings_.priority.color);
 		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
@@ -254,6 +257,7 @@ public:
 		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, true);
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession);
 		RefreshAllNametagsOnChange(last_color_by_boss_state_, settings_.color_by_boss);
+		RefreshAllNametagsOnChange(last_priority_enabled_state_, settings_.priority_enabled);
 
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
 			const int quest_count = static_cast<int>(quest_log->size());
@@ -274,6 +278,7 @@ private:
 	std::optional<bool> last_recolor_quest_state_;
 	std::optional<bool> last_recolor_enemy_profession_state_;
 	std::optional<bool> last_color_by_boss_state_;
+	std::optional<bool> last_priority_enabled_state_;
 	int last_quest_count_ = -1;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
@@ -312,6 +317,7 @@ private:
 	}
 
 	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower, const std::vector<std::wstring>& words) const {
+		if (!settings_.priority_enabled) return std::nullopt;
 		if (!name_lower.empty()
 			&& std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), name_lower)) {
 			return settings_.priority.color;
@@ -345,26 +351,27 @@ private:
 	static void DrawCheckboxWithColorRightAligned(const char* label, bool& toggle, uint32_t& color, const char* color_id) {
 		ImGui::Checkbox(label, &toggle);
 		RightAlignNextItem(ImGui::GetFrameHeight());
+		ImGui::BeginDisabled(!toggle);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
 		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			color = ImGui::ColorConvertFloat4ToU32(color_vec);
 		}
+		ImGui::EndDisabled();
 	}
 
 	void DrawProfessionCell(size_t index) {
 		ProfessionColorConfig& cfg = settings_.profession_colors[index];
 		ImGui::PushID(static_cast<int>(index));
-		const bool was_enabled = cfg.enabled;
-		if (!was_enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.4f);
 		ImGui::Checkbox("##enabled", &cfg.enabled);
 		ImGui::SameLine();
+		ImGui::BeginDisabled(!cfg.enabled);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(cfg.color);
 		if (ImGui::ColorEdit3("##color", &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			cfg.color = ImGui::ColorConvertFloat4ToU32(color_vec);
 		}
 		ImGui::SameLine();
 		ImGui::TextUnformatted(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)));
-		if (!was_enabled) ImGui::PopStyleVar();
+		ImGui::EndDisabled();
 		ImGui::PopID();
 	}
 
@@ -489,19 +496,14 @@ private:
 		}
 	}
 
-	void DrawPriorityInput(const char* input_id, const char* color_id, uint32_t& color, PriorityState& state, std::string& raw) {
-		if (ImGui::InputTextMultiline(input_id, state.buf, PriorityState::kBufSize, ImVec2(-(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x), ImGui::GetTextLineHeight() * 4.f))) {
+	void DrawPriorityInput(const char* input_id, PriorityState& state, std::string& raw) {
+		if (ImGui::InputTextMultiline(input_id, state.buf, PriorityState::kBufSize, ImVec2(-1.0f, ImGui::GetTextLineHeight() * 4.f))) {
 			state.pending_parse_at_ms = GetTickCount64() + kPriorityParseDelayMs;
 		}
 		if (state.pending_parse_at_ms != 0 && GetTickCount64() >= state.pending_parse_at_ms) {
 			raw = NewlinesToSemicolons(state.buf);
 			state.names = ParseSemicolonNameList(raw);
 			state.pending_parse_at_ms = 0;
-		}
-		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
-		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
-		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
-			color = ImGui::ColorConvertFloat4ToU32(color_vec);
 		}
 	}
 
@@ -519,10 +521,19 @@ private:
 		ShowHelpMarker("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
 		ImGui::Spacing();
+		ImGui::Checkbox("##priority_enabled", &settings_.priority_enabled);
+		ImGui::SameLine();
 		ImGui::TextUnformatted("Priority nametag coloring");
 		ShowHelpMarker("One name per line. A single word (e.g. \"Monk\") matches any name containing that word. A full name (e.g. \"Keeper of Souls\") matches only that exact name.");
+		RightAlignNextItem(ImGui::GetFrameHeight());
+		ImGui::BeginDisabled(!settings_.priority_enabled);
+		ImVec4 priority_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.priority.color);
+		if (ImGui::ColorEdit3("##priority_color", &priority_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
+			settings_.priority.color = ImGui::ColorConvertFloat4ToU32(priority_color_vec);
+		}
 
-		DrawPriorityInput("##priority_input", "##priority_color", settings_.priority.color, priority_state_, settings_.priority.raw);
+		DrawPriorityInput("##priority_input", priority_state_, settings_.priority.raw);
+		ImGui::EndDisabled();
 
 		ImGui::Spacing();
 		ImGui::TextUnformatted("Profession colors");
