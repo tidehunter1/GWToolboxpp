@@ -535,6 +535,7 @@ private:
 		ImGui::Checkbox("Color foes by profession", &settings_.recolor_enemy_nameplates_by_profession);
 		ShowHelpMarker("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
+		ImGui::BeginDisabled(!settings_.recolor_professions && !settings_.recolor_enemy_nameplates_by_profession);
 		if (ImGui::BeginTable("##profession_colors_table", 5)) {
 			for (int c = 0; c < 5; ++c) {
 				ImGui::TableSetupColumn("##pcol", ImGuiTableColumnFlags_WidthStretch);
@@ -548,6 +549,7 @@ private:
 			}
 			ImGui::EndTable();
 		}
+		ImGui::EndDisabled();
 	}
 };
 
