@@ -293,6 +293,18 @@ private:
 
 	AgentNameCache name_cache_;
 
+	struct HoverDiagEntry {
+		uint32_t agent_id;
+		uint64_t tick_ms;
+	};
+	std::vector<HoverDiagEntry> hover_diag_log_;
+	static constexpr size_t kHoverDiagLogCap = 30;
+
+	void LogHoverDiag(uint32_t agent_id) {
+		hover_diag_log_.push_back({agent_id, GetTickCount64()});
+		if (hover_diag_log_.size() > kHoverDiagLogCap) hover_diag_log_.erase(hover_diag_log_.begin());
+	}
+
 	struct PriorityState {
 		char buf[512] = {};
 		std::vector<std::wstring> names;
@@ -411,6 +423,7 @@ private:
 			GW::Agent* target_agent = GW::Agents::GetAgentByID(target_id);
 			GW::AgentLiving* target_living = target_agent ? target_agent->GetAsAgentLiving() : nullptr;
 			if (!target_living || target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
+			GW::Agents::ChangeTarget(0u);
 			GW::Agents::ChangeTarget(target_id);
 		});
 	}
@@ -439,11 +452,12 @@ private:
 		if (pak->value_id != GW::Packet::StoC::GenericValueID::apply_marker
 			&& pak->value_id != GW::Packet::StoC::GenericValueID::remove_marker) return;
 		RefreshAllNametags();
-		RefreshTargetedNametagViaRetarget();
 	}
 
 	void HandleAgentNameTag(GW::HookStatus*, GW::UI::AgentNameTagInfo* tag) {
 		if (!tag) return;
+
+		LogHoverDiag(tag->agent_id);
 
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
@@ -504,9 +518,21 @@ private:
 		ImGui::TextUnformatted(label);
 	}
 
+	void DrawHoverDiagLog() {
+		ImGui::TextUnformatted("Recent nametag hook firings (agent_id, ms):");
+		const uint32_t target_id = GW::Agents::GetTargetId();
+		char line[64];
+		for (auto it = hover_diag_log_.rbegin(); it != hover_diag_log_.rend(); ++it) {
+			const bool is_target = target_id != 0 && it->agent_id == target_id;
+			snprintf(line, sizeof(line), "[%llu] agent=%u%s", static_cast<unsigned long long>(it->tick_ms), it->agent_id, is_target ? " (TARGET)" : "");
+			ImGui::TextUnformatted(line);
+		}
+	}
+
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Debug");
 		DrawTargetProfessionDebug();
+		DrawHoverDiagLog();
 
 		ImGui::SeparatorText("Nametags");
 
