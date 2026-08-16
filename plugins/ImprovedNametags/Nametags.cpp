@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cstddef>
 #include <cstdlib>
@@ -270,6 +271,7 @@ public:
 
 		name_cache_.MaybePrune();
 		ProcessBossGlowRetries();
+		TrackTargetTypeMap();
 	}
 
 private:
@@ -286,6 +288,33 @@ private:
 	GW::HookEntry target_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry marker_hook_entry_;
+
+	struct TypeMapLogEntry {
+		uint32_t old_value;
+		uint32_t new_value;
+		uint64_t tick_ms;
+	};
+	std::vector<TypeMapLogEntry> type_map_log_;
+	static constexpr size_t kTypeMapLogCap = 30;
+	uint32_t last_tracked_agent_id_ = 0;
+	uint32_t last_tracked_type_map_ = 0;
+
+	void TrackTargetTypeMap() {
+		GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
+		const uint32_t target_id = target ? target->agent_id : 0;
+		if (target_id != last_tracked_agent_id_) {
+			last_tracked_agent_id_ = target_id;
+			last_tracked_type_map_ = target ? target->type_map : 0;
+			type_map_log_.clear();
+			return;
+		}
+		if (!target) return;
+		if (target->type_map != last_tracked_type_map_) {
+			type_map_log_.push_back({last_tracked_type_map_, target->type_map, GetTickCount64()});
+			if (type_map_log_.size() > kTypeMapLogCap) type_map_log_.erase(type_map_log_.begin());
+			last_tracked_type_map_ = target->type_map;
+		}
+	}
 
 	AgentNameCache name_cache_;
 
@@ -552,7 +581,19 @@ private:
 		}
 	}
 
+	void DrawTypeMapDiagLog() {
+		ImGui::TextUnformatted("Target type_map changes:");
+		char line[80];
+		for (auto it = type_map_log_.rbegin(); it != type_map_log_.rend(); ++it) {
+			snprintf(line, sizeof(line), "[%llu] 0x%08X -> 0x%08X", static_cast<unsigned long long>(it->tick_ms), it->old_value, it->new_value);
+			ImGui::TextUnformatted(line);
+		}
+	}
+
 	void DrawSettingsInternal() {
+		ImGui::SeparatorText("Debug");
+		DrawTypeMapDiagLog();
+
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
