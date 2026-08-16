@@ -287,7 +287,7 @@ private:
 	AgentNameCache name_cache_;
 
 	std::unordered_map<uint32_t, uint64_t> boss_glow_retry_deadline_;
-	static constexpr uint64_t kBossGlowRetryDelayMs = 500;
+	static constexpr uint64_t kBossGlowRetryDelayMs = 50;
 
 	void ScheduleBossGlowRetry(uint32_t agent_id) {
 		if (boss_glow_retry_deadline_.find(agent_id) != boss_glow_retry_deadline_.end()) return;
