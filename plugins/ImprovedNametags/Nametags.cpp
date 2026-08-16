@@ -365,7 +365,7 @@ private:
 		ImGui::PushID(static_cast<int>(index));
 		if (ImGui::Checkbox("##enabled", &cfg.enabled)) {
 			RefreshAllNametags();
-			RefreshTargetedNametagViaRetarget();
+			RefreshTargetedNametagViaRetarget(true);
 		}
 		ImGui::SameLine();
 		ImGui::BeginDisabled(!cfg.enabled);
@@ -375,7 +375,7 @@ private:
 		}
 		if (ImGui::IsItemDeactivatedAfterEdit()) {
 			RefreshAllNametags();
-			RefreshTargetedNametagViaRetarget();
+			RefreshTargetedNametagViaRetarget(true);
 		}
 		ImGui::SameLine();
 		ImGui::TextUnformatted(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)));
@@ -413,7 +413,7 @@ private:
 	static void RefreshAllNametagsOnChange(std::optional<bool>& last_state, bool current_state, bool also_retarget = false) {
 		if (last_state.has_value() && *last_state != current_state) {
 			RefreshAllNametags();
-			if (also_retarget) RefreshTargetedNametagViaRetarget();
+			if (also_retarget) RefreshTargetedNametagViaRetarget(true);
 		}
 		last_state = current_state;
 	}
@@ -424,13 +424,14 @@ private:
 		self->HandleAgentNameTag(status, static_cast<GW::UI::AgentNameTagInfo*>(wParam));
 	}
 
-	static void RefreshTargetedNametagViaRetarget() {
-		GW::GameThread::Enqueue([] {
+	static void RefreshTargetedNametagViaRetarget(bool allow_enemy = false) {
+		GW::GameThread::Enqueue([allow_enemy] {
 			const uint32_t target_id = GW::Agents::GetTargetId();
 			if (target_id == 0) return;
 			GW::Agent* target_agent = GW::Agents::GetAgentByID(target_id);
 			GW::AgentLiving* target_living = target_agent ? target_agent->GetAsAgentLiving() : nullptr;
-			if (!target_living || target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
+			if (!target_living) return;
+			if (!allow_enemy && target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
 			GW::Agents::ChangeTarget(0u);
 			GW::Agents::ChangeTarget(target_id);
 		});
@@ -512,7 +513,7 @@ private:
 			state.names = ParseSemicolonNameList(raw);
 			state.pending_parse_at_ms = 0;
 			RefreshAllNametags();
-			RefreshTargetedNametagViaRetarget();
+			RefreshTargetedNametagViaRetarget(true);
 		}
 		else if (state.pending_parse_at_ms != 0 && GetTickCount64() >= state.pending_parse_at_ms) {
 			raw = NewlinesToSemicolons(state.buf);
@@ -540,7 +541,7 @@ private:
 		}
 		if (ImGui::IsItemDeactivatedAfterEdit()) {
 			RefreshAllNametags();
-			RefreshTargetedNametagViaRetarget();
+			RefreshTargetedNametagViaRetarget(true);
 		}
 
 		DrawPriorityInput("##priority_input", priority_state_, settings_.priority.raw);
