@@ -298,16 +298,9 @@ private:
 		uint32_t header;
 		const char* label;
 	};
-	static constexpr std::array<DiagOpcodeInfo, 9> kDiagOpcodes = {{
-		{GAME_SMSG_QUEST_ADD, "QUEST_ADD"},
-		{GAME_SMSG_QUEST_GENERAL_INFO, "QUEST_GENERAL_INFO"},
+	static constexpr std::array<DiagOpcodeInfo, 2> kDiagOpcodes = {{
 		{GAME_SMSG_QUEST_UPDATE_MARKER, "QUEST_UPDATE_MARKER"},
-		{GAME_SMSG_QUEST_REMOVE, "QUEST_REMOVE"},
-		{GAME_SMSG_QUEST_ADD_MARKER, "QUEST_ADD_MARKER"},
-		{GAME_SMSG_QUEST_UPDATE_NAME, "QUEST_UPDATE_NAME"},
-		{GAME_SMSG_NPC_UPDATE_PROPERTIES, "NPC_UPDATE_PROPERTIES"},
-		{GAME_SMSG_AGENT_UPDATE_NPC_NAME, "AGENT_UPDATE_NPC_NAME"},
-		{GAME_SMSG_AGENT_DISPLAY_DIALOG, "AGENT_DISPLAY_DIALOG"}
+		{GAME_SMSG_QUEST_ADD_MARKER, "QUEST_ADD_MARKER"}
 	}};
 
 	struct DiagLogEntry {
@@ -542,7 +535,7 @@ private:
 	}
 
 	void DrawDiagnosticPacketLog() {
-		ImGui::TextUnformatted("Recent quest/NPC-related packets:");
+		ImGui::TextUnformatted("Recent QUEST_UPDATE_MARKER / QUEST_ADD_MARKER packets:");
 		char line[64];
 		for (auto it = diag_log_.rbegin(); it != diag_log_.rend(); ++it) {
 			snprintf(line, sizeof(line), "[%llu] %s (0x%04X)", static_cast<unsigned long long>(it->tick_ms), DiagOpcodeLabel(it->header), it->header);
