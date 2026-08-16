@@ -247,7 +247,7 @@ public:
 		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions, true);
 		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, true);
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession, true);
-		RefreshAllNametagsOnChange(last_color_by_boss_state_, settings_.color_by_boss);
+		RefreshAllNametagsOnChange(last_color_by_boss_state_, settings_.color_by_boss, true);
 		RefreshAllNametagsOnChange(last_priority_enabled_state_, settings_.priority_enabled, true);
 
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
