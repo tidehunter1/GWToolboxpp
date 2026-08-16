@@ -455,8 +455,7 @@ private:
 			GW::AgentLiving* target_living = target_agent ? target_agent->GetAsAgentLiving() : nullptr;
 			if (!target_living) return;
 			if (!allow_enemy && target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
-			GW::Agents::ChangeTarget(0u);
-			GW::Agents::ChangeTarget(target_id);
+			GW::UI::SendUIMessage(GW::UI::UIMessage::kAgentUpdate, reinterpret_cast<void*>(static_cast<uintptr_t>(target_id)));
 		});
 	}
 
