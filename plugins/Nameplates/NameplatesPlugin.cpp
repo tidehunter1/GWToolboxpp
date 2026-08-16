@@ -22,7 +22,6 @@
 #include <GWCA/Managers/QuestMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
-#include <GWCA/Packets/Opcodes.h>
 #include <GWCA/Utilities/Scanner.h>
 
 #include <ToolboxPlugin.h>
@@ -195,9 +194,7 @@ public:
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&target_hook_entry_, GW::UI::UIMessage::kChangeTarget, OnTargetChanged);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceChanged, 1);
-		for (const auto& info : kDiagOpcodes) {
-			GW::StoC::RegisterPacketCallback(&diag_hook_entry_, info.header, OnDiagnosticPacket, 1);
-		}
+		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::GenericValue>(&diag_hook_entry_, OnDiagnosticGenericValue, 1);
 	}
 
 	const char* Name() const override { return "Nameplates"; }
@@ -259,7 +256,7 @@ public:
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&target_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
-		GW::StoC::RemoveCallbacks(&diag_hook_entry_);
+		GW::StoC::RemoveCallback<GW::Packet::StoC::GenericValue>(&diag_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -294,17 +291,9 @@ private:
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry diag_hook_entry_;
 
-	struct DiagOpcodeInfo {
-		uint32_t header;
-		const char* label;
-	};
-	static constexpr std::array<DiagOpcodeInfo, 2> kDiagOpcodes = {{
-		{GAME_SMSG_QUEST_UPDATE_MARKER, "QUEST_UPDATE_MARKER"},
-		{GAME_SMSG_QUEST_ADD_MARKER, "QUEST_ADD_MARKER"}
-	}};
-
 	struct DiagLogEntry {
-		uint32_t header;
+		uint32_t value_id;
+		uint32_t agent_id;
 		uint64_t tick_ms;
 	};
 	std::vector<DiagLogEntry> diag_log_;
@@ -454,22 +443,17 @@ private:
 		RefreshAllNametags();
 	}
 
-	static void OnDiagnosticPacket(GW::HookStatus*, GW::Packet::StoC::PacketBase* packet) {
-		if (!packet) return;
+	static void OnDiagnosticGenericValue(GW::HookStatus*, GW::Packet::StoC::GenericValue* pak) {
+		if (!pak) return;
+		if (pak->value_id != GW::Packet::StoC::GenericValueID::apply_marker
+			&& pak->value_id != GW::Packet::StoC::GenericValueID::remove_marker) return;
 		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
-		self->LogDiagnosticPacket(packet->header);
+		self->LogDiagnosticMarker(pak->value_id, pak->agent_id);
 	}
 
-	void LogDiagnosticPacket(uint32_t header) {
-		diag_log_.push_back({header, GetTickCount64()});
+	void LogDiagnosticMarker(uint32_t value_id, uint32_t agent_id) {
+		diag_log_.push_back({value_id, agent_id, GetTickCount64()});
 		if (diag_log_.size() > kDiagLogCap) diag_log_.erase(diag_log_.begin());
-	}
-
-	[[nodiscard]] const char* DiagOpcodeLabel(uint32_t header) const {
-		for (const auto& info : kDiagOpcodes) {
-			if (info.header == header) return info.label;
-		}
-		return "Unknown";
 	}
 
 	void HandleAgentNameTag(GW::HookStatus*, GW::UI::AgentNameTagInfo* tag) {
@@ -535,10 +519,13 @@ private:
 	}
 
 	void DrawDiagnosticPacketLog() {
-		ImGui::TextUnformatted("Recent QUEST_UPDATE_MARKER / QUEST_ADD_MARKER packets:");
-		char line[64];
+		ImGui::TextUnformatted("Recent apply_marker/remove_marker events:");
+		const uint32_t target_id = GW::Agents::GetTargetId();
+		char line[80];
 		for (auto it = diag_log_.rbegin(); it != diag_log_.rend(); ++it) {
-			snprintf(line, sizeof(line), "[%llu] %s (0x%04X)", static_cast<unsigned long long>(it->tick_ms), DiagOpcodeLabel(it->header), it->header);
+			const char* label = it->value_id == GW::Packet::StoC::GenericValueID::apply_marker ? "apply_marker" : "remove_marker";
+			const bool is_target = target_id != 0 && it->agent_id == target_id;
+			snprintf(line, sizeof(line), "[%llu] %s agent=%u%s", static_cast<unsigned long long>(it->tick_ms), label, it->agent_id, is_target ? " (TARGET)" : "");
 			ImGui::TextUnformatted(line);
 		}
 	}
