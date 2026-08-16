@@ -411,7 +411,6 @@ private:
 			GW::Agent* target_agent = GW::Agents::GetAgentByID(target_id);
 			GW::AgentLiving* target_living = target_agent ? target_agent->GetAsAgentLiving() : nullptr;
 			if (!target_living || target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
-			GW::Agents::ChangeTarget(0u);
 			GW::Agents::ChangeTarget(target_id);
 		});
 	}
@@ -440,6 +439,7 @@ private:
 		if (pak->value_id != GW::Packet::StoC::GenericValueID::apply_marker
 			&& pak->value_id != GW::Packet::StoC::GenericValueID::remove_marker) return;
 		RefreshAllNametags();
+		RefreshTargetedNametagViaRetarget();
 	}
 
 	void HandleAgentNameTag(GW::HookStatus*, GW::UI::AgentNameTagInfo* tag) {
