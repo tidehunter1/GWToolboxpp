@@ -1,5 +1,4 @@
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <cstddef>
 #include <cstdlib>
@@ -190,7 +189,6 @@ public:
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
-		GW::UI::RegisterUIMessageCallback(&target_hook_entry_, GW::UI::UIMessage::kChangeTarget, OnTargetChanged);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceChanged, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_, OnAgentMarkerChanged, 1);
 	}
@@ -248,7 +246,6 @@ public:
 	void Terminate() override {
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
-		GW::UI::RemoveUIMessageCallback(&target_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_);
 	}
@@ -271,7 +268,6 @@ public:
 
 		name_cache_.MaybePrune();
 		ProcessBossGlowRetries();
-		TrackTargetTypeMap();
 	}
 
 private:
@@ -285,41 +281,13 @@ private:
 	int last_quest_count_ = -1;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
-	GW::HookEntry target_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry marker_hook_entry_;
-
-	struct TypeMapLogEntry {
-		uint32_t old_value;
-		uint32_t new_value;
-		uint64_t tick_ms;
-	};
-	std::vector<TypeMapLogEntry> type_map_log_;
-	static constexpr size_t kTypeMapLogCap = 30;
-	uint32_t last_tracked_agent_id_ = 0;
-	uint32_t last_tracked_type_map_ = 0;
-
-	void TrackTargetTypeMap() {
-		GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
-		const uint32_t target_id = target ? target->agent_id : 0;
-		if (target_id != last_tracked_agent_id_) {
-			last_tracked_agent_id_ = target_id;
-			last_tracked_type_map_ = target ? target->type_map : 0;
-			type_map_log_.clear();
-			return;
-		}
-		if (!target) return;
-		if (target->type_map != last_tracked_type_map_) {
-			type_map_log_.push_back({last_tracked_type_map_, target->type_map, GetTickCount64()});
-			if (type_map_log_.size() > kTypeMapLogCap) type_map_log_.erase(type_map_log_.begin());
-			last_tracked_type_map_ = target->type_map;
-		}
-	}
 
 	AgentNameCache name_cache_;
 
 	std::unordered_map<uint32_t, uint64_t> boss_glow_retry_deadline_;
-	static constexpr uint64_t kBossGlowRetryDelayMs = 1500;
+	static constexpr uint64_t kBossGlowRetryDelayMs = 500;
 
 	void ScheduleBossGlowRetry(uint32_t agent_id) {
 		if (boss_glow_retry_deadline_.find(agent_id) != boss_glow_retry_deadline_.end()) return;
@@ -500,13 +468,6 @@ private:
 		RefreshTargetedNametagViaRetarget();
 	}
 
-	static void OnTargetChanged(GW::HookStatus*, GW::UI::UIMessage msgid, void* wParam, void*) {
-		if (msgid != GW::UI::UIMessage::kChangeTarget) return;
-		const auto* packet = static_cast<GW::UI::UIPacket::kChangeTarget*>(wParam);
-		if (!packet) return;
-		if (!packet->has_evaluated_target_changed && !packet->has_auto_target_changed && !packet->has_manual_target_changed) return;
-	}
-
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance*) {
 		RefreshAllNametags();
 	}
@@ -581,19 +542,7 @@ private:
 		}
 	}
 
-	void DrawTypeMapDiagLog() {
-		ImGui::TextUnformatted("Target type_map changes:");
-		char line[80];
-		for (auto it = type_map_log_.rbegin(); it != type_map_log_.rend(); ++it) {
-			snprintf(line, sizeof(line), "[%llu] 0x%08X -> 0x%08X", static_cast<unsigned long long>(it->tick_ms), it->old_value, it->new_value);
-			ImGui::TextUnformatted(line);
-		}
-	}
-
 	void DrawSettingsInternal() {
-		ImGui::SeparatorText("Debug");
-		DrawTypeMapDiagLog();
-
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
