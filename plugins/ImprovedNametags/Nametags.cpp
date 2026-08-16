@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cstddef>
 #include <cstdlib>
@@ -277,6 +278,9 @@ private:
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry marker_hook_entry_;
 
+	static inline bool suppress_toggle_addrs_valid_ = false;
+	static inline int suppress_toggle_call_count_ = 0;
+
 	AgentNameCache name_cache_;
 
 	uint64_t frame_counter_ = 0;
@@ -458,7 +462,10 @@ private:
 			using SuppressToggle_pt = void(__cdecl*)();
 			constexpr uintptr_t kHideAllAddr = 0x00802f70;
 			constexpr uintptr_t kShowAllAddr = 0x00802f20;
-			if (GW::Scanner::IsValidPtr(kHideAllAddr, GW::Section_TEXT) && GW::Scanner::IsValidPtr(kShowAllAddr, GW::Section_TEXT)) {
+			const bool valid = GW::Scanner::IsValidPtr(kHideAllAddr, GW::Section_TEXT) && GW::Scanner::IsValidPtr(kShowAllAddr, GW::Section_TEXT);
+			suppress_toggle_addrs_valid_ = valid;
+			if (valid) {
+				suppress_toggle_call_count_++;
 				reinterpret_cast<SuppressToggle_pt>(kHideAllAddr)();
 				reinterpret_cast<SuppressToggle_pt>(kShowAllAddr)();
 			}
@@ -546,7 +553,16 @@ private:
 		}
 	}
 
+	void DrawSuppressToggleDiag() {
+		char line[96];
+		snprintf(line, sizeof(line), "0x200 test: addrs_valid=%d call_count=%d", suppress_toggle_addrs_valid_ ? 1 : 0, suppress_toggle_call_count_);
+		ImGui::TextUnformatted(line);
+	}
+
 	void DrawSettingsInternal() {
+		ImGui::SeparatorText("Debug");
+		DrawSuppressToggleDiag();
+
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
