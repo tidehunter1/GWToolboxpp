@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cstddef>
 #include <cstdlib>
@@ -183,6 +184,7 @@ public:
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestDetailsChanged, OnQuestUpdate);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceChanged, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_, OnAgentMarkerChanged, 1);
+		GW::UI::RegisterUIMessageCallback(&agent_update_hook_entry_, GW::UI::UIMessage::kAgentUpdate, OnAgentUpdateDiag);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -240,6 +242,7 @@ public:
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&agent_update_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -276,8 +279,27 @@ private:
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry marker_hook_entry_;
+	GW::HookEntry agent_update_hook_entry_;
 
 	AgentNameCache name_cache_;
+
+	struct AgentUpdateLogEntry {
+		uint32_t agent_id;
+		bool has_boss_glow;
+		bool has_quest;
+		uint64_t tick_ms;
+	};
+	std::vector<AgentUpdateLogEntry> agent_update_log_;
+	static constexpr size_t kAgentUpdateLogCap = 30;
+
+	void LogAgentUpdateDiag(uint32_t agent_id) {
+		GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
+		const bool has_boss_glow = living && living->GetHasBossGlow();
+		const bool has_quest = living && living->GetHasQuest();
+		agent_update_log_.push_back({agent_id, has_boss_glow, has_quest, GetTickCount64()});
+		if (agent_update_log_.size() > kAgentUpdateLogCap) agent_update_log_.erase(agent_update_log_.begin());
+	}
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -455,7 +477,8 @@ private:
 			GW::AgentLiving* target_living = target_agent ? target_agent->GetAsAgentLiving() : nullptr;
 			if (!target_living) return;
 			if (!allow_enemy && target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
-			GW::UI::SendUIMessage(GW::UI::UIMessage::kAgentUpdate, reinterpret_cast<void*>(static_cast<uintptr_t>(target_id)));
+			GW::Agents::ChangeTarget(0u);
+			GW::Agents::ChangeTarget(target_id);
 		});
 	}
 
@@ -476,6 +499,13 @@ private:
 			&& pak->value_id != GW::Packet::StoC::GenericValueID::remove_marker) return;
 		RefreshAllNametags();
 		RefreshTargetedNametagViaRetarget();
+	}
+
+	static void OnAgentUpdateDiag(GW::HookStatus*, GW::UI::UIMessage msgid, void* wparam, void*) {
+		if (msgid != GW::UI::UIMessage::kAgentUpdate) return;
+		const uint32_t agent_id = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(wparam));
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		self->LogAgentUpdateDiag(agent_id);
 	}
 
 	void HandleAgentNameTag(GW::HookStatus*, GW::UI::AgentNameTagInfo* tag) {
@@ -540,7 +570,21 @@ private:
 		}
 	}
 
+	void DrawAgentUpdateDiagLog() {
+		ImGui::TextUnformatted("Recent kAgentUpdate firings:");
+		const uint32_t target_id = GW::Agents::GetTargetId();
+		char line[96];
+		for (auto it = agent_update_log_.rbegin(); it != agent_update_log_.rend(); ++it) {
+			const bool is_target = target_id != 0 && it->agent_id == target_id;
+			snprintf(line, sizeof(line), "[%llu] agent=%u boss=%d quest=%d%s", static_cast<unsigned long long>(it->tick_ms), it->agent_id, it->has_boss_glow ? 1 : 0, it->has_quest ? 1 : 0, is_target ? " (TARGET)" : "");
+			ImGui::TextUnformatted(line);
+		}
+	}
+
 	void DrawSettingsInternal() {
+		ImGui::SeparatorText("Debug");
+		DrawAgentUpdateDiagLog();
+
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
