@@ -25,7 +25,6 @@
 
 #include <ToolboxPlugin.h>
 #include <PluginUtils.h>
-#include <ImGuiAddons.h>
 #include <imgui.h>
 
 #include <vector>
@@ -361,6 +360,12 @@ private:
 		return cfg.enabled ? std::optional<ImU32>(cfg.color) : std::nullopt;
 	}
 
+	static void ShowHelpMarker(const char* help) {
+		ImGui::SameLine();
+		ImGui::TextDisabled("(?)");
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
+	}
+
 	static void RightAlignNextItem(float item_width) {
 		ImGui::SameLine();
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - item_width);
@@ -368,7 +373,7 @@ private:
 
 	static void DrawCheckboxWithColorRightAligned(const char* label, bool& toggle, uint32_t& color, const char* color_id, const char* help = nullptr) {
 		ImGui::Checkbox(label, &toggle);
-		if (help) ImGui::ShowHelp(help);
+		if (help) ShowHelpMarker(help);
 		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImGui::BeginDisabled(!toggle);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
@@ -546,7 +551,7 @@ private:
 		ImGui::Checkbox("##priority_enabled", &settings_.priority_enabled);
 		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
 		ImGui::TextUnformatted("Priority coloring");
-		ImGui::ShowHelp("One name per line. A single word (e.g. \"Monk\") matches any name containing that word. A full name (e.g. \"Keeper of Souls\") matches only that exact name.");
+		ShowHelpMarker("One name per line. A single word (e.g. \"Monk\") matches any name containing that word. A full name (e.g. \"Keeper of Souls\") matches only that exact name.");
 		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImGui::BeginDisabled(!settings_.priority_enabled);
 		ImVec4 priority_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.priority.color);
@@ -565,7 +570,7 @@ private:
 		ImGui::Checkbox("Color allies by profession", &settings_.recolor_professions);
 
 		ImGui::Checkbox("Color foes by profession", &settings_.recolor_enemy_nameplates_by_profession);
-		ImGui::ShowHelp("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
+		ShowHelpMarker("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
 		ImGui::BeginDisabled(!settings_.recolor_professions && !settings_.recolor_enemy_nameplates_by_profession);
 		if (ImGui::BeginTable("##profession_colors_table", 5)) {
