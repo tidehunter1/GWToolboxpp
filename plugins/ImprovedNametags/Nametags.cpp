@@ -458,7 +458,7 @@ private:
 			using SuppressToggle_pt = void(__cdecl*)();
 			constexpr uintptr_t kHideAllAddr = 0x00802f70;
 			constexpr uintptr_t kShowAllAddr = 0x00802f20;
-			if (GW::Scanner::IsValidPtr(kHideAllAddr, GW::Scanner::Section_TEXT) && GW::Scanner::IsValidPtr(kShowAllAddr, GW::Scanner::Section_TEXT)) {
+			if (GW::Scanner::IsValidPtr(kHideAllAddr, GW::Section_TEXT) && GW::Scanner::IsValidPtr(kShowAllAddr, GW::Section_TEXT)) {
 				reinterpret_cast<SuppressToggle_pt>(kHideAllAddr)();
 				reinterpret_cast<SuppressToggle_pt>(kShowAllAddr)();
 			}
