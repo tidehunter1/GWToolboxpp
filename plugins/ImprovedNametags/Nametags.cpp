@@ -24,6 +24,8 @@
 #include <GWCA/Utilities/Scanner.h>
 
 #include <ToolboxPlugin.h>
+#include <PluginUtils.h>
+#include <ImGuiAddons.h>
 #include <imgui.h>
 
 #include <vector>
@@ -34,15 +36,6 @@
 #include <optional>
 #include <algorithm>
 #include <array>
-
-inline std::wstring Utf8ToWide(const std::string& utf8) {
-	if (utf8.empty()) return {};
-	const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
-	if (len <= 0) return {};
-	std::wstring out(static_cast<size_t>(len), L'\0');
-	MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), out.data(), len);
-	return out;
-}
 
 template<typename CacheMap>
 inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, uint64_t interval) {
@@ -59,7 +52,7 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
 	}
 }
 
-inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
+[[nodiscard]] inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
 	std::vector<std::wstring> out;
 	size_t start = 0;
 	while (start <= text.size()) {
@@ -71,7 +64,7 @@ inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
 	return out;
 }
 
-inline GW::Constants::ProfessionByte GetAgentProfession(const GW::AgentLiving* living) {
+[[nodiscard]] inline GW::Constants::ProfessionByte GetAgentProfession(const GW::AgentLiving* living) noexcept {
 	if (living->primary != GW::Constants::ProfessionByte::None) return living->primary;
 	const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
 	return npc ? static_cast<GW::Constants::ProfessionByte>(npc->primary) : GW::Constants::ProfessionByte::None;
@@ -129,7 +122,7 @@ private:
 	uint64_t tick_ = 0, last_prune_tick_ = 0;
 };
 
-inline std::vector<std::wstring> ParseSemicolonNameList(const std::string& raw) {
+[[nodiscard]] inline std::vector<std::wstring> ParseSemicolonNameList(const std::string& raw) {
 	std::vector<std::wstring> out;
 	std::istringstream stream(raw);
 	std::string token;
@@ -138,7 +131,7 @@ inline std::vector<std::wstring> ParseSemicolonNameList(const std::string& raw) 
 		const size_t end = token.find_last_not_of(" \t\r\n");
 		if (start == std::string::npos || end == std::string::npos) continue;
 
-		std::wstring w = Utf8ToWide(token.substr(start, end - start + 1));
+		std::wstring w = PluginUtils::StringToWString(token.substr(start, end - start + 1));
 		std::transform(w.begin(), w.end(), w.begin(), ::towlower);
 		if (!w.empty()) out.push_back(std::move(w));
 	}
@@ -347,7 +340,7 @@ private:
 		priority_state_.pending_parse_at_ms = 0;
 	}
 
-	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower, const std::vector<std::wstring>& words) const {
+	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower, const std::vector<std::wstring>& words) const noexcept {
 		if (!settings_.priority_enabled) return std::nullopt;
 		if (!name_lower.empty()
 			&& std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), name_lower)) {
@@ -361,17 +354,11 @@ private:
 		return std::nullopt;
 	}
 
-	[[nodiscard]] std::optional<ImU32> TryGetProfessionColor(GW::Constants::ProfessionByte prof) const {
+	[[nodiscard]] std::optional<ImU32> TryGetProfessionColor(GW::Constants::ProfessionByte prof) const noexcept {
 		const size_t index = static_cast<size_t>(prof);
 		if (index == 0 || index >= settings_.profession_colors.size()) return std::nullopt;
 		const auto& cfg = settings_.profession_colors[index];
 		return cfg.enabled ? std::optional<ImU32>(cfg.color) : std::nullopt;
-	}
-
-	static void ShowHelpMarker(const char* help) {
-		ImGui::SameLine();
-		ImGui::TextDisabled("(?)");
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
 	}
 
 	static void RightAlignNextItem(float item_width) {
@@ -381,7 +368,7 @@ private:
 
 	static void DrawCheckboxWithColorRightAligned(const char* label, bool& toggle, uint32_t& color, const char* color_id, const char* help = nullptr) {
 		ImGui::Checkbox(label, &toggle);
-		if (help) ShowHelpMarker(help);
+		if (help) ImGui::ShowHelp(help);
 		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImGui::BeginDisabled(!toggle);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
@@ -525,7 +512,7 @@ private:
 
 		if (settings_.recolor_professions
 			&& living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
-			if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
+			if (const auto color = TryGetProfessionColor(name_lookup.profession)) {
 				tag->text_color = *color;
 			}
 		}
@@ -559,7 +546,7 @@ private:
 		ImGui::Checkbox("##priority_enabled", &settings_.priority_enabled);
 		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
 		ImGui::TextUnformatted("Priority coloring");
-		ShowHelpMarker("One name per line. A single word (e.g. \"Monk\") matches any name containing that word. A full name (e.g. \"Keeper of Souls\") matches only that exact name.");
+		ImGui::ShowHelp("One name per line. A single word (e.g. \"Monk\") matches any name containing that word. A full name (e.g. \"Keeper of Souls\") matches only that exact name.");
 		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImGui::BeginDisabled(!settings_.priority_enabled);
 		ImVec4 priority_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.priority.color);
@@ -578,7 +565,7 @@ private:
 		ImGui::Checkbox("Color allies by profession", &settings_.recolor_professions);
 
 		ImGui::Checkbox("Color foes by profession", &settings_.recolor_enemy_nameplates_by_profession);
-		ShowHelpMarker("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
+		ImGui::ShowHelp("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
 		ImGui::BeginDisabled(!settings_.recolor_professions && !settings_.recolor_enemy_nameplates_by_profession);
 		if (ImGui::BeginTable("##profession_colors_table", 5)) {
