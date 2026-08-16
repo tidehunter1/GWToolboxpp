@@ -441,7 +441,6 @@ private:
 		const auto* packet = static_cast<GW::UI::UIPacket::kChangeTarget*>(wParam);
 		if (!packet) return;
 		if (!packet->has_evaluated_target_changed && !packet->has_auto_target_changed && !packet->has_manual_target_changed) return;
-		RefreshAllNametags();
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance*) {
@@ -501,7 +500,14 @@ private:
 		if (ImGui::InputTextMultiline(input_id, state.buf, PriorityState::kBufSize, ImVec2(-1.0f, ImGui::GetTextLineHeight() * 4.f))) {
 			state.pending_parse_at_ms = GetTickCount64() + kPriorityParseDelayMs;
 		}
-		if (state.pending_parse_at_ms != 0 && GetTickCount64() >= state.pending_parse_at_ms) {
+		if (ImGui::IsItemDeactivatedAfterEdit()) {
+			raw = NewlinesToSemicolons(state.buf);
+			state.names = ParseSemicolonNameList(raw);
+			state.pending_parse_at_ms = 0;
+			RefreshAllNametags();
+			RefreshTargetedNametagViaRetarget();
+		}
+		else if (state.pending_parse_at_ms != 0 && GetTickCount64() >= state.pending_parse_at_ms) {
 			raw = NewlinesToSemicolons(state.buf);
 			state.names = ParseSemicolonNameList(raw);
 			state.pending_parse_at_ms = 0;
