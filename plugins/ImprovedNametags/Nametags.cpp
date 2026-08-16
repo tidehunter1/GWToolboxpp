@@ -182,9 +182,9 @@ struct NameplateSettings {
 	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
 };
 
-class NameplatesPlugin : public ToolboxPlugin {
+class ImprovedNametagsPlugin : public ToolboxPlugin {
 public:
-	NameplatesPlugin() {
+	ImprovedNametagsPlugin() {
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTag);
 		GW::UI::RegisterUIMessageCallback(&quest_hook_entry_, GW::UI::UIMessage::kQuestAdded, OnQuestUpdate);
@@ -194,7 +194,7 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_, OnAgentMarkerChanged, 1);
 	}
 
-	const char* Name() const override { return "Nameplates"; }
+	const char* Name() const override { return "ImprovedNametags"; }
 
 	bool* GetVisiblePtr() override { return &visible_; }
 
@@ -413,7 +413,7 @@ private:
 
 	static void OnAgentNameTag(GW::HookStatus* status, GW::UI::UIMessage msgid, void* wParam, void*) {
 		if (msgid != GW::UI::UIMessage::kShowAgentNameTag && msgid != GW::UI::UIMessage::kSetAgentNameTagAttribs) return;
-		auto* self = static_cast<NameplatesPlugin*>(ToolboxPluginInstance());
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		self->HandleAgentNameTag(status, static_cast<GW::UI::AgentNameTagInfo*>(wParam));
 	}
 
@@ -511,14 +511,13 @@ private:
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Nametags");
 
-		DrawCheckboxWithColorRightAligned("Color nametags by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
+		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
 
-		DrawCheckboxWithColorRightAligned("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
+		DrawCheckboxWithColorRightAligned("Color by quest", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
 
-		ImGui::Spacing();
 		ImGui::Checkbox("##priority_enabled", &settings_.priority_enabled);
-		ImGui::SameLine();
-		ImGui::TextUnformatted("Priority nametag coloring");
+		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+		ImGui::TextUnformatted("Priority coloring");
 		ShowHelpMarker("One name per line. A single word (e.g. \"Monk\") matches any name containing that word. A full name (e.g. \"Keeper of Souls\") matches only that exact name.");
 		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImGui::BeginDisabled(!settings_.priority_enabled);
@@ -531,9 +530,9 @@ private:
 		ImGui::EndDisabled();
 
 		ImGui::Spacing();
-		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
+		ImGui::Checkbox("Color allies by profession", &settings_.recolor_professions);
 
-		ImGui::Checkbox("Color enemy nametags by profession", &settings_.recolor_enemy_nameplates_by_profession);
+		ImGui::Checkbox("Color foes by profession", &settings_.recolor_enemy_nameplates_by_profession);
 		ShowHelpMarker("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
 		if (ImGui::BeginTable("##profession_colors_table", 5)) {
@@ -552,12 +551,12 @@ private:
 	}
 };
 
-void NameplatesPlugin::DrawSettings() {
+void ImprovedNametagsPlugin::DrawSettings() {
 	ToolboxPlugin::DrawSettings();
 	DrawSettingsInternal();
 }
 
 DLLAPI ToolboxPlugin* ToolboxPluginInstance() {
-	static NameplatesPlugin instance;
+	static ImprovedNametagsPlugin instance;
 	return &instance;
 }
