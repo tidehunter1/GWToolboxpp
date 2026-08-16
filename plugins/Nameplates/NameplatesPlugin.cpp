@@ -348,8 +348,9 @@ private:
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - item_width);
 	}
 
-	static void DrawCheckboxWithColorRightAligned(const char* label, bool& toggle, uint32_t& color, const char* color_id) {
+	static void DrawCheckboxWithColorRightAligned(const char* label, bool& toggle, uint32_t& color, const char* color_id, const char* help = nullptr) {
 		ImGui::Checkbox(label, &toggle);
+		if (help) ShowHelpMarker(help);
 		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImGui::BeginDisabled(!toggle);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
@@ -510,15 +511,9 @@ private:
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Nametags");
 
-		DrawCheckboxWithColorRightAligned("Color nametags by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
-		ShowHelpMarker("Overrides other nametag coloring (except Priority) for agents with the boss glow");
+		DrawCheckboxWithColorRightAligned("Color nametags by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
 
 		DrawCheckboxWithColorRightAligned("Color quest-giver nametags", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
-
-		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
-
-		ImGui::Checkbox("Color enemy nametags by profession", &settings_.recolor_enemy_nameplates_by_profession);
-		ShowHelpMarker("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
 		ImGui::Spacing();
 		ImGui::Checkbox("##priority_enabled", &settings_.priority_enabled);
@@ -536,8 +531,10 @@ private:
 		ImGui::EndDisabled();
 
 		ImGui::Spacing();
-		ImGui::TextUnformatted("Profession colors");
-		ShowHelpMarker("Used by 'Color ally nametags by profession' and 'Color enemy nametags by profession' above. Defaults match the classic ally-nametag profession colors.");
+		ImGui::Checkbox("Color ally nametags by profession", &settings_.recolor_professions);
+
+		ImGui::Checkbox("Color enemy nametags by profession", &settings_.recolor_enemy_nameplates_by_profession);
+		ShowHelpMarker("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
 		if (ImGui::BeginTable("##profession_colors_table", 5)) {
 			for (int c = 0; c < 5; ++c) {
