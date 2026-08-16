@@ -1,5 +1,4 @@
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <cstddef>
 #include <cstdlib>
@@ -179,10 +178,7 @@ struct NameplateSettings {
 		{true, IM_COL32(221, 221, 255, 255)}
 	}};
 
-	std::array<PriorityConfig, 2> priorities = {{
-		{"", IM_COL32(135, 206, 250, 255)},
-		{"", IM_COL32(255, 105, 180, 255)}
-	}};
+	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
 };
 
 class NameplatesPlugin : public ToolboxPlugin {
@@ -214,11 +210,8 @@ public:
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
-		for (size_t i = 0; i < 2; ++i) {
-			const std::string prefix = "priority" + std::to_string(i + 1);
-			LoadSetting((prefix + "_raw").c_str(), settings_.priorities[i].raw);
-			LoadSetting((prefix + "_color").c_str(), settings_.priorities[i].color);
-		}
+		LoadSetting("priority_raw", settings_.priority.raw);
+		LoadSetting("priority_color", settings_.priority.color);
 		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
 			const std::string prefix = "profession" + std::to_string(i);
 			LoadSetting((prefix + "_enabled").c_str(), settings_.profession_colors[i].enabled);
@@ -236,11 +229,8 @@ public:
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
-		for (size_t i = 0; i < 2; ++i) {
-			const std::string prefix = "priority" + std::to_string(i + 1);
-			SaveSetting((prefix + "_raw").c_str(), settings_.priorities[i].raw);
-			SaveSetting((prefix + "_color").c_str(), settings_.priorities[i].color);
-		}
+		SaveSetting("priority_raw", settings_.priority.raw);
+		SaveSetting("priority_color", settings_.priority.color);
 		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
 			const std::string prefix = "profession" + std::to_string(i);
 			SaveSetting((prefix + "_enabled").c_str(), settings_.profession_colors[i].enabled);
@@ -293,39 +283,42 @@ private:
 
 	AgentNameCache name_cache_;
 
-	struct HoverDiagEntry {
-		uint32_t agent_id;
-		uint64_t tick_ms;
+	struct PriorityState {
+		static constexpr size_t kBufSize = 1024 * 16;
+		char buf[kBufSize] = {};
+		std::vector<std::wstring> names;
+		uint64_t pending_parse_at_ms = 0;
 	};
-	std::vector<HoverDiagEntry> hover_diag_log_;
-	static constexpr size_t kHoverDiagLogCap = 30;
+	PriorityState priority_state_;
+	static constexpr uint64_t kPriorityParseDelayMs = 150;
 
-	void LogHoverDiag(uint32_t agent_id) {
-		hover_diag_log_.push_back({agent_id, GetTickCount64()});
-		if (hover_diag_log_.size() > kHoverDiagLogCap) hover_diag_log_.erase(hover_diag_log_.begin());
+	static std::string SemicolonsToNewlines(const std::string& raw) {
+		std::string out = raw;
+		std::replace(out.begin(), out.end(), ';', '\n');
+		return out;
 	}
 
-	struct PriorityState {
-		char buf[512] = {};
-		std::vector<std::wstring> names;
-	};
-	std::array<PriorityState, 2> priority_states_;
+	static std::string NewlinesToSemicolons(const char* buf) {
+		std::string out(buf);
+		std::replace(out.begin(), out.end(), '\n', ';');
+		return out;
+	}
 
 	void RefreshPriorityBuffersAndLists() {
-		for (size_t i = 0; i < 2; ++i) {
-			strncpy_s(priority_states_[i].buf, 512, settings_.priorities[i].raw.c_str(), 511);
-			priority_states_[i].names = ParseSemicolonNameList(settings_.priorities[i].raw);
-		}
+		const std::string display = SemicolonsToNewlines(settings_.priority.raw);
+		strncpy_s(priority_state_.buf, PriorityState::kBufSize, display.c_str(), PriorityState::kBufSize - 1);
+		priority_state_.names = ParseSemicolonNameList(settings_.priority.raw);
+		priority_state_.pending_parse_at_ms = 0;
 	}
 
 	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower, const std::vector<std::wstring>& words) const {
 		if (!name_lower.empty()
-			&& std::binary_search(priority_states_[0].names.begin(), priority_states_[0].names.end(), name_lower)) {
-			return settings_.priorities[0].color;
+			&& std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), name_lower)) {
+			return settings_.priority.color;
 		}
 		for (const auto& word : words) {
-			if (std::binary_search(priority_states_[1].names.begin(), priority_states_[1].names.end(), word)) {
-				return settings_.priorities[1].color;
+			if (std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), word)) {
+				return settings_.priority.color;
 			}
 		}
 		return std::nullopt;
@@ -452,12 +445,11 @@ private:
 		if (pak->value_id != GW::Packet::StoC::GenericValueID::apply_marker
 			&& pak->value_id != GW::Packet::StoC::GenericValueID::remove_marker) return;
 		RefreshAllNametags();
+		RefreshTargetedNametagViaRetarget();
 	}
 
 	void HandleAgentNameTag(GW::HookStatus*, GW::UI::AgentNameTagInfo* tag) {
 		if (!tag) return;
-
-		LogHoverDiag(tag->agent_id);
 
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
@@ -497,11 +489,14 @@ private:
 		}
 	}
 
-	void DrawPriorityInput(const char* input_id, const char* hint, const char* color_id, uint32_t& color, char* buf, std::string& raw, std::vector<std::wstring>& names) {
-		ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x));
-		if (ImGui::InputTextWithHint(input_id, hint, buf, 512)) {
-			raw = buf;
-			names = ParseSemicolonNameList(raw);
+	void DrawPriorityInput(const char* input_id, const char* color_id, uint32_t& color, PriorityState& state, std::string& raw) {
+		if (ImGui::InputTextMultiline(input_id, state.buf, PriorityState::kBufSize, ImVec2(-(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x), ImGui::GetTextLineHeight() * 4.f))) {
+			state.pending_parse_at_ms = GetTickCount64() + kPriorityParseDelayMs;
+		}
+		if (state.pending_parse_at_ms != 0 && GetTickCount64() >= state.pending_parse_at_ms) {
+			raw = NewlinesToSemicolons(state.buf);
+			state.names = ParseSemicolonNameList(raw);
+			state.pending_parse_at_ms = 0;
 		}
 		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
 		ImVec4 color_vec = ImGui::ColorConvertU32ToFloat4(color);
@@ -510,30 +505,7 @@ private:
 		}
 	}
 
-	void DrawTargetProfessionDebug() {
-		GW::AgentLiving* target = GW::Agents::GetTargetAsAgentLiving();
-		const GW::Constants::ProfessionByte prof = target ? GetAgentProfession(target) : GW::Constants::ProfessionByte::None;
-		char label[64];
-		snprintf(label, sizeof(label), "Target profession: %s", GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(prof)));
-		ImGui::TextUnformatted(label);
-	}
-
-	void DrawHoverDiagLog() {
-		ImGui::TextUnformatted("Recent nametag hook firings (agent_id, ms):");
-		const uint32_t target_id = GW::Agents::GetTargetId();
-		char line[64];
-		for (auto it = hover_diag_log_.rbegin(); it != hover_diag_log_.rend(); ++it) {
-			const bool is_target = target_id != 0 && it->agent_id == target_id;
-			snprintf(line, sizeof(line), "[%llu] agent=%u%s", static_cast<unsigned long long>(it->tick_ms), it->agent_id, is_target ? " (TARGET)" : "");
-			ImGui::TextUnformatted(line);
-		}
-	}
-
 	void DrawSettingsInternal() {
-		ImGui::SeparatorText("Debug");
-		DrawTargetProfessionDebug();
-		DrawHoverDiagLog();
-
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color nametags by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss");
@@ -548,17 +520,9 @@ private:
 
 		ImGui::Spacing();
 		ImGui::TextUnformatted("Priority nametag coloring");
-		ShowHelpMarker("Priority 1 matches full names exactly, semicolon-separated. \nPriority 2 matches whole words only, e.g. \"Monk\" matches \"Charr Monk\" but not \"Charrmonk\".");
+		ShowHelpMarker("One name per line. A single word (e.g. \"Monk\") matches any name containing that word. A full name (e.g. \"Keeper of Souls\") matches only that exact name.");
 
-		static constexpr std::array<const char*, 2> kPriorityHints = {
-			"Keeper of Souls; Kournan Taskmaster",
-			"monk; healer; priest; mender"
-		};
-		static constexpr std::array<const char*, 2> kPriorityInputIds = { "##priority_input_0", "##priority_input_1" };
-		static constexpr std::array<const char*, 2> kPriorityColorIds = { "##priority_color_0", "##priority_color_1" };
-		for (size_t i = 0; i < 2; ++i) {
-			DrawPriorityInput(kPriorityInputIds[i], kPriorityHints[i], kPriorityColorIds[i], settings_.priorities[i].color, priority_states_[i].buf, settings_.priorities[i].raw, priority_states_[i].names);
-		}
+		DrawPriorityInput("##priority_input", "##priority_color", settings_.priority.color, priority_state_, settings_.priority.raw);
 
 		ImGui::Spacing();
 		ImGui::TextUnformatted("Profession colors");
