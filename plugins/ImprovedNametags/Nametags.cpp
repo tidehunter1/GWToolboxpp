@@ -269,6 +269,7 @@ public:
 		}
 
 		name_cache_.MaybePrune();
+		ProcessBossGlowRetries();
 	}
 
 private:
@@ -287,6 +288,32 @@ private:
 	GW::HookEntry marker_hook_entry_;
 
 	AgentNameCache name_cache_;
+
+	std::unordered_map<uint32_t, uint64_t> boss_glow_retry_deadline_;
+	static constexpr uint64_t kBossGlowRetryDelayMs = 1500;
+
+	void ScheduleBossGlowRetry(uint32_t agent_id) {
+		if (boss_glow_retry_deadline_.find(agent_id) != boss_glow_retry_deadline_.end()) return;
+		boss_glow_retry_deadline_[agent_id] = GetTickCount64() + kBossGlowRetryDelayMs;
+	}
+
+	void ProcessBossGlowRetries() {
+		for (auto it = boss_glow_retry_deadline_.begin(); it != boss_glow_retry_deadline_.end(); ) {
+			if (GetTickCount64() < it->second) {
+				++it;
+				continue;
+			}
+			const uint32_t agent_id = it->first;
+			it = boss_glow_retry_deadline_.erase(it);
+
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
+			if (living && living->GetHasBossGlow()) {
+				RefreshAllNametags();
+				RefreshTargetedNametagViaRetarget();
+			}
+		}
+	}
 
 	struct PriorityState {
 		static constexpr size_t kBufSize = 1024 * 16;
@@ -479,9 +506,12 @@ private:
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
 
 		if (is_enemy) {
-			if (settings_.color_by_boss && living->GetHasBossGlow()) {
-				tag->text_color = settings_.boss_color;
-				return;
+			if (settings_.color_by_boss) {
+				if (living->GetHasBossGlow()) {
+					tag->text_color = settings_.boss_color;
+					return;
+				}
+				ScheduleBossGlowRetry(living->agent_id);
 			}
 			if (settings_.recolor_enemy_nameplates_by_profession) {
 				if (const auto color = TryGetProfessionColor(name_lookup.profession)) {
