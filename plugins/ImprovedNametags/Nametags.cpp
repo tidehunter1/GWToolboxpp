@@ -251,6 +251,7 @@ public:
 	}
 
 	void Draw(IDirect3DDevice9*) override {
+		++frame_counter_;
 		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions, true);
 		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, true);
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession, true);
@@ -286,22 +287,28 @@ private:
 
 	AgentNameCache name_cache_;
 
-	std::unordered_map<uint32_t, uint64_t> boss_glow_retry_deadline_;
-	static constexpr uint64_t kBossGlowRetryDelayMs = 50;
+	uint64_t frame_counter_ = 0;
+	struct BossGlowRetry {
+		uint32_t agent_id;
+		uint64_t scheduled_frame;
+	};
+	std::vector<BossGlowRetry> boss_glow_retries_;
 
 	void ScheduleBossGlowRetry(uint32_t agent_id) {
-		if (boss_glow_retry_deadline_.find(agent_id) != boss_glow_retry_deadline_.end()) return;
-		boss_glow_retry_deadline_[agent_id] = GetTickCount64() + kBossGlowRetryDelayMs;
+		for (const auto& r : boss_glow_retries_) {
+			if (r.agent_id == agent_id) return;
+		}
+		boss_glow_retries_.push_back({agent_id, frame_counter_});
 	}
 
 	void ProcessBossGlowRetries() {
-		for (auto it = boss_glow_retry_deadline_.begin(); it != boss_glow_retry_deadline_.end(); ) {
-			if (GetTickCount64() < it->second) {
+		for (auto it = boss_glow_retries_.begin(); it != boss_glow_retries_.end(); ) {
+			if (frame_counter_ <= it->scheduled_frame) {
 				++it;
 				continue;
 			}
-			const uint32_t agent_id = it->first;
-			it = boss_glow_retry_deadline_.erase(it);
+			const uint32_t agent_id = it->agent_id;
+			it = boss_glow_retries_.erase(it);
 
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
