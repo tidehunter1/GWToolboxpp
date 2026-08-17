@@ -50,11 +50,12 @@ namespace GW {
     static_assert(sizeof(DyeInfo) == 3, "struct DyeInfo has incorrect size");
 
     struct ItemData {
-        uint32_t model_file_id = 0;
-        GW::Constants::ItemType type = (GW::Constants::ItemType)0xff;
-        GW::DyeInfo dye = {};
-        uint32_t value = 0;
-        uint32_t interaction = 0;
+        // No default member initializers: GCC rejects non-trivial members in the anonymous struct/union in Agent.h that uses this.
+        uint32_t model_file_id;
+        GW::Constants::ItemType type;
+        GW::DyeInfo dye;
+        uint32_t value;
+        uint32_t interaction;
     };
     static_assert(sizeof(ItemData) == 0x10, "struct ItemData has incorrect size");
 
