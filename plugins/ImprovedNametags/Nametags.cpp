@@ -456,51 +456,18 @@ private:
 			if (!target_living) return;
 			if (!allow_enemy && target_living->allegiance == GW::Constants::Allegiance::Enemy) return;
 
-			using SetNameTagFlags_pt = void(__fastcall*)(void* render_info, void* edx, uint32_t flags, uint32_t enable);
-			struct AgentRenderInfoStub {
-				void** vtable;
-				uint32_t h0004[10];
-				uint32_t agent_id;
-				uint32_t h0030[10];
-				uint32_t name_tag_flags;
-			};
-			static_assert(offsetof(AgentRenderInfoStub, agent_id) == 0x2c);
-			static_assert(offsetof(AgentRenderInfoStub, name_tag_flags) == 0x58);
-			constexpr uint32_t kNameTagFlags_Suppressed = 0x200;
-
-			static bool tried_resolve_array = false;
-			static void*** render_info_array_ptr = nullptr;
-			static uint32_t* render_info_capacity_ptr = nullptr;
-			if (!tried_resolve_array) {
-				tried_resolve_array = true;
-				const uintptr_t address = GW::Scanner::Find("\xa1\x00\x00\x00\x00\x56\x8b\x35\x00\x00\x00\x00\x8d\x04\x86", "x????xxx????xxx");
-				if (address) {
-					render_info_capacity_ptr = *reinterpret_cast<uint32_t**>(address + 0x1);
-					render_info_array_ptr = *reinterpret_cast<void****>(address + 0x8);
-				}
+			using RefreshNameTagFunc_pt = void(__thiscall*)(GW::Agent* agent, uint32_t old_flags, uint32_t new_flags, int force);
+			static bool tried_resolve = false;
+			static RefreshNameTagFunc_pt refresh_func = nullptr;
+			if (!tried_resolve) {
+				tried_resolve = true;
+				uintptr_t address = GW::Scanner::Find("\x6a\x00\xff\x73\x2c\x68\x1a\x00\x00\x10", "xxxxxxxxxx");
+				if (address) address = GW::Scanner::FindInRange("\xe8", "x", 0, address, address + 0xff);
+				if (address) address = GW::Scanner::FunctionFromNearCall(address);
+				if (address) refresh_func = reinterpret_cast<RefreshNameTagFunc_pt>(address);
 			}
-			if (!render_info_array_ptr || !render_info_capacity_ptr) return;
-			void** render_info_array = *render_info_array_ptr;
-			const uint32_t capacity = *render_info_capacity_ptr;
-			if (!render_info_array || target_id >= capacity) return;
-			void* render_info = render_info_array[target_id];
-			if (!render_info) return;
-			const auto* render_info_stub = static_cast<AgentRenderInfoStub*>(render_info);
-			if (render_info_stub->name_tag_flags & kNameTagFlags_Suppressed) return;
-
-			static bool tried_resolve_func = false;
-			static SetNameTagFlags_pt set_func = nullptr;
-			if (!tried_resolve_func) {
-				tried_resolve_func = true;
-				const uintptr_t address = GW::Scanner::Find("\x50\x68\x00\x04\x00\x00\x8b\xcf\xe8", "xxxxxxxxx", 0x8);
-				if (address) {
-					set_func = reinterpret_cast<SetNameTagFlags_pt>(GW::Scanner::FunctionFromNearCall(address));
-				}
-			}
-			if (!set_func) return;
-
-			set_func(render_info, nullptr, kNameTagFlags_Suppressed, 1);
-			set_func(render_info, nullptr, kNameTagFlags_Suppressed, 0);
+			if (!refresh_func) return;
+			refresh_func(target_agent, target_agent->name_properties, target_agent->name_properties, 1);
 		});
 	}
 
