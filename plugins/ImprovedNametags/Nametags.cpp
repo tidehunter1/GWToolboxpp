@@ -589,6 +589,7 @@ private:
 	}
 };
 
+
 void ImprovedNametagsPlugin::DrawSettings() {
 	ToolboxPlugin::DrawSettings();
 	DrawSettingsInternal();
