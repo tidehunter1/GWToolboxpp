@@ -112,7 +112,8 @@ jobs:
       #run: cmake --build . --config RelWithDebInfo
       #run: cmake --build . --target Nameplates --config RelWithDebInfo
       #run: cmake --build . --target Nameplates --config Debug
-      run: cmake --build . --target ImprovedNametags --config ${{ env.BUILD_CONFIG }}
+      #run: cmake --build . --target ImprovedNametags --config ${{ env.BUILD_CONFIG }}
+      run: cmake --build . --target GWToolboxdll --config ${{ env.BUILD_CONFIG }}
     - name: Save output
       uses: actions/upload-artifact@v4
       with:
