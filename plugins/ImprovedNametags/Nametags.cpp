@@ -504,8 +504,7 @@ private:
 		GW::Packet::StoC::AgentName packet;
 		packet.header = GW::Packet::StoC::AgentName::STATIC_HEADER;
 		packet.agent_id = agent_id;
-		wcsncpy(packet.name_enc, name, _countof(packet.name_enc) - 1);
-		packet.name_enc[_countof(packet.name_enc) - 1] = 0;
+		wcsncpy_s(packet.name_enc, name, _countof(packet.name_enc) - 1);
 		return GW::StoC::EmulatePacket(&packet);
 	}
 
