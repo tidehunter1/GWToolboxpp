@@ -341,7 +341,7 @@ private:
 		priority_state_.pending_parse_at_ms = 0;
 	}
 
-	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower, const std::vector<std::wstring>& words) const noexcept {
+	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::vector<std::wstring>& words) const noexcept {
 		if (!settings_.priority_enabled) return std::nullopt;
 		for (const auto& word : words) {
 			if (std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), word)) {
@@ -489,7 +489,7 @@ private:
 		}
 
 		const auto name_lookup = name_cache_.Get(living);
-		if (const auto color = GetPriorityColor(*name_lookup.lower, *name_lookup.words)) {
+		if (const auto color = GetPriorityColor(*name_lookup.words)) {
 			tag->text_color = *color;
 			return;
 		}
