@@ -177,7 +177,7 @@ struct NameplateSettings {
 	bool priority_enabled = false;
 	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
 
-	bool test_health_tag_rename = false;
+	bool show_health_tag = false;
 };
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
@@ -205,6 +205,7 @@ public:
 		L_SET(recolor_enemy_nameplates_by_profession);
 		L_SET(quest_color);
 		L_SET(color_by_boss); L_SET(boss_color);
+		L_SET(show_health_tag);
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
@@ -225,6 +226,7 @@ public:
 		S_SET(recolor_enemy_nameplates_by_profession);
 		S_SET(quest_color);
 		S_SET(color_by_boss); S_SET(boss_color);
+		S_SET(show_health_tag);
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
@@ -256,6 +258,11 @@ public:
 		RefreshAllNametagsOnChange(last_color_by_boss_state_, settings_.color_by_boss, true);
 		RefreshAllNametagsOnChange(last_priority_enabled_state_, settings_.priority_enabled, true);
 
+		if (last_show_health_tag_state_.has_value() && *last_show_health_tag_state_ && !settings_.show_health_tag) {
+			RevertHealthTags();
+		}
+		last_show_health_tag_state_ = settings_.show_health_tag;
+
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
 			const int quest_count = static_cast<int>(quest_log->size());
 			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
@@ -266,6 +273,7 @@ public:
 		}
 
 		name_cache_.MaybePrune();
+		PruneCache(health_tag_cache_, health_tag_tick_, health_tag_last_prune_tick_, kHealthTagPruneIntervalTicks);
 		ProcessBossGlowRetries();
 	}
 
@@ -285,12 +293,16 @@ private:
 
 	AgentNameCache name_cache_;
 
-	struct TestRenameState {
+	struct HealthTagState {
 		std::wstring base_name;
 		bool base_captured = false;
 		uint64_t last_attempt_ms = 0;
+		uint64_t last_seen_tick = 0;
 	};
-	std::unordered_map<uint32_t, TestRenameState> test_rename_cache_;
+	std::unordered_map<uint32_t, HealthTagState> health_tag_cache_;
+	uint64_t health_tag_tick_ = 0, health_tag_last_prune_tick_ = 0;
+	static constexpr uint64_t kHealthTagPruneIntervalTicks = 1800;
+	std::optional<bool> last_show_health_tag_state_;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -494,12 +506,12 @@ private:
 		return GW::StoC::EmulatePacket(&packet);
 	}
 
-	void UpdateTestHealthTagRename(GW::AgentLiving* living, const AgentNameCache::NameLookup& name_lookup) {
-		if (!settings_.test_health_tag_rename) return;
-		if (living->agent_id != GW::Agents::GetTargetId()) return;
+	void UpdateHealthTag(GW::AgentLiving* living, const AgentNameCache::NameLookup& name_lookup) {
+		if (!settings_.show_health_tag) return;
 		if (living->GetIsDead()) return;
 
-		TestRenameState& state = test_rename_cache_[living->agent_id];
+		HealthTagState& state = health_tag_cache_[living->agent_id];
+		state.last_seen_tick = health_tag_tick_;
 
 		if (!state.base_captured && !name_lookup.display->empty()) {
 			state.base_name = *name_lookup.display;
@@ -522,6 +534,21 @@ private:
 		});
 	}
 
+	void RevertHealthTags() {
+		std::vector<std::pair<uint32_t, std::wstring>> to_revert;
+		for (auto& pair : health_tag_cache_) {
+			if (pair.second.base_captured && !pair.second.base_name.empty()) {
+				to_revert.emplace_back(pair.first, pair.second.base_name);
+			}
+		}
+		health_tag_cache_.clear();
+		GW::GameThread::Enqueue([to_revert] {
+			for (const auto& entry : to_revert) {
+				RenameAgent(entry.first, entry.second.c_str());
+			}
+		});
+	}
+
 	void HandleAgentNameTag(GW::HookStatus*, GW::UI::AgentNameTagInfo* tag) {
 		if (!tag) return;
 
@@ -530,7 +557,7 @@ private:
 		if (!living) return;
 
 		const auto name_lookup = name_cache_.Get(living);
-		UpdateTestHealthTagRename(living, name_lookup);
+		UpdateHealthTag(living, name_lookup);
 		if (const auto color = GetPriorityColor(*name_lookup.words)) {
 			tag->text_color = *color;
 			return;
@@ -588,6 +615,9 @@ private:
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Nametags");
 
+		ImGui::Checkbox("Show health tag", &settings_.show_health_tag);
+		ShowHelpMarker("Appends the current HP% to nametags, e.g. \"Buzzkill [67%]\". Updates every 500ms while HP changes.");
+
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
 
 		DrawCheckboxWithColorRightAligned("Color by quest", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
@@ -631,11 +661,6 @@ private:
 			ImGui::EndTable();
 		}
 		ImGui::EndDisabled();
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Experimental");
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Test only. Target a single unit before enabling.");
-		ImGui::Checkbox("Test: health tag rename (wrapped + deferred, current target only)", &settings_.test_health_tag_rename);
 	}
 };
 
