@@ -172,6 +172,8 @@ struct NameplateSettings {
 
 	bool priority_enabled = false;
 	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
+
+	bool test_name_enc_redirect = false;
 };
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
@@ -341,10 +343,6 @@ private:
 
 	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::wstring& name_lower, const std::vector<std::wstring>& words) const noexcept {
 		if (!settings_.priority_enabled) return std::nullopt;
-		if (!name_lower.empty()
-			&& std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), name_lower)) {
-			return settings_.priority.color;
-		}
 		for (const auto& word : words) {
 			if (std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), word)) {
 				return settings_.priority.color;
@@ -484,6 +482,12 @@ private:
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
 
+		if (settings_.test_name_enc_redirect && tag->agent_id == GW::Agents::GetTargetId()) {
+			static wchar_t test_name_enc_buf[64];
+			swprintf(test_name_enc_buf, 64, L"\xa35\x101%s\x10a\x8101\x730e\x1", L"TestRename");
+			tag->name_enc = test_name_enc_buf;
+		}
+
 		const auto name_lookup = name_cache_.Get(living);
 		if (const auto color = GetPriorityColor(*name_lookup.lower, *name_lookup.words)) {
 			tag->text_color = *color;
@@ -549,7 +553,7 @@ private:
 		ImGui::Checkbox("##priority_enabled", &settings_.priority_enabled);
 		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
 		ImGui::TextUnformatted("Priority coloring");
-		ShowHelpMarker("One name per line. A single word (e.g. \"Monk\") matches any name containing that word. A full name (e.g. \"Keeper of Souls\") matches only that exact name.");
+		ShowHelpMarker("One name per line. Any single word (e.g. \"Monk\") matches any name containing that exact word.");
 		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImGui::BeginDisabled(!settings_.priority_enabled);
 		ImVec4 priority_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.priority.color);
@@ -585,6 +589,11 @@ private:
 			ImGui::EndTable();
 		}
 		ImGui::EndDisabled();
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Experimental");
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Test only. Target a single unit before enabling.");
+		ImGui::Checkbox("Test: name_enc encoded redirect (current target only)", &settings_.test_name_enc_redirect);
 	}
 };
 
