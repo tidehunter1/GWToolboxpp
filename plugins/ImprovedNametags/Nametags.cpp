@@ -286,13 +286,11 @@ private:
 	AgentNameCache name_cache_;
 
 	struct TestRenameState {
-		uint32_t agent_id = 0;
 		std::wstring base_name;
 		bool base_captured = false;
-		int last_applied_bucket = -1;
 		uint64_t last_attempt_ms = 0;
 	};
-	TestRenameState test_rename_state_;
+	std::unordered_map<uint32_t, TestRenameState> test_rename_cache_;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -501,29 +499,22 @@ private:
 		if (living->agent_id != GW::Agents::GetTargetId()) return;
 		if (living->GetIsDead()) return;
 
-		if (test_rename_state_.agent_id != living->agent_id) {
-			test_rename_state_.agent_id = living->agent_id;
-			test_rename_state_.base_captured = false;
-			test_rename_state_.last_applied_bucket = -1;
-		}
+		TestRenameState& state = test_rename_cache_[living->agent_id];
 
-		if (!test_rename_state_.base_captured && !name_lookup.display->empty()) {
-			test_rename_state_.base_name = *name_lookup.display;
-			test_rename_state_.base_captured = true;
+		if (!state.base_captured && !name_lookup.display->empty()) {
+			state.base_name = *name_lookup.display;
+			state.base_captured = true;
 		}
-		if (!test_rename_state_.base_captured) return;
+		if (!state.base_captured) return;
 
 		const uint64_t now = GetTickCount64();
-		if (now - test_rename_state_.last_attempt_ms < 500) return;
-		test_rename_state_.last_attempt_ms = now;
+		if (now - state.last_attempt_ms < 500) return;
+		state.last_attempt_ms = now;
 
 		const int pct = static_cast<int>(std::lround(std::clamp(living->hp, 0.f, 1.f) * 100.f));
-		const int bucket = pct / 5;
-		if (bucket == test_rename_state_.last_applied_bucket) return;
-		test_rename_state_.last_applied_bucket = bucket;
 
 		wchar_t renamed[40];
-		swprintf(renamed, _countof(renamed), L"\x108\x107%s [%d%%]\x1", test_rename_state_.base_name.c_str(), pct);
+		swprintf(renamed, _countof(renamed), L"\x108\x107%s [%d%%]\x1", state.base_name.c_str(), pct);
 		const std::wstring renamed_copy(renamed);
 		const uint32_t agent_id = living->agent_id;
 		GW::GameThread::Enqueue([agent_id, renamed_copy] {
