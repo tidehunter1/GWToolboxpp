@@ -274,6 +274,11 @@ public:
 
 		name_cache_.MaybePrune();
 		PruneCache(health_tag_cache_, health_tag_tick_, health_tag_last_prune_tick_, kHealthTagPruneIntervalTicks);
+		if (health_tag_dirty_) {
+			RefreshAllNametags();
+			RefreshTargetedNametag();
+			health_tag_dirty_ = false;
+		}
 		ProcessBossGlowRetries();
 	}
 
@@ -303,6 +308,7 @@ private:
 	uint64_t health_tag_tick_ = 0, health_tag_last_prune_tick_ = 0;
 	static constexpr uint64_t kHealthTagPruneIntervalTicks = 1800;
 	std::optional<bool> last_show_health_tag_state_;
+	bool health_tag_dirty_ = false;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -532,6 +538,7 @@ private:
 		GW::GameThread::Enqueue([agent_id, renamed_copy] {
 			RenameAgent(agent_id, renamed_copy.c_str());
 		});
+		health_tag_dirty_ = true;
 	}
 
 	void RevertHealthTags() {
