@@ -35,6 +35,7 @@
 #include <optional>
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 template<typename CacheMap>
 inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, uint64_t interval) {
@@ -73,6 +74,7 @@ class AgentNameCache {
 public:
 	struct NameLookup {
 		const std::wstring* lower;
+		const std::wstring* display;
 		const std::vector<std::wstring>* words;
 		GW::Constants::ProfessionByte profession;
 	};
@@ -85,10 +87,10 @@ public:
 			wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
 			entry.buffer[0] = L'\0';
 			entry.converted = false;
-			entry.profession_resolved = false;
 			GW::UI::AsyncDecodeStr(enc_name, entry.buffer, kBufferLen);
 		}
 		if (!entry.converted && entry.buffer[0] != L'\0') {
+			entry.decoded_display = entry.buffer;
 			entry.decoded_lower = entry.buffer;
 			std::transform(entry.decoded_lower.begin(), entry.decoded_lower.end(), entry.decoded_lower.begin(), ::towlower);
 			entry.decoded_words_lower = SplitWords(entry.decoded_lower);
@@ -98,7 +100,7 @@ public:
 			entry.profession = GetAgentProfession(living);
 			entry.profession_resolved = true;
 		}
-		return { &entry.decoded_lower, &entry.decoded_words_lower, entry.profession };
+		return { &entry.decoded_lower, &entry.decoded_display, &entry.decoded_words_lower, entry.profession };
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
@@ -113,6 +115,7 @@ private:
 		bool converted = false;
 		uint64_t last_seen_tick = 0;
 		std::wstring decoded_lower;
+		std::wstring decoded_display;
 		std::vector<std::wstring> decoded_words_lower;
 		GW::Constants::ProfessionByte profession = GW::Constants::ProfessionByte::None;
 		bool profession_resolved = false;
@@ -173,7 +176,7 @@ struct NameplateSettings {
 	bool priority_enabled = false;
 	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
 
-	bool test_name_enc_redirect = false;
+	bool show_health_tag = false;
 };
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
@@ -201,6 +204,7 @@ public:
 		L_SET(recolor_enemy_nameplates_by_profession);
 		L_SET(quest_color);
 		L_SET(color_by_boss); L_SET(boss_color);
+		L_SET(show_health_tag);
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
@@ -221,6 +225,7 @@ public:
 		S_SET(recolor_enemy_nameplates_by_profession);
 		S_SET(quest_color);
 		S_SET(color_by_boss); S_SET(boss_color);
+		S_SET(show_health_tag);
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
@@ -252,6 +257,11 @@ public:
 		RefreshAllNametagsOnChange(last_color_by_boss_state_, settings_.color_by_boss, true);
 		RefreshAllNametagsOnChange(last_priority_enabled_state_, settings_.priority_enabled, true);
 
+		if (last_show_health_tag_state_.has_value() && *last_show_health_tag_state_ && !settings_.show_health_tag) {
+			RevertHealthTags();
+		}
+		last_show_health_tag_state_ = settings_.show_health_tag;
+
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
 			const int quest_count = static_cast<int>(quest_log->size());
 			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
@@ -262,6 +272,7 @@ public:
 		}
 
 		name_cache_.MaybePrune();
+		PruneCache(health_tag_cache_, health_tag_tick_, health_tag_last_prune_tick_, kHealthTagPruneIntervalTicks);
 		ProcessBossGlowRetries();
 	}
 
@@ -273,6 +284,7 @@ private:
 	std::optional<bool> last_recolor_enemy_profession_state_;
 	std::optional<bool> last_color_by_boss_state_;
 	std::optional<bool> last_priority_enabled_state_;
+	std::optional<bool> last_show_health_tag_state_;
 	int last_quest_count_ = -1;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
@@ -280,6 +292,19 @@ private:
 	GW::HookEntry marker_hook_entry_;
 
 	AgentNameCache name_cache_;
+
+	struct HealthTagState {
+		std::wstring base_name;
+		bool base_captured = false;
+		int last_applied_bucket = -1;
+		uint64_t last_attempt_ms = 0;
+		uint64_t last_seen_tick = 0;
+	};
+	std::unordered_map<uint32_t, HealthTagState> health_tag_cache_;
+	uint64_t health_tag_tick_ = 0, health_tag_last_prune_tick_ = 0;
+	static constexpr uint64_t kHealthTagPruneIntervalTicks = 1800;
+	static constexpr uint64_t kHealthTagThrottleMs = 500;
+	static constexpr int kHealthTagBucketStep = 5;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -475,6 +500,53 @@ private:
 		RefreshTargetedNametag();
 	}
 
+	static bool RenameAgent(uint32_t agent_id, const wchar_t* name) {
+		GW::Packet::StoC::AgentName packet;
+		packet.header = GW::Packet::StoC::AgentName::STATIC_HEADER;
+		packet.agent_id = agent_id;
+		wcsncpy(packet.name_enc, name, _countof(packet.name_enc) - 1);
+		packet.name_enc[_countof(packet.name_enc) - 1] = 0;
+		return GW::StoC::EmulatePacket(&packet);
+	}
+
+	void UpdateHealthTag(GW::AgentLiving* living, const AgentNameCache::NameLookup& name_lookup) {
+		if (!settings_.show_health_tag) return;
+		if (living->allegiance != GW::Constants::Allegiance::Enemy) return;
+		if (living->GetIsDead()) return;
+
+		HealthTagState& state = health_tag_cache_[living->agent_id];
+		state.last_seen_tick = health_tag_tick_;
+
+		if (!state.base_captured && !name_lookup.display->empty()) {
+			state.base_name = *name_lookup.display;
+			state.base_captured = true;
+		}
+		if (!state.base_captured) return;
+
+		const uint64_t now = GetTickCount64();
+		if (now - state.last_attempt_ms < kHealthTagThrottleMs) return;
+		state.last_attempt_ms = now;
+
+		const int pct = static_cast<int>(std::lround(std::clamp(living->hp, 0.f, 1.f) * 100.f));
+		const int bucket = pct / kHealthTagBucketStep;
+		if (bucket == state.last_applied_bucket) return;
+
+		wchar_t renamed[40];
+		swprintf(renamed, _countof(renamed), L"%s [%d%%]", state.base_name.c_str(), pct);
+		if (RenameAgent(living->agent_id, renamed)) {
+			state.last_applied_bucket = bucket;
+		}
+	}
+
+	void RevertHealthTags() {
+		for (auto& pair : health_tag_cache_) {
+			if (pair.second.base_captured && !pair.second.base_name.empty()) {
+				RenameAgent(pair.first, pair.second.base_name.c_str());
+			}
+		}
+		health_tag_cache_.clear();
+	}
+
 	void HandleAgentNameTag(GW::HookStatus*, GW::UI::AgentNameTagInfo* tag) {
 		if (!tag) return;
 
@@ -482,13 +554,8 @@ private:
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
 
-		if (settings_.test_name_enc_redirect && tag->agent_id == GW::Agents::GetTargetId()) {
-			static wchar_t test_name_enc_buf[64];
-			swprintf(test_name_enc_buf, 64, L"\xa35\x101%s\x10a\x8101\x730e\x1", L"TestRename");
-			tag->name_enc = test_name_enc_buf;
-		}
-
 		const auto name_lookup = name_cache_.Get(living);
+		UpdateHealthTag(living, name_lookup);
 		if (const auto color = GetPriorityColor(*name_lookup.words)) {
 			tag->text_color = *color;
 			return;
@@ -546,6 +613,9 @@ private:
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Nametags");
 
+		ImGui::Checkbox("Show health tag", &settings_.show_health_tag);
+		ShowHelpMarker("Appends the current HP% to enemy nametags, e.g. \"Buzzkill [67%]\". Updates in steps as HP changes.");
+
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
 
 		DrawCheckboxWithColorRightAligned("Color by quest", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
@@ -589,11 +659,6 @@ private:
 			ImGui::EndTable();
 		}
 		ImGui::EndDisabled();
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Experimental");
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Test only. Target a single unit before enabling.");
-		ImGui::Checkbox("Test: name_enc encoded redirect (current target only)", &settings_.test_name_enc_redirect);
 	}
 };
 
