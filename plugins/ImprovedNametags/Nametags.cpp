@@ -517,7 +517,7 @@ private:
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
 
-		if (settings_.test_force_underline && tag->agent_id == GW::Agents::GetTargetId()) {
+		if (settings_.test_force_underline && tag->agent_id != GW::Agents::GetTargetId()) {
 			tag->underline = 1;
 		}
 
@@ -635,7 +635,7 @@ private:
 		ImGui::Spacing();
 		ImGui::SeparatorText("Experimental");
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Test only. Target a single unit before enabling.");
-		ImGui::Checkbox("Test: force underline (current target only)", &settings_.test_force_underline);
+		ImGui::Checkbox("Test: force underline (all except current target)", &settings_.test_force_underline);
 	}
 };
 
