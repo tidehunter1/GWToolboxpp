@@ -176,8 +176,6 @@ struct NameplateSettings {
 
 	bool escape_to_embark = false;
 	int escape_to_embark_threshold_pct = 10;
-
-	bool test_force_underline = false;
 };
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
@@ -284,6 +282,11 @@ private:
 	int last_quest_count_ = -1;
 	bool embark_escape_armed_ = true;
 	static constexpr float kEmbarkRearmHysteresisPct = 5.f;
+
+	bool test_lookup_performed_ = false;
+	uintptr_t test_lookup_func_addr_ = 0;
+	uint32_t test_lookup_target_id_ = 0;
+	uintptr_t test_lookup_result_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -439,6 +442,21 @@ private:
 		ImGui::PopID();
 	}
 
+	using ManagerFindAgent_pt = void*(__cdecl*)(uint32_t agent_id);
+
+	static uintptr_t GetManagerFindAgentAddress() {
+		static bool tried_resolve = false;
+		static uintptr_t address = 0;
+		if (!tried_resolve) {
+			tried_resolve = true;
+			address = GW::Scanner::Find(
+				"\x55\x8b\xec\x8b\x4d\x08\x3b\x0d\x00\x00\x00\x00\x72\x04\x33\xc0\x5d\xc3\xa1\x00\x00\x00\x00\x8b\x04\x88\x5d\xc3",
+				"xxxxxxxx????xxxxxxx????xxxxx"
+			);
+		}
+		return address;
+	}
+
 	static void RefreshAllNametags() {
 		using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
 		static bool tried_resolve = false;
@@ -516,10 +534,6 @@ private:
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
-
-		if (settings_.test_force_underline && tag->agent_id != GW::Agents::GetTargetId()) {
-			tag->underline = 1;
-		}
 
 		const auto name_lookup = name_cache_.Get(living);
 		if (const auto color = GetPriorityColor(*name_lookup.words)) {
@@ -634,8 +648,22 @@ private:
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Experimental");
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Test only. Target a single unit before enabling.");
-		ImGui::Checkbox("Test: force underline (all except current target)", &settings_.test_force_underline);
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Stage 1: read-only lookup, no state changes. Target a unit first.");
+		if (ImGui::Button("Test: resolve agent view object")) {
+			test_lookup_func_addr_ = GetManagerFindAgentAddress();
+			test_lookup_target_id_ = GW::Agents::GetTargetId();
+			test_lookup_result_ = 0;
+			if (test_lookup_func_addr_ && test_lookup_target_id_ != 0) {
+				const auto func = reinterpret_cast<ManagerFindAgent_pt>(test_lookup_func_addr_);
+				test_lookup_result_ = reinterpret_cast<uintptr_t>(func(test_lookup_target_id_));
+			}
+			test_lookup_performed_ = true;
+		}
+		if (test_lookup_performed_) {
+			ImGui::Text("Signature address: 0x%08X", static_cast<unsigned>(test_lookup_func_addr_));
+			ImGui::Text("Target agent_id: %u", test_lookup_target_id_);
+			ImGui::Text("Resolved pointer: 0x%08X", static_cast<unsigned>(test_lookup_result_));
+		}
 	}
 };
 
