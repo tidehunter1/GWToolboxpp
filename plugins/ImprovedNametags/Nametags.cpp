@@ -176,6 +176,8 @@ struct NameplateSettings {
 
 	bool escape_to_embark = false;
 	int escape_to_embark_threshold_pct = 10;
+
+	bool test_force_underline = false;
 };
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
@@ -515,6 +517,10 @@ private:
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
 
+		if (settings_.test_force_underline && tag->agent_id == GW::Agents::GetTargetId()) {
+			tag->underline = 1;
+		}
+
 		const auto name_lookup = name_cache_.Get(living);
 		if (const auto color = GetPriorityColor(*name_lookup.words)) {
 			tag->text_color = *color;
@@ -625,6 +631,11 @@ private:
 
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
 		ImGui::SliderInt("##embark_threshold", &settings_.escape_to_embark_threshold_pct, 1, 100, "%d%%");
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Experimental");
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Test only. Target a single unit before enabling.");
+		ImGui::Checkbox("Test: force underline (current target only)", &settings_.test_force_underline);
 	}
 };
 
