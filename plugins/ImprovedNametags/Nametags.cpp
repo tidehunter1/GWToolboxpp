@@ -457,19 +457,9 @@ private:
 		return address;
 	}
 
-	static uintptr_t GetKnownWorkingAddress() {
-		static bool tried_resolve = false;
-		static uintptr_t address = 0;
-		if (!tried_resolve) {
-			tried_resolve = true;
-			address = GW::Scanner::Find("\x81\xce\xa0\x06\x00\x00", "xxxxxx");
-			if (address) address = GW::Scanner::FunctionFromNearCall(GW::Scanner::FindInRange("\xe8", "x", 0, address, address + 0xff));
-		}
-		return address;
-	}
+	using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
 
-	static void RefreshAllNametags() {
-		using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
+	static SetGlobalNameTagVisibility_pt GetSetGlobalNameTagVisibilityFunc(uint32_t** out_flags_ptr) {
 		static bool tried_resolve = false;
 		static SetGlobalNameTagVisibility_pt set_func = nullptr;
 		static uint32_t* flags_ptr = nullptr;
@@ -487,6 +477,13 @@ private:
 				}
 			}
 		}
+		if (out_flags_ptr) *out_flags_ptr = flags_ptr;
+		return set_func;
+	}
+
+	static void RefreshAllNametags() {
+		uint32_t* flags_ptr = nullptr;
+		SetGlobalNameTagVisibility_pt set_func = GetSetGlobalNameTagVisibilityFunc(&flags_ptr);
 		if (!set_func || !flags_ptr) return;
 		GW::GameThread::Enqueue([] {
 			const uint32_t prev_flags = *flags_ptr;
@@ -676,7 +673,7 @@ private:
 			ImGui::Text("Target agent_id: %u", test_lookup_target_id_);
 			ImGui::Text("Resolved pointer: 0x%08X", static_cast<unsigned>(test_lookup_result_));
 		}
-		ImGui::Text("Known-working scan (RefreshAllNametags target): 0x%08X", static_cast<unsigned>(GetKnownWorkingAddress()));
+		ImGui::Text("Known-working scan (RefreshAllNametags target): 0x%08X", static_cast<unsigned>(reinterpret_cast<uintptr_t>(GetSetGlobalNameTagVisibilityFunc(nullptr))));
 	}
 };
 
