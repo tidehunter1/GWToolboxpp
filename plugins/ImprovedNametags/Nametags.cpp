@@ -449,15 +449,10 @@ private:
 		static uintptr_t address = 0;
 		if (!tried_resolve) {
 			tried_resolve = true;
-			const uintptr_t call_site = GW::Scanner::FindAssertion(
-				"avselect.cpp",
-				"!(manualAgentId && !ManagerFindAgent(manualAgentId))",
-				0x30c,
-				-0x16
+			address = GW::Scanner::Find(
+				"\x55\x8b\xec\x8b\x4d\x08\x3b\x0d\x00\x00\x00\x00\x72\x04\x33\xc0\x5d\xc3\xa1\x00\x00\x00\x00\x8b\x04\x88\x5d\xc3\xcc\xcc\xcc\xcc\x55\x8b\xec\x8b\x4d\x08\x3b\x0d\x00\x00\x00\x00\x73\x20\xa1\x00\x00\x00\x00\x8b\x0c\x88\x85\xc9\x74\x14\x33\xc0\x81\xb9\x9c\x00\x00\x00",
+				"xxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxx????xxx????xxxxxxxxxxxxxxx"
 			);
-			if (call_site) {
-				address = GW::Scanner::FunctionFromNearCall(call_site);
-			}
 		}
 		return address;
 	}
