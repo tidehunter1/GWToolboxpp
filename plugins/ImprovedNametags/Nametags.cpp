@@ -457,6 +457,17 @@ private:
 		return address;
 	}
 
+	static uintptr_t GetKnownWorkingAddress() {
+		static bool tried_resolve = false;
+		static uintptr_t address = 0;
+		if (!tried_resolve) {
+			tried_resolve = true;
+			address = GW::Scanner::Find("\x81\xce\xa0\x06\x00\x00", "xxxxxx");
+			if (address) address = GW::Scanner::FunctionFromNearCall(GW::Scanner::FindInRange("\xe8", "x", 0, address, address + 0xff));
+		}
+		return address;
+	}
+
 	static void RefreshAllNametags() {
 		using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
 		static bool tried_resolve = false;
@@ -665,6 +676,7 @@ private:
 			ImGui::Text("Target agent_id: %u", test_lookup_target_id_);
 			ImGui::Text("Resolved pointer: 0x%08X", static_cast<unsigned>(test_lookup_result_));
 		}
+		ImGui::Text("Known-working scan (RefreshAllNametags target): 0x%08X", static_cast<unsigned>(GetKnownWorkingAddress()));
 	}
 };
 
