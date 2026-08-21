@@ -450,9 +450,9 @@ private:
 		if (!tried_resolve) {
 			tried_resolve = true;
 			const uintptr_t call_site = GW::Scanner::FindAssertion(
-				"avselect.cpp",
+				R"(p:\code\gw\agentview\avselect.cpp)",
 				"!(manualAgentId && !ManagerFindAgent(manualAgentId))",
-				0x1a3,
+				0,
 				-0x16
 			);
 			if (call_site) {
