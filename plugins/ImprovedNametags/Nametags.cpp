@@ -19,6 +19,7 @@
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/QuestMgr.h>
+#include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
 #include <GWCA/Utilities/Scanner.h>
@@ -172,6 +173,9 @@ struct NameplateSettings {
 
 	bool priority_enabled = false;
 	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
+
+	bool escape_to_embark = false;
+	int escape_to_embark_threshold_pct = 10;
 };
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
@@ -199,6 +203,7 @@ public:
 		L_SET(recolor_enemy_nameplates_by_profession);
 		L_SET(quest_color);
 		L_SET(color_by_boss); L_SET(boss_color);
+		L_SET(escape_to_embark); L_SET(escape_to_embark_threshold_pct);
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
@@ -219,6 +224,7 @@ public:
 		S_SET(recolor_enemy_nameplates_by_profession);
 		S_SET(quest_color);
 		S_SET(color_by_boss); S_SET(boss_color);
+		S_SET(escape_to_embark); S_SET(escape_to_embark_threshold_pct);
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
@@ -250,6 +256,8 @@ public:
 		RefreshAllNametagsOnChange(last_color_by_boss_state_, settings_.color_by_boss, true);
 		RefreshAllNametagsOnChange(last_priority_enabled_state_, settings_.priority_enabled, true);
 
+		UpdateEscapeToEmbark();
+
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
 			const int quest_count = static_cast<int>(quest_log->size());
 			if (last_quest_count_ != -1 && last_quest_count_ != quest_count) {
@@ -272,6 +280,8 @@ private:
 	std::optional<bool> last_color_by_boss_state_;
 	std::optional<bool> last_priority_enabled_state_;
 	int last_quest_count_ = -1;
+	bool embark_escape_armed_ = true;
+	static constexpr float kEmbarkRearmHysteresisPct = 5.f;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -285,6 +295,31 @@ private:
 		uint64_t scheduled_frame;
 	};
 	std::vector<BossGlowRetry> boss_glow_retries_;
+
+	void UpdateEscapeToEmbark() {
+		if (!settings_.escape_to_embark) {
+			embark_escape_armed_ = true;
+			return;
+		}
+
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (!me || me->GetIsDead()) return;
+		if (!GW::Map::GetIsMapLoaded()) return;
+		if (GW::Map::GetMapID() == GW::Constants::MapID::Embark_Beach) return;
+
+		const float hp_pct = std::clamp(me->hp, 0.f, 1.f) * 100.f;
+		const float threshold = static_cast<float>(settings_.escape_to_embark_threshold_pct);
+
+		if (embark_escape_armed_ && hp_pct <= threshold) {
+			embark_escape_armed_ = false;
+			GW::GameThread::Enqueue([] {
+				GW::Map::Travel(GW::Constants::MapID::Embark_Beach);
+			});
+		}
+		else if (!embark_escape_armed_ && hp_pct > threshold + kEmbarkRearmHysteresisPct) {
+			embark_escape_armed_ = true;
+		}
+	}
 
 	void ScheduleBossGlowRetry(uint32_t agent_id) {
 		for (const auto& r : boss_glow_retries_) {
@@ -581,6 +616,15 @@ private:
 			ImGui::EndTable();
 		}
 		ImGui::EndDisabled();
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Safety");
+
+		ImGui::Checkbox("Escape to Embark Beach", &settings_.escape_to_embark);
+		ShowHelpMarker("Teleports you to Embark Beach based on health % threshold");
+
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+		ImGui::SliderInt("##embark_threshold", &settings_.escape_to_embark_threshold_pct, 1, 100, "%d%%");
 	}
 };
 
