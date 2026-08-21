@@ -648,6 +648,7 @@ private:
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Experimental");
+		ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "BUILD MARKER: TEST-REV-7");
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Stage 1: read-only lookup, no state changes. Target a unit first.");
 		if (ImGui::Button("Test: resolve agent view object")) {
 			test_lookup_func_addr_ = GetManagerFindAgentAddress();
