@@ -485,7 +485,7 @@ private:
 		uint32_t* flags_ptr = nullptr;
 		SetGlobalNameTagVisibility_pt set_func = GetSetGlobalNameTagVisibilityFunc(&flags_ptr);
 		if (!set_func || !flags_ptr) return;
-		GW::GameThread::Enqueue([] {
+		GW::GameThread::Enqueue([set_func, flags_ptr] {
 			const uint32_t prev_flags = *flags_ptr;
 			set_func(0);
 			set_func(prev_flags);
