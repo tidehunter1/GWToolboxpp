@@ -310,6 +310,9 @@ private:
 	uint64_t healthbar_last_discovery_ms_ = 0;
 	static constexpr uint64_t kHealthbarDiscoveryIntervalMs = 200;
 	std::optional<bool> last_show_healthbar_all_agents_state_;
+	bool ring_color_test_enabled_ = false;
+	bool ring_color_test_performed_ = false;
+	std::string ring_color_test_subject_;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -486,6 +489,83 @@ private:
 			);
 		}
 		return address;
+	}
+
+	using CreateOverlay_pt = void(__thiscall*)(void* view_obj, uint32_t param2);
+	using SetRingColor_pt = void(__thiscall*)(void* overlay_handle, const uint8_t* rgba);
+
+	static uintptr_t GetCreateOverlayAddress() {
+		static bool tried_resolve = false;
+		static uintptr_t address = 0;
+		if (!tried_resolve) {
+			tried_resolve = true;
+			address = GW::Scanner::Find(
+				"\x55\x8b\xec\x83\xec\x20\x56\x8b\xf1\xe8\x00\x00\x00\x00\x85\xc0\x74\x75\x8b\x06\x8d\x4d\xf0\x51\xff\x75\x08\x8b\xce\xff\x10\xd9\x46\x3c\xff\x75\xf4\xd9\x5d\x08\xd9\x45\x08\x51\xd9\x1c\x24\xe8\x00\x00\x00\x00\xd9\x86\x84\x00\x00\x00\x8b\xc8",
+				"xxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxx"
+			);
+		}
+		return address;
+	}
+
+	static uintptr_t GetSetRingColorAddress() {
+		static bool tried_resolve = false;
+		static uintptr_t address = 0;
+		if (!tried_resolve) {
+			tried_resolve = true;
+			address = GW::Scanner::Find(
+				"\x55\x8b\xec\x8a\x41\x0c\x8d\x51\x0c\x56\x8b\x75\x08\x3a\x06\x75\x18\x8a\x42\x01\x3a\x46\x01\x75\x10\x8a\x42\x02\x3a\x46\x02\x75\x08\x8a\x42\x03\x3a\x46\x03\x74\x17\x8b\x06\x89\x02\x8b\x41\x30\x85\xc0\x74\x0c\x52\x6a\x00\x50\xe8\x00\x00\x00\x00",
+				"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????"
+			);
+		}
+		return address;
+	}
+
+	static bool TryReadInt(uintptr_t addr, int32_t& out) {
+		if (!addr) return false;
+		__try {
+			out = *reinterpret_cast<int32_t*>(addr);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			return false;
+		}
+	}
+
+	static std::string WideToNarrow(const std::wstring& wide) {
+		if (wide.empty()) return {};
+		const int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+		if (len <= 0) return {};
+		std::string out(static_cast<size_t>(len), '\0');
+		WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), len, nullptr, nullptr);
+		return out;
+	}
+
+	bool FindNearestOtherAgent(uint32_t& out_agent_id, std::string& out_name) {
+		GW::AgentArray* agents = GW::Agents::GetAgentArray();
+		if (!agents || !agents->valid()) return false;
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (!me) return false;
+		const uint32_t target_id = GW::Agents::GetTargetId();
+		float best_dist_sq = -1.f;
+		GW::AgentLiving* best_living = nullptr;
+		for (GW::Agent* agent : *agents) {
+			if (!agent || !agent->GetIsLivingType()) continue;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) continue;
+			if (living->agent_id == me->agent_id) continue;
+			if (living->agent_id == target_id) continue;
+			const float dx = living->pos.x - me->pos.x;
+			const float dy = living->pos.y - me->pos.y;
+			const float dist_sq = dx * dx + dy * dy;
+			if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
+				best_dist_sq = dist_sq;
+				best_living = living;
+			}
+		}
+		if (!best_living) return false;
+		out_agent_id = best_living->agent_id;
+		out_name = WideToNarrow(*name_cache_.Get(best_living).lower);
+		return true;
 	}
 
 	static bool ApplyHealthbarFlag(uint32_t agent_id, bool on) {
@@ -719,6 +799,46 @@ private:
 		ImGui::SeparatorText("Health Bars");
 		ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents);
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Experimental: Ring Color Test");
+		ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Untested lead. Real crash risk.");
+		ImGui::Checkbox("Enable ring color test", &ring_color_test_enabled_);
+		if (ring_color_test_enabled_) {
+			if (ImGui::Button("Test: force blue ring on nearest other unit")) {
+				ring_color_test_performed_ = false;
+				uint32_t subject_id = 0;
+				if (FindNearestOtherAgent(subject_id, ring_color_test_subject_)) {
+					const uintptr_t manager_addr = GetManagerFindAgentAddress();
+					const uintptr_t create_addr = GetCreateOverlayAddress();
+					const uintptr_t color_addr = GetSetRingColorAddress();
+					if (manager_addr && create_addr && color_addr) {
+						void* view_obj = reinterpret_cast<ManagerFindAgent_pt>(manager_addr)(subject_id);
+						if (view_obj) {
+							int32_t overlay_handle = 0;
+							TryReadInt(reinterpret_cast<uintptr_t>(view_obj) + 0x98, overlay_handle);
+							const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
+							const auto color_func = reinterpret_cast<SetRingColor_pt>(color_addr);
+							static const uint8_t kTestColor[4] = { 0x00, 0x00, 0xFF, 0xFF };
+							GW::GameThread::Enqueue([create_func, color_func, view_obj, overlay_handle] {
+								void* handle = reinterpret_cast<void*>(overlay_handle);
+								if (!handle) {
+									create_func(view_obj, 1);
+								}
+								if (handle) {
+									color_func(handle, kTestColor);
+								}
+							});
+							ring_color_test_performed_ = true;
+						}
+					}
+				}
+			}
+			if (ring_color_test_performed_) {
+				ImGui::Text("Test subject: \"%s\"", ring_color_test_subject_.c_str());
+				ImGui::TextWrapped("If the overlay had to be created this click, color may not apply until you click again (handle wasn't known yet). Click twice if the ring appears but stays default-colored.");
+			}
+		}
 	}
 };
 
