@@ -177,6 +177,8 @@ struct NameplateSettings {
 
 	bool escape_to_embark = false;
 	int escape_to_embark_threshold_pct = 10;
+
+	bool show_healthbar_all_agents = false;
 };
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
@@ -205,6 +207,7 @@ public:
 		L_SET(quest_color);
 		L_SET(color_by_boss); L_SET(boss_color);
 		L_SET(escape_to_embark); L_SET(escape_to_embark_threshold_pct);
+		L_SET(show_healthbar_all_agents);
 		LoadSetting("visible", visible_);
 		#undef L_SET
 
@@ -226,6 +229,7 @@ public:
 		S_SET(quest_color);
 		S_SET(color_by_boss); S_SET(boss_color);
 		S_SET(escape_to_embark); S_SET(escape_to_embark_threshold_pct);
+		S_SET(show_healthbar_all_agents);
 		SaveSetting("visible", visible_);
 		#undef S_SET
 
@@ -258,6 +262,13 @@ public:
 		RefreshAllNametagsOnChange(last_priority_enabled_state_, settings_.priority_enabled, true);
 
 		UpdateEscapeToEmbark();
+
+		if (last_show_healthbar_all_agents_state_.has_value() && *last_show_healthbar_all_agents_state_ && !settings_.show_healthbar_all_agents) {
+			RevertHealthbarFlags();
+		}
+		last_show_healthbar_all_agents_state_ = settings_.show_healthbar_all_agents;
+		UpdateHealthbarAllAgents();
+		PruneCache(healthbar_flag_cache_, healthbar_flag_tick_, healthbar_flag_last_prune_tick_, kHealthbarFlagPruneIntervalTicks);
 
 		if (const auto quest_log = GW::QuestMgr::GetQuestLog()) {
 			const int quest_count = static_cast<int>(quest_log->size());
@@ -303,6 +314,16 @@ private:
 	GW::HookEntry marker_hook_entry_;
 
 	AgentNameCache name_cache_;
+
+	struct HealthbarFlagState {
+		uint64_t last_seen_tick = 0;
+	};
+	std::unordered_map<uint32_t, HealthbarFlagState> healthbar_flag_cache_;
+	uint64_t healthbar_flag_tick_ = 0, healthbar_flag_last_prune_tick_ = 0;
+	static constexpr uint64_t kHealthbarFlagPruneIntervalTicks = 1800;
+	uint64_t healthbar_last_discovery_ms_ = 0;
+	static constexpr uint64_t kHealthbarDiscoveryIntervalMs = 200;
+	std::optional<bool> last_show_healthbar_all_agents_state_;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -559,6 +580,54 @@ private:
 		return address;
 	}
 
+	static bool ApplyHealthbarFlag(uint32_t agent_id, bool on) {
+		const uintptr_t manager_addr = GetManagerFindAgentAddress();
+		const uintptr_t setflag_addr = GetSetFlagBitAddress();
+		if (!manager_addr || !setflag_addr) return false;
+		const auto find_func = reinterpret_cast<ManagerFindAgent_pt>(manager_addr);
+		void* view_obj = find_func(agent_id);
+		if (!view_obj) return false;
+		const auto setflag_func = reinterpret_cast<SetFlagBit_pt>(setflag_addr);
+		GW::GameThread::Enqueue([setflag_func, view_obj, on] {
+			setflag_func(view_obj, 0x100, on ? 1 : 0);
+		});
+		return true;
+	}
+
+	void UpdateHealthbarAllAgents() {
+		if (!settings_.show_healthbar_all_agents) return;
+		const uint64_t now = GetTickCount64();
+		if (now - healthbar_last_discovery_ms_ < kHealthbarDiscoveryIntervalMs) return;
+		healthbar_last_discovery_ms_ = now;
+
+		GW::AgentArray* agents = GW::Agents::GetAgentArray();
+		if (!agents || !agents->valid()) return;
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+
+		for (GW::Agent* agent : *agents) {
+			if (!agent || !agent->GetIsLivingType()) continue;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) continue;
+			if (me && living->agent_id == me->agent_id) continue;
+
+			auto it = healthbar_flag_cache_.find(living->agent_id);
+			if (it != healthbar_flag_cache_.end()) {
+				it->second.last_seen_tick = healthbar_flag_tick_;
+				continue;
+			}
+			if (ApplyHealthbarFlag(living->agent_id, true)) {
+				healthbar_flag_cache_[living->agent_id] = { healthbar_flag_tick_ };
+			}
+		}
+	}
+
+	void RevertHealthbarFlags() {
+		for (auto& pair : healthbar_flag_cache_) {
+			ApplyHealthbarFlag(pair.first, false);
+		}
+		healthbar_flag_cache_.clear();
+	}
+
 	using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
 
 	static SetGlobalNameTagVisibility_pt GetSetGlobalNameTagVisibilityFunc(uint32_t** out_flags_ptr) {
@@ -755,6 +824,11 @@ private:
 
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
 		ImGui::SliderInt("##embark_threshold", &settings_.escape_to_embark_threshold_pct, 1, 100, "%d%%");
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Health Bars");
+		ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents);
+		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Experimental");
