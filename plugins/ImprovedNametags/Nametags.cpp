@@ -766,7 +766,7 @@ private:
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		GW::Hook::EnterHook();
 		HRESULT result = self->create_texture_trampoline_(device, Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
-		if (SUCCEEDED(result) && ppTexture && *ppTexture) {
+		if (SUCCEEDED(result) && ppTexture && *ppTexture && Pool != D3DPOOL_DEFAULT) {
 			const uint32_t hash = ComputeTexmodHash(*ppTexture);
 			if (hash == 0xD9B07004u || hash == 0x0B19B995u) {
 				CapturedTextureMatch match;
