@@ -246,6 +246,7 @@ public:
 	bool CanTerminate() override { return true; }
 
 	void Terminate() override {
+		UninstallPassthroughHook();
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
@@ -319,6 +320,7 @@ private:
 	int live_test_raw_allegiance_ = 0;
 	uint32_t live_test_computed_color_ = 0;
 	bool live_test_ok_ = false;
+	bool hook_install_ok_ = true;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -510,6 +512,86 @@ private:
 			);
 		}
 		return address;
+	}
+
+	struct PassthroughHookState {
+		bool installed = false;
+		uintptr_t target_addr = 0;
+		uint8_t original_bytes[6] = {};
+		uint8_t* trampoline = nullptr;
+	};
+	PassthroughHookState hook_state_;
+
+	bool InstallPassthroughHook() {
+		if (hook_state_.installed) return true;
+		const uintptr_t target = GetComputeAllegianceColorAddress();
+		if (!target) return false;
+
+		__try {
+			memcpy(hook_state_.original_bytes, reinterpret_cast<void*>(target), 6);
+
+			hook_state_.trampoline = static_cast<uint8_t*>(VirtualAlloc(nullptr, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+			if (!hook_state_.trampoline) return false;
+
+			memcpy(hook_state_.trampoline, hook_state_.original_bytes, 6);
+			hook_state_.trampoline[6] = 0xE9;
+			const uintptr_t jmp_back_target = target + 6;
+			const uintptr_t jmp_instr_end = reinterpret_cast<uintptr_t>(hook_state_.trampoline) + 6 + 5;
+			const int32_t rel_offset = static_cast<int32_t>(jmp_back_target - jmp_instr_end);
+			memcpy(hook_state_.trampoline + 7, &rel_offset, 4);
+
+			DWORD old_protect;
+			if (!VirtualProtect(reinterpret_cast<void*>(target), 6, PAGE_EXECUTE_READWRITE, &old_protect)) {
+				VirtualFree(hook_state_.trampoline, 0, MEM_RELEASE);
+				hook_state_.trampoline = nullptr;
+				return false;
+			}
+
+			uint8_t patch[6];
+			patch[0] = 0xE9;
+			const uintptr_t patch_jmp_target = reinterpret_cast<uintptr_t>(hook_state_.trampoline);
+			const uintptr_t patch_instr_end = target + 5;
+			const int32_t patch_rel_offset = static_cast<int32_t>(patch_jmp_target - patch_instr_end);
+			memcpy(patch + 1, &patch_rel_offset, 4);
+			patch[5] = 0x90;
+
+			memcpy(reinterpret_cast<void*>(target), patch, 6);
+
+			DWORD dummy;
+			VirtualProtect(reinterpret_cast<void*>(target), 6, old_protect, &dummy);
+			FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(target), 6);
+
+			hook_state_.target_addr = target;
+			hook_state_.installed = true;
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			if (hook_state_.trampoline) {
+				VirtualFree(hook_state_.trampoline, 0, MEM_RELEASE);
+				hook_state_.trampoline = nullptr;
+			}
+			return false;
+		}
+	}
+
+	void UninstallPassthroughHook() {
+		if (!hook_state_.installed) return;
+		__try {
+			DWORD old_protect;
+			if (VirtualProtect(reinterpret_cast<void*>(hook_state_.target_addr), 6, PAGE_EXECUTE_READWRITE, &old_protect)) {
+				memcpy(reinterpret_cast<void*>(hook_state_.target_addr), hook_state_.original_bytes, 6);
+				DWORD dummy;
+				VirtualProtect(reinterpret_cast<void*>(hook_state_.target_addr), 6, old_protect, &dummy);
+				FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(hook_state_.target_addr), 6);
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+		}
+		if (hook_state_.trampoline) {
+			VirtualFree(hook_state_.trampoline, 0, MEM_RELEASE);
+			hook_state_.trampoline = nullptr;
+		}
+		hook_state_.installed = false;
 	}
 
 	static bool TryComputeAllegianceColor(uintptr_t func_addr, uint8_t allegiance_byte, uint32_t& out_color) {
@@ -839,6 +921,23 @@ private:
 			} else {
 				ImGui::Text("Computation failed.");
 			}
+		}
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Experimental: Passthrough Hook Test");
+		ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Rewrites live game code. Highest risk test today.");
+		ImGui::TextWrapped("Installs a hook that changes nothing - proves the mechanism is safe before any real override logic gets added.");
+		bool hook_installed = hook_state_.installed;
+		if (ImGui::Checkbox("Install passthrough hook", &hook_installed)) {
+			if (hook_installed) {
+				hook_install_ok_ = InstallPassthroughHook();
+			} else {
+				UninstallPassthroughHook();
+			}
+		}
+		ImGui::Text("Status: %s", hook_state_.installed ? "installed" : "not installed");
+		if (hook_state_.installed) {
+			ImGui::TextWrapped("Now click the 'compute colors for all 6 allegiance values' button above again. Results must be IDENTICAL to before installing - that proves the hook round-trips correctly through the original function.");
 		}
 	}
 };
