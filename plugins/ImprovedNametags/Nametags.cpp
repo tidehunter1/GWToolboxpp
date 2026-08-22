@@ -290,6 +290,9 @@ private:
 	uintptr_t test_lookup_result_ = 0;
 	std::string test_bytes_at_signature_;
 	std::string test_bytes_at_knownworking_;
+	bool stage2_enabled_ = false;
+	bool stage2_performed_ = false;
+	bool stage2_skipped_existing_ = false;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -480,6 +483,21 @@ private:
 			address = GW::Scanner::Find(
 				"\x55\x8b\xec\x8b\x4d\x08\x3b\x0d\x00\x00\x00\x00\x72\x04\x33\xc0\x5d\xc3\xa1\x00\x00\x00\x00\x8b\x04\x88\x5d\xc3\xcc\xcc\xcc\xcc\x55\x8b\xec\x8b\x4d\x08\x3b\x0d\x00\x00\x00\x00\x73\x20\xa1\x00\x00\x00\x00\x8b\x0c\x88\x85\xc9\x74\x14\x33\xc0\x81\xb9\x9c\x00\x00\x00",
 				"xxxxxxxx????xxxxxxx????xxxxxxxxxxxxxxxxx????xxx????xxxxxxxxxxxxxxx"
+			);
+		}
+		return address;
+	}
+
+	using CreateOverlay_pt = void(__thiscall*)(void* view_obj, uint32_t param2);
+
+	static uintptr_t GetCreateOverlayAddress() {
+		static bool tried_resolve = false;
+		static uintptr_t address = 0;
+		if (!tried_resolve) {
+			tried_resolve = true;
+			address = GW::Scanner::Find(
+				"\x55\x8b\xec\x83\xec\x20\x56\x8b\xf1\xe8\x00\x00\x00\x00\x85\xc0\x74\x75\x8b\x06\x8d\x4d\xf0\x51\xff\x75\x08\x8b\xce\xff\x10\xd9\x46\x3c\xff\x75\xf4\xd9\x5d\x08\xd9\x45\x08\x51\xd9\x1c\x24\xe8\x00\x00\x00\x00\xd9\x86\x84\x00\x00\x00\x8b\xc8",
+				"xxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxx"
 			);
 		}
 		return address;
@@ -706,6 +724,44 @@ private:
 			ImGui::TextWrapped("Bytes at known-working address: %s", test_bytes_at_knownworking_.c_str());
 		}
 		ImGui::Text("Known-working scan (RefreshAllNametags target): 0x%08X", static_cast<unsigned>(reinterpret_cast<uintptr_t>(GetSetGlobalNameTagVisibilityFunc(nullptr))));
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Stage 2 - REAL RISK");
+		ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Creates an engine object. Real crash risk. Target ONE unit first.");
+		ImGui::Checkbox("Enable Stage 2", &stage2_enabled_);
+		if (stage2_enabled_) {
+			if (ImGui::Button("Test: force-create overlay on current target")) {
+				stage2_performed_ = false;
+				stage2_skipped_existing_ = false;
+				const uintptr_t manager_addr = GetManagerFindAgentAddress();
+				const uintptr_t create_addr = GetCreateOverlayAddress();
+				const uint32_t target_id = GW::Agents::GetTargetId();
+				if (manager_addr && create_addr && target_id != 0) {
+					const auto find_func = reinterpret_cast<ManagerFindAgent_pt>(manager_addr);
+					void* view_obj = find_func(target_id);
+					if (view_obj) {
+						uint32_t overlay_ptr = 0;
+						const bool read_ok = TryReadBytes(reinterpret_cast<uintptr_t>(view_obj) + 0x98, reinterpret_cast<uint8_t*>(&overlay_ptr), sizeof(overlay_ptr));
+						if (read_ok && overlay_ptr != 0) {
+							stage2_skipped_existing_ = true;
+						}
+						else if (read_ok) {
+							const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
+							GW::GameThread::Enqueue([create_func, view_obj] {
+								create_func(view_obj, 1);
+							});
+							stage2_performed_ = true;
+						}
+					}
+				}
+			}
+			if (stage2_skipped_existing_) {
+				ImGui::TextColored(ImVec4(1.f, 1.f, 0.4f, 1.f), "Skipped: overlay already exists on this agent.");
+			}
+			if (stage2_performed_) {
+				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "Call enqueued. Check in-game for a visual change on the target.");
+			}
+		}
 	}
 };
 
