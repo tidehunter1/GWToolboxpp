@@ -12,6 +12,8 @@
 #endif
 #include <Windows.h>
 
+extern "C" __declspec(dllimport) USHORT WINAPI RtlCaptureStackBackTrace(ULONG FramesToSkip, ULONG FramesToCapture, PVOID* BackTrace, PULONG BackTraceHash);
+
 #include <GWCA/Constants/Constants.h>
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/NPC.h>
@@ -23,6 +25,8 @@
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
 #include <GWCA/Utilities/Scanner.h>
+#include <GWCA/Utilities/Hooker.h>
+#include <GWCA/Managers/RenderMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <PluginUtils.h>
@@ -247,6 +251,7 @@ public:
 
 	void Terminate() override {
 		UninstallPassthroughHook();
+		UninstallTextureCapture();
 		GW::UI::RemoveUIMessageCallback(&nametag_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&quest_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
@@ -320,6 +325,8 @@ private:
 	int live_test_raw_allegiance_ = 0;
 	uint32_t live_test_computed_color_ = 0;
 	bool live_test_ok_ = false;
+	static inline uint32_t crc32_table_[256] = {};
+	bool texture_capture_install_ok_ = true;
 	bool hook_install_ok_ = true;
 	std::string override_test_subject_name_;
 	bool override_test_performed_ = false;
@@ -639,6 +646,169 @@ private:
 		}
 	}
 
+	static void EnsureCrc32Table() {
+		static bool ready = false;
+		if (ready) return;
+		constexpr uint32_t poly = 0xEDB88320u;
+		for (uint32_t i = 0; i < 256; ++i) {
+			uint32_t r = i;
+			for (int j = 0; j < 8; ++j) {
+				r = (r & 1) ? (r >> 1) ^ poly : r >> 1;
+			}
+			crc32_table_[i] = r;
+		}
+		ready = true;
+	}
+
+	static uint32_t GetTexmodHashBytes(const uint8_t* data, size_t size) {
+		EnsureCrc32Table();
+		uint32_t r = 0xFFFFFFFFu;
+		for (size_t i = 0; i < size; ++i) {
+			r = (r >> 8) ^ crc32_table_[(r ^ data[i]) & 0xFF];
+		}
+		return r;
+	}
+
+	static UINT DxtBlockBytes(D3DFORMAT fmt) {
+		switch (fmt) {
+			case D3DFMT_DXT1: return 8;
+			case D3DFMT_DXT2:
+			case D3DFMT_DXT3:
+			case D3DFMT_DXT4:
+			case D3DFMT_DXT5: return 16;
+			default: return 0;
+		}
+	}
+
+	static int GetTexBitsPerPixel(D3DFORMAT format) {
+		switch (format) {
+			case D3DFMT_A8R8G8B8:
+			case D3DFMT_X8R8G8B8: return 32;
+			case D3DFMT_R8G8B8: return 24;
+			case D3DFMT_R5G6B5:
+			case D3DFMT_X1R5G5B5:
+			case D3DFMT_A1R5G5B5:
+			case D3DFMT_A4R4G4B4: return 16;
+			case D3DFMT_A8:
+			case D3DFMT_L8: return 8;
+			case D3DFMT_DXT1: return 4;
+			case D3DFMT_DXT2:
+			case D3DFMT_DXT3:
+			case D3DFMT_DXT4:
+			case D3DFMT_DXT5: return 8;
+			default: return 32;
+		}
+	}
+
+	static bool SafeCopyTexRows(uint8_t* dst, const uint8_t* src, size_t rows, size_t row_bytes, size_t pitch) {
+		__try {
+			for (size_t y = 0; y < rows; ++y) {
+				memcpy(dst + y * row_bytes, src + y * pitch, row_bytes);
+			}
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			return false;
+		}
+	}
+
+	static uint32_t ComputeTexmodHash(IDirect3DTexture9* texture) {
+		if (!texture) return 0;
+		D3DSURFACE_DESC desc;
+		if (FAILED(texture->GetLevelDesc(0, &desc))) return 0;
+
+		D3DLOCKED_RECT rect;
+		if (FAILED(texture->LockRect(0, &rect, nullptr, D3DLOCK_READONLY)) || !rect.pBits || rect.Pitch <= 0) {
+			return 0;
+		}
+		const auto* bits = static_cast<const uint8_t*>(rect.pBits);
+		const size_t pitch = static_cast<size_t>(rect.Pitch);
+		uint32_t hash = 0;
+
+		if (const UINT block = DxtBlockBytes(desc.Format)) {
+			const size_t blocks_wide = (desc.Width + 3) / 4;
+			const size_t blocks_high = (desc.Height + 3) / 4;
+			const size_t total_size = blocks_wide * blocks_high * block;
+			if (total_size && total_size <= pitch * blocks_high) {
+				std::vector<uint8_t> compact(total_size);
+				if (SafeCopyTexRows(compact.data(), bits, 1, total_size, total_size)) {
+					hash = GetTexmodHashBytes(compact.data(), compact.size());
+				}
+			}
+		}
+		else {
+			const int bpp = GetTexBitsPerPixel(desc.Format);
+			const size_t row_size = bpp ? static_cast<size_t>(desc.Width) * (bpp / 8) : 0;
+			if (row_size && desc.Height && row_size <= pitch) {
+				std::vector<uint8_t> compact(static_cast<size_t>(desc.Height) * row_size);
+				if (SafeCopyTexRows(compact.data(), bits, desc.Height, row_size, pitch)) {
+					hash = GetTexmodHashBytes(compact.data(), compact.size());
+				}
+			}
+		}
+
+		texture->UnlockRect(0);
+		return hash;
+	}
+
+	using CreateTexture_pt = HRESULT(WINAPI*)(IDirect3DDevice9*, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9**, HANDLE*);
+	CreateTexture_pt create_texture_func_ = nullptr;
+	CreateTexture_pt create_texture_trampoline_ = nullptr;
+	bool texture_capture_installed_ = false;
+
+	struct CapturedTextureMatch {
+		uint32_t hash;
+		std::vector<uintptr_t> call_stack;
+	};
+	std::vector<CapturedTextureMatch> captured_texture_matches_;
+
+	static HRESULT WINAPI OnCreateTexture(IDirect3DDevice9* device, UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) {
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		GW::Hook::EnterHook();
+		HRESULT result = self->create_texture_trampoline_(device, Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
+		if (SUCCEEDED(result) && ppTexture && *ppTexture) {
+			const uint32_t hash = ComputeTexmodHash(*ppTexture);
+			if (hash == 0xD9B07004u || hash == 0x0B19B995u) {
+				CapturedTextureMatch match;
+				match.hash = hash;
+				void* frames[16] = {};
+				const USHORT count = RtlCaptureStackBackTrace(1, 16, frames, nullptr);
+				for (USHORT i = 0; i < count; ++i) {
+					match.call_stack.push_back(reinterpret_cast<uintptr_t>(frames[i]));
+				}
+				self->captured_texture_matches_.push_back(std::move(match));
+			}
+		}
+		GW::Hook::LeaveHook();
+		return result;
+	}
+
+	bool InstallTextureCapture() {
+		if (texture_capture_installed_) return true;
+		IDirect3DDevice9* device = GW::Render::GetDevice();
+		if (!device) return false;
+		uintptr_t* vtable = *reinterpret_cast<uintptr_t**>(device);
+		constexpr int CREATE_TEXTURE_INDEX = 23;
+		create_texture_func_ = reinterpret_cast<CreateTexture_pt>(vtable[CREATE_TEXTURE_INDEX]);
+		const int hook_result = GW::Hook::CreateHook(
+			reinterpret_cast<void**>(&create_texture_func_),
+			reinterpret_cast<void*>(&OnCreateTexture),
+			reinterpret_cast<void**>(&create_texture_trampoline_)
+		);
+		if (hook_result != 0) return false;
+		GW::Hook::EnableHooks(reinterpret_cast<void*>(create_texture_func_));
+		texture_capture_installed_ = true;
+		return true;
+	}
+
+	void UninstallTextureCapture() {
+		if (!texture_capture_installed_) return;
+		GW::Hook::DisableHooks(reinterpret_cast<void*>(create_texture_func_));
+		GW::Hook::RemoveHook(reinterpret_cast<void*>(create_texture_func_));
+		create_texture_func_ = nullptr;
+		texture_capture_installed_ = false;
+	}
+
 	static std::string WideToNarrow(const std::wstring& wide) {
 		if (wide.empty()) return {};
 		const int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
@@ -787,10 +957,6 @@ private:
 		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
-
-		if (color_overrides_.count(tag->agent_id)) {
-			tag->highlight = 1;
-		}
 
 		const auto name_lookup = name_cache_.Get(living);
 		if (const auto color = GetPriorityColor(*name_lookup.words)) {
@@ -991,6 +1157,34 @@ private:
 				color_overrides_.clear();
 				override_test_performed_ = false;
 			}
+		}
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Experimental: Live Texture Capture");
+		ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Hooks D3D9 CreateTexture directly.");
+		ImGui::TextWrapped("Catches the healthbar's actual textures the moment they're created, and records the call stack that made them.");
+		bool capture_installed = texture_capture_installed_;
+		if (ImGui::Checkbox("Install texture capture", &capture_installed)) {
+			if (capture_installed) {
+				texture_capture_install_ok_ = InstallTextureCapture();
+			} else {
+				UninstallTextureCapture();
+			}
+		}
+		ImGui::Text("Status: %s", texture_capture_installed_ ? "installed" : "not installed");
+		if (texture_capture_installed_) {
+			ImGui::TextWrapped("Now trigger a healthbar to show (hover or target any unit). Matches will appear below.");
+		}
+		ImGui::Text("Matches captured: %d", static_cast<int>(captured_texture_matches_.size()));
+		for (size_t i = 0; i < captured_texture_matches_.size(); ++i) {
+			const auto& match = captured_texture_matches_[i];
+			ImGui::Text("Match %d: hash 0x%08X", static_cast<int>(i), match.hash);
+			for (size_t f = 0; f < match.call_stack.size(); ++f) {
+				ImGui::Text("  [%d] 0x%08X", static_cast<int>(f), static_cast<unsigned>(match.call_stack[f]));
+			}
+		}
+		if (ImGui::Button("Clear captured matches")) {
+			captured_texture_matches_.clear();
 		}
 	}
 };
