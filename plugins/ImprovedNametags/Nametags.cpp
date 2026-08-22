@@ -260,6 +260,9 @@ public:
 
 	void Draw(IDirect3DDevice9*) override {
 		++frame_counter_;
+		if (texture_capture_auto_install_ && !texture_capture_installed_) {
+			InstallTextureCapture();
+		}
 		RefreshAllNametagsOnChange(last_recolor_professions_state_, settings_.recolor_professions, true);
 		RefreshAllNametagsOnChange(last_recolor_quest_state_, settings_.recolor_quest_nametags, true);
 		RefreshAllNametagsOnChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nameplates_by_profession, true);
@@ -327,6 +330,7 @@ private:
 	bool live_test_ok_ = false;
 	static inline uint32_t crc32_table_[256] = {};
 	bool texture_capture_install_ok_ = true;
+	bool texture_capture_auto_install_ = true;
 	bool hook_install_ok_ = true;
 	std::string override_test_subject_name_;
 	bool override_test_performed_ = false;
@@ -751,10 +755,11 @@ private:
 		return hash;
 	}
 
-	using CreateTexture_pt = HRESULT(WINAPI*)(IDirect3DDevice9*, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9**, HANDLE*);
-	CreateTexture_pt create_texture_func_ = nullptr;
-	CreateTexture_pt create_texture_trampoline_ = nullptr;
+	using SetTexture_pt = HRESULT(WINAPI*)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*);
+	SetTexture_pt set_texture_func_ = nullptr;
+	SetTexture_pt set_texture_trampoline_ = nullptr;
 	bool texture_capture_installed_ = false;
+	std::unordered_map<IDirect3DBaseTexture9*, uint32_t> texture_hash_cache_;
 
 	struct CapturedTextureMatch {
 		uint32_t hash;
@@ -762,13 +767,26 @@ private:
 	};
 	std::vector<CapturedTextureMatch> captured_texture_matches_;
 
-	static HRESULT WINAPI OnCreateTexture(IDirect3DDevice9* device, UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) {
+	static HRESULT WINAPI OnSetTexture(IDirect3DDevice9* device, DWORD Stage, IDirect3DBaseTexture9* pTexture) {
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		GW::Hook::EnterHook();
-		HRESULT result = self->create_texture_trampoline_(device, Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
-		if (SUCCEEDED(result) && ppTexture && *ppTexture && Pool != D3DPOOL_DEFAULT) {
-			const uint32_t hash = ComputeTexmodHash(*ppTexture);
-			if (hash == 0xD9B07004u || hash == 0x0B19B995u) {
+		if (pTexture) {
+			uint32_t hash = 0;
+			const auto it = self->texture_hash_cache_.find(pTexture);
+			if (it != self->texture_hash_cache_.end()) {
+				hash = it->second;
+			}
+			else {
+				if (pTexture->GetType() == D3DRTYPE_TEXTURE) {
+					auto* tex2d = static_cast<IDirect3DTexture9*>(pTexture);
+					D3DSURFACE_DESC desc;
+					if (SUCCEEDED(tex2d->GetLevelDesc(0, &desc)) && desc.Pool != D3DPOOL_DEFAULT) {
+						hash = ComputeTexmodHash(tex2d);
+					}
+				}
+				self->texture_hash_cache_[pTexture] = hash;
+			}
+			if (hash == 0xD9B07004u || hash == 0x0B19B995u || hash == 0xA828D9F8u) {
 				CapturedTextureMatch match;
 				match.hash = hash;
 				void* frames[16] = {};
@@ -779,6 +797,7 @@ private:
 				self->captured_texture_matches_.push_back(std::move(match));
 			}
 		}
+		HRESULT result = self->set_texture_trampoline_(device, Stage, pTexture);
 		GW::Hook::LeaveHook();
 		return result;
 	}
@@ -788,24 +807,25 @@ private:
 		IDirect3DDevice9* device = GW::Render::GetDevice();
 		if (!device) return false;
 		uintptr_t* vtable = *reinterpret_cast<uintptr_t**>(device);
-		constexpr int CREATE_TEXTURE_INDEX = 23;
-		create_texture_func_ = reinterpret_cast<CreateTexture_pt>(vtable[CREATE_TEXTURE_INDEX]);
+		constexpr int SET_TEXTURE_INDEX = 65;
+		set_texture_func_ = reinterpret_cast<SetTexture_pt>(vtable[SET_TEXTURE_INDEX]);
 		const int hook_result = GW::Hook::CreateHook(
-			reinterpret_cast<void**>(&create_texture_func_),
-			reinterpret_cast<void*>(&OnCreateTexture),
-			reinterpret_cast<void**>(&create_texture_trampoline_)
+			reinterpret_cast<void**>(&set_texture_func_),
+			reinterpret_cast<void*>(&OnSetTexture),
+			reinterpret_cast<void**>(&set_texture_trampoline_)
 		);
 		if (hook_result != 0) return false;
-		GW::Hook::EnableHooks(reinterpret_cast<void*>(create_texture_func_));
+		GW::Hook::EnableHooks(reinterpret_cast<void*>(set_texture_func_));
 		texture_capture_installed_ = true;
 		return true;
 	}
 
 	void UninstallTextureCapture() {
 		if (!texture_capture_installed_) return;
-		GW::Hook::DisableHooks(reinterpret_cast<void*>(create_texture_func_));
-		GW::Hook::RemoveHook(reinterpret_cast<void*>(create_texture_func_));
-		create_texture_func_ = nullptr;
+		GW::Hook::DisableHooks(reinterpret_cast<void*>(set_texture_func_));
+		GW::Hook::RemoveHook(reinterpret_cast<void*>(set_texture_func_));
+		set_texture_func_ = nullptr;
+		texture_hash_cache_.clear();
 		texture_capture_installed_ = false;
 	}
 
@@ -1162,9 +1182,10 @@ private:
 		ImGui::Spacing();
 		ImGui::SeparatorText("Experimental: Live Texture Capture");
 		ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Hooks D3D9 CreateTexture directly.");
-		ImGui::TextWrapped("Catches the healthbar's actual textures the moment they're created, and records the call stack that made them.");
+		ImGui::TextWrapped("Now installs automatically as soon as the plugin loads (not on manual toggle), so it catches textures created early in the session. REQUIRES A FULL GAME RESTART to take effect - if you already installed it manually before, the healthbar's texture is likely already created and this session can no longer catch it.");
+		ImGui::TextDisabled("Watching for: 0xD9B07004, 0x0B19B995, 0xA828D9F8");
 		bool capture_installed = texture_capture_installed_;
-		if (ImGui::Checkbox("Install texture capture", &capture_installed)) {
+		if (ImGui::Checkbox("Texture capture active", &capture_installed)) {
 			if (capture_installed) {
 				texture_capture_install_ok_ = InstallTextureCapture();
 			} else {
