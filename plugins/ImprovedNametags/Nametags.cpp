@@ -314,6 +314,11 @@ private:
 	uintptr_t allegiance_color_test_func_addr_ = 0;
 	bool allegiance_color_test_ok_[6] = {};
 	uint32_t allegiance_color_test_result_[6] = {};
+	std::string live_test_subject_name_;
+	bool live_test_performed_ = false;
+	int live_test_raw_allegiance_ = 0;
+	uint32_t live_test_computed_color_ = 0;
+	bool live_test_ok_ = false;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -521,6 +526,39 @@ private:
 		__except (EXCEPTION_EXECUTE_HANDLER) {
 			return false;
 		}
+	}
+
+	static std::string WideToNarrow(const std::wstring& wide) {
+		if (wide.empty()) return {};
+		const int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+		if (len <= 0) return {};
+		std::string out(static_cast<size_t>(len), '\0');
+		WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), len, nullptr, nullptr);
+		return out;
+	}
+
+	GW::AgentLiving* FindNearestOtherLiving(std::string& out_name) {
+		GW::AgentArray* agents = GW::Agents::GetAgentArray();
+		if (!agents || !agents->valid()) return nullptr;
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (!me) return nullptr;
+		float best_dist_sq = -1.f;
+		GW::AgentLiving* best_living = nullptr;
+		for (GW::Agent* agent : *agents) {
+			if (!agent || !agent->GetIsLivingType()) continue;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) continue;
+			if (living->agent_id == me->agent_id) continue;
+			const float dx = living->pos.x - me->pos.x;
+			const float dy = living->pos.y - me->pos.y;
+			const float dist_sq = dx * dx + dy * dy;
+			if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
+				best_dist_sq = dist_sq;
+				best_living = living;
+			}
+		}
+		if (best_living) out_name = WideToNarrow(*name_cache_.Get(best_living).lower);
+		return best_living;
 	}
 
 	static bool ApplyHealthbarFlag(uint32_t agent_id, bool on) {
@@ -778,6 +816,28 @@ private:
 				} else {
 					ImGui::Text("%s -> (call failed)", kLabels[i]);
 				}
+			}
+		}
+
+		ImGui::Spacing();
+		if (ImGui::Button("Test: compute color for nearest other agent")) {
+			live_test_performed_ = false;
+			GW::AgentLiving* living = FindNearestOtherLiving(live_test_subject_name_);
+			if (living) {
+				live_test_raw_allegiance_ = static_cast<int>(living->allegiance);
+				const uintptr_t func_addr = GetComputeAllegianceColorAddress();
+				live_test_ok_ = TryComputeAllegianceColor(func_addr, static_cast<uint8_t>(live_test_raw_allegiance_), live_test_computed_color_);
+				live_test_performed_ = true;
+			}
+		}
+		if (live_test_performed_) {
+			ImGui::Text("Subject: \"%s\"", live_test_subject_name_.c_str());
+			ImGui::Text("Real allegiance value: %d", live_test_raw_allegiance_);
+			if (live_test_ok_) {
+				ImGui::Text("Computed color: 0x%08X", live_test_computed_color_);
+				ImGui::TextWrapped("Compare this against what you actually see on this agent in-game (red ring = enemy, green = ally/neutral).");
+			} else {
+				ImGui::Text("Computation failed.");
 			}
 		}
 	}
