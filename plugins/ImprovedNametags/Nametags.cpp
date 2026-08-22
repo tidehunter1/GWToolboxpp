@@ -788,6 +788,10 @@ private:
 		GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 		if (!living) return;
 
+		if (color_overrides_.count(tag->agent_id)) {
+			tag->highlight = 1;
+		}
+
 		const auto name_lookup = name_cache_.Get(living);
 		if (const auto color = GetPriorityColor(*name_lookup.words)) {
 			tag->text_color = *color;
