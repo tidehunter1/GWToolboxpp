@@ -295,6 +295,7 @@ private:
 	bool stage2_skipped_existing_ = false;
 	std::string stage2_subject_name_;
 	bool stage2_also_create_overlay_ = false;
+	uint32_t stage2_flag_bit_ = 0x10;
 	uint32_t stage2_subject_id_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
@@ -787,6 +788,9 @@ private:
 		ImGui::Checkbox("Enable Stage 2", &stage2_enabled_);
 		if (stage2_enabled_) {
 			ImGui::Checkbox("Also create ring overlay", &stage2_also_create_overlay_);
+			ImGui::SetNextItemWidth(100.f);
+			ImGui::InputScalar("Flag bit to test (hex)", ImGuiDataType_U32, &stage2_flag_bit_, nullptr, nullptr, "%X");
+			ImGui::TextDisabled("Candidates to try: 8, 10, 100, 400. 80 = confirmed target-style (arrow shown).");
 			if (ImGui::Button("Test: force-create overlay on nearest other unit")) {
 				stage2_performed_ = false;
 				stage2_skipped_existing_ = false;
@@ -809,9 +813,10 @@ private:
 									const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
 									const auto setflag_func = reinterpret_cast<SetFlagBit_pt>(setflag_addr);
 									const bool also_create = stage2_also_create_overlay_;
-									GW::GameThread::Enqueue([create_func, setflag_func, view_obj, also_create] {
+									const uint32_t flag_bit = stage2_flag_bit_;
+									GW::GameThread::Enqueue([create_func, setflag_func, view_obj, also_create, flag_bit] {
 										if (also_create) create_func(view_obj, 1);
-										setflag_func(view_obj, 0x80, 1);
+										setflag_func(view_obj, flag_bit, 1);
 									});
 									stage2_performed_ = true;
 								}
