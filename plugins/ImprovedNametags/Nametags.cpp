@@ -1,6 +1,5 @@
 #include <cstdint>
 #include <cstring>
-#include <cstdio>
 #include <cstddef>
 #include <cstdlib>
 #include <functional>
@@ -292,28 +291,15 @@ private:
 	std::optional<bool> last_color_by_boss_state_;
 	std::optional<bool> last_priority_enabled_state_;
 	int last_quest_count_ = -1;
-	bool embark_escape_armed_ = true;
-	static constexpr float kEmbarkRearmHysteresisPct = 5.f;
-
-	bool test_lookup_performed_ = false;
-	uintptr_t test_lookup_func_addr_ = 0;
-	uint32_t test_lookup_target_id_ = 0;
-	uintptr_t test_lookup_result_ = 0;
-	std::string test_bytes_at_signature_;
-	std::string test_bytes_at_knownworking_;
-	bool stage2_enabled_ = false;
-	bool stage2_performed_ = false;
-	bool stage2_skipped_existing_ = false;
-	std::string stage2_subject_name_;
-	bool stage2_also_create_overlay_ = false;
-	uint32_t stage2_flag_bit_ = 0x10;
-	uint32_t stage2_subject_id_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry marker_hook_entry_;
 
 	AgentNameCache name_cache_;
+
+	bool embark_escape_armed_ = true;
+	static constexpr float kEmbarkRearmHysteresisPct = 5.f;
 
 	struct HealthbarFlagState {
 		uint64_t last_seen_tick = 0;
@@ -331,31 +317,6 @@ private:
 		uint64_t scheduled_frame;
 	};
 	std::vector<BossGlowRetry> boss_glow_retries_;
-
-	void UpdateEscapeToEmbark() {
-		if (!settings_.escape_to_embark) {
-			embark_escape_armed_ = true;
-			return;
-		}
-
-		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-		if (!me || me->GetIsDead()) return;
-		if (!GW::Map::GetIsMapLoaded()) return;
-		if (GW::Map::GetMapID() == GW::Constants::MapID::Embark_Beach) return;
-
-		const float hp_pct = std::clamp(me->hp, 0.f, 1.f) * 100.f;
-		const float threshold = static_cast<float>(settings_.escape_to_embark_threshold_pct);
-
-		if (embark_escape_armed_ && hp_pct <= threshold) {
-			embark_escape_armed_ = false;
-			GW::GameThread::Enqueue([] {
-				GW::Map::Travel(GW::Constants::MapID::Embark_Beach);
-			});
-		}
-		else if (!embark_escape_armed_ && hp_pct > threshold + kEmbarkRearmHysteresisPct) {
-			embark_escape_armed_ = true;
-		}
-	}
 
 	void ScheduleBossGlowRetry(uint32_t agent_id) {
 		for (const auto& r : boss_glow_retries_) {
@@ -473,69 +434,33 @@ private:
 		ImGui::PopID();
 	}
 
-	static bool TryReadBytes(uintptr_t addr, uint8_t* out, size_t count) {
-		if (!addr) return false;
-		__try {
-			memcpy(out, reinterpret_cast<void*>(addr), count);
-			return true;
+	void UpdateEscapeToEmbark() {
+		if (!settings_.escape_to_embark) {
+			embark_escape_armed_ = true;
+			return;
 		}
-		__except (EXCEPTION_EXECUTE_HANDLER) {
-			return false;
-		}
-	}
 
-	static std::string FormatBytesHex(uintptr_t addr, size_t count) {
-		std::vector<uint8_t> buf(count, 0);
-		if (!TryReadBytes(addr, buf.data(), count)) {
-			return "(unreadable)";
-		}
-		std::ostringstream oss;
-		for (size_t i = 0; i < count; ++i) {
-			char tmp[4];
-			snprintf(tmp, sizeof(tmp), "%02X ", buf[i]);
-			oss << tmp;
-		}
-		return oss.str();
-	}
-
-	static std::string WideToNarrow(const std::wstring& wide) {
-		if (wide.empty()) return {};
-		const int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-		if (len <= 0) return {};
-		std::string out(static_cast<size_t>(len), '\0');
-		WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), len, nullptr, nullptr);
-		return out;
-	}
-
-	bool FindNearestOtherAgent(uint32_t& out_agent_id, std::string& out_name) {
-		GW::AgentArray* agents = GW::Agents::GetAgentArray();
-		if (!agents || !agents->valid()) return false;
 		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-		if (!me) return false;
-		const uint32_t target_id = GW::Agents::GetTargetId();
-		float best_dist_sq = -1.f;
-		GW::AgentLiving* best_living = nullptr;
-		for (GW::Agent* agent : *agents) {
-			if (!agent || !agent->GetIsLivingType()) continue;
-			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living || living->GetIsDead()) continue;
-			if (living->agent_id == me->agent_id) continue;
-			if (living->agent_id == target_id) continue;
-			const float dx = living->pos.x - me->pos.x;
-			const float dy = living->pos.y - me->pos.y;
-			const float dist_sq = dx * dx + dy * dy;
-			if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
-				best_dist_sq = dist_sq;
-				best_living = living;
-			}
+		if (!me || me->GetIsDead()) return;
+		if (!GW::Map::GetIsMapLoaded()) return;
+		if (GW::Map::GetMapID() == GW::Constants::MapID::Embark_Beach) return;
+
+		const float hp_pct = std::clamp(me->hp, 0.f, 1.f) * 100.f;
+		const float threshold = static_cast<float>(settings_.escape_to_embark_threshold_pct);
+
+		if (embark_escape_armed_ && hp_pct <= threshold) {
+			embark_escape_armed_ = false;
+			GW::GameThread::Enqueue([] {
+				GW::Map::Travel(GW::Constants::MapID::Embark_Beach);
+			});
 		}
-		if (!best_living) return false;
-		out_agent_id = best_living->agent_id;
-		out_name = WideToNarrow(*name_cache_.Get(best_living).lower);
-		return true;
+		else if (!embark_escape_armed_ && hp_pct > threshold + kEmbarkRearmHysteresisPct) {
+			embark_escape_armed_ = true;
+		}
 	}
 
 	using ManagerFindAgent_pt = void*(__cdecl*)(uint32_t agent_id);
+	using SetFlagBit_pt = void(__thiscall*)(void* view_obj, uint32_t bitmask, int32_t on_off);
 
 	static uintptr_t GetManagerFindAgentAddress() {
 		static bool tried_resolve = false;
@@ -549,23 +474,6 @@ private:
 		}
 		return address;
 	}
-
-	using CreateOverlay_pt = void(__thiscall*)(void* view_obj, uint32_t param2);
-
-	static uintptr_t GetCreateOverlayAddress() {
-		static bool tried_resolve = false;
-		static uintptr_t address = 0;
-		if (!tried_resolve) {
-			tried_resolve = true;
-			address = GW::Scanner::Find(
-				"\x55\x8b\xec\x83\xec\x20\x56\x8b\xf1\xe8\x00\x00\x00\x00\x85\xc0\x74\x75\x8b\x06\x8d\x4d\xf0\x51\xff\x75\x08\x8b\xce\xff\x10\xd9\x46\x3c\xff\x75\xf4\xd9\x5d\x08\xd9\x45\x08\x51\xd9\x1c\x24\xe8\x00\x00\x00\x00\xd9\x86\x84\x00\x00\x00\x8b\xc8",
-				"xxxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxx"
-			);
-		}
-		return address;
-	}
-
-	using SetFlagBit_pt = void(__thiscall*)(void* view_obj, uint32_t bitmask, int32_t on_off);
 
 	static uintptr_t GetSetFlagBitAddress() {
 		static bool tried_resolve = false;
@@ -584,13 +492,10 @@ private:
 		const uintptr_t manager_addr = GetManagerFindAgentAddress();
 		const uintptr_t setflag_addr = GetSetFlagBitAddress();
 		if (!manager_addr || !setflag_addr) return false;
-		const auto find_func = reinterpret_cast<ManagerFindAgent_pt>(manager_addr);
-		void* view_obj = find_func(agent_id);
+		void* view_obj = reinterpret_cast<ManagerFindAgent_pt>(manager_addr)(agent_id);
 		if (!view_obj) return false;
 		const auto setflag_func = reinterpret_cast<SetFlagBit_pt>(setflag_addr);
-		GW::GameThread::Enqueue([setflag_func, view_obj, on] {
-			setflag_func(view_obj, 0x100, on ? 1 : 0);
-		});
+		GW::GameThread::Enqueue([setflag_func, view_obj, on] { setflag_func(view_obj, 0x100, on ? 1 : 0); });
 		return true;
 	}
 
@@ -609,12 +514,7 @@ private:
 			GW::AgentLiving* living = agent->GetAsAgentLiving();
 			if (!living || living->GetIsDead()) continue;
 			if (me && living->agent_id == me->agent_id) continue;
-
-			auto it = healthbar_flag_cache_.find(living->agent_id);
-			if (it != healthbar_flag_cache_.end()) {
-				it->second.last_seen_tick = healthbar_flag_tick_;
-				continue;
-			}
+			if (healthbar_flag_cache_.count(living->agent_id)) continue;
 			if (ApplyHealthbarFlag(living->agent_id, true)) {
 				healthbar_flag_cache_[living->agent_id] = { healthbar_flag_tick_ };
 			}
@@ -622,15 +522,12 @@ private:
 	}
 
 	void RevertHealthbarFlags() {
-		for (auto& pair : healthbar_flag_cache_) {
-			ApplyHealthbarFlag(pair.first, false);
-		}
+		for (auto& pair : healthbar_flag_cache_) ApplyHealthbarFlag(pair.first, false);
 		healthbar_flag_cache_.clear();
 	}
 
-	using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
-
-	static SetGlobalNameTagVisibility_pt GetSetGlobalNameTagVisibilityFunc(uint32_t** out_flags_ptr) {
+	static void RefreshAllNametags() {
+		using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
 		static bool tried_resolve = false;
 		static SetGlobalNameTagVisibility_pt set_func = nullptr;
 		static uint32_t* flags_ptr = nullptr;
@@ -648,15 +545,8 @@ private:
 				}
 			}
 		}
-		if (out_flags_ptr) *out_flags_ptr = flags_ptr;
-		return set_func;
-	}
-
-	static void RefreshAllNametags() {
-		uint32_t* flags_ptr = nullptr;
-		SetGlobalNameTagVisibility_pt set_func = GetSetGlobalNameTagVisibilityFunc(&flags_ptr);
 		if (!set_func || !flags_ptr) return;
-		GW::GameThread::Enqueue([set_func, flags_ptr] {
+		GW::GameThread::Enqueue([] {
 			const uint32_t prev_flags = *flags_ptr;
 			set_func(0);
 			set_func(prev_flags);
@@ -829,85 +719,6 @@ private:
 		ImGui::SeparatorText("Health Bars");
 		ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents);
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Experimental");
-		ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "BUILD MARKER: TEST-REV-7");
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Stage 1: read-only lookup, no state changes. Target a unit first.");
-		if (ImGui::Button("Test: resolve agent view object")) {
-			test_lookup_func_addr_ = GetManagerFindAgentAddress();
-			test_lookup_target_id_ = GW::Agents::GetTargetId();
-			test_lookup_result_ = 0;
-			if (test_lookup_func_addr_ && test_lookup_target_id_ != 0) {
-				const auto func = reinterpret_cast<ManagerFindAgent_pt>(test_lookup_func_addr_);
-				test_lookup_result_ = reinterpret_cast<uintptr_t>(func(test_lookup_target_id_));
-			}
-			test_bytes_at_signature_ = FormatBytesHex(test_lookup_func_addr_, 24);
-			test_bytes_at_knownworking_ = FormatBytesHex(reinterpret_cast<uintptr_t>(GetSetGlobalNameTagVisibilityFunc(nullptr)), 24);
-			test_lookup_performed_ = true;
-		}
-		if (test_lookup_performed_) {
-			ImGui::Text("Signature address: 0x%08X", static_cast<unsigned>(test_lookup_func_addr_));
-			ImGui::Text("Target agent_id: %u", test_lookup_target_id_);
-			ImGui::Text("Resolved pointer: 0x%08X", static_cast<unsigned>(test_lookup_result_));
-			ImGui::TextWrapped("Bytes at signature address: %s", test_bytes_at_signature_.c_str());
-			ImGui::TextWrapped("Bytes at known-working address: %s", test_bytes_at_knownworking_.c_str());
-		}
-		ImGui::Text("Known-working scan (RefreshAllNametags target): 0x%08X", static_cast<unsigned>(reinterpret_cast<uintptr_t>(GetSetGlobalNameTagVisibilityFunc(nullptr))));
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Stage 2 - REAL RISK");
-		ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Creates an engine object. Real crash risk.");
-		ImGui::TextWrapped("Tests on the nearest OTHER unit (not your target), so a real target/hover trigger can't fake a positive result. Leave your target empty or on something else, and don't hover the named unit below.");
-		ImGui::Checkbox("Enable Stage 2", &stage2_enabled_);
-		if (stage2_enabled_) {
-			ImGui::Checkbox("Also create ring overlay", &stage2_also_create_overlay_);
-			ImGui::SetNextItemWidth(100.f);
-			ImGui::InputScalar("Flag bit to test (hex)", ImGuiDataType_U32, &stage2_flag_bit_, nullptr, nullptr, "%X");
-			ImGui::TextDisabled("Candidates to try: 8, 10, 100, 400. 80 = confirmed target-style (arrow shown).");
-			if (ImGui::Button("Test: force-create overlay on nearest other unit")) {
-				stage2_performed_ = false;
-				stage2_skipped_existing_ = false;
-				stage2_subject_id_ = 0;
-				stage2_subject_name_.clear();
-				if (FindNearestOtherAgent(stage2_subject_id_, stage2_subject_name_)) {
-					const uintptr_t manager_addr = GetManagerFindAgentAddress();
-					const uintptr_t create_addr = GetCreateOverlayAddress();
-					const uintptr_t setflag_addr = GetSetFlagBitAddress();
-					if (manager_addr && create_addr && setflag_addr) {
-						const auto find_func = reinterpret_cast<ManagerFindAgent_pt>(manager_addr);
-						void* view_obj = find_func(stage2_subject_id_);
-						if (view_obj) {
-							uint32_t overlay_ptr = 0;
-							const bool read_ok = TryReadBytes(reinterpret_cast<uintptr_t>(view_obj) + 0x98, reinterpret_cast<uint8_t*>(&overlay_ptr), sizeof(overlay_ptr));
-							if (read_ok && overlay_ptr != 0) {
-								stage2_skipped_existing_ = true;
-							}
-							else if (read_ok) {
-									const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
-									const auto setflag_func = reinterpret_cast<SetFlagBit_pt>(setflag_addr);
-									const bool also_create = stage2_also_create_overlay_;
-									const uint32_t flag_bit = stage2_flag_bit_;
-									GW::GameThread::Enqueue([create_func, setflag_func, view_obj, also_create, flag_bit] {
-										if (also_create) create_func(view_obj, 1);
-										setflag_func(view_obj, flag_bit, 1);
-									});
-									stage2_performed_ = true;
-								}
-						}
-					}
-				}
-			}
-			if (!stage2_subject_name_.empty()) {
-				ImGui::Text("Test subject: \"%s\" (agent_id %u)", stage2_subject_name_.c_str(), stage2_subject_id_);
-			}
-			if (stage2_skipped_existing_) {
-				ImGui::TextColored(ImVec4(1.f, 1.f, 0.4f, 1.f), "Skipped: overlay already exists on this agent (it may already be targeted/hovered).");
-			}
-			if (stage2_performed_) {
-				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "Call enqueued. Look for the named unit above WITHOUT targeting or hovering it.");
-			}
-		}
 	}
 };
 
