@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 #include <cstddef>
 #include <cstdlib>
 #include <functional>
@@ -287,6 +288,8 @@ private:
 	uintptr_t test_lookup_func_addr_ = 0;
 	uint32_t test_lookup_target_id_ = 0;
 	uintptr_t test_lookup_result_ = 0;
+	std::string test_bytes_at_signature_;
+	std::string test_bytes_at_knownworking_;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -440,6 +443,31 @@ private:
 		ImGui::TextUnformatted(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)));
 		ImGui::EndDisabled();
 		ImGui::PopID();
+	}
+
+	static bool TryReadBytes(uintptr_t addr, uint8_t* out, size_t count) {
+		if (!addr) return false;
+		__try {
+			memcpy(out, reinterpret_cast<void*>(addr), count);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			return false;
+		}
+	}
+
+	static std::string FormatBytesHex(uintptr_t addr, size_t count) {
+		std::vector<uint8_t> buf(count, 0);
+		if (!TryReadBytes(addr, buf.data(), count)) {
+			return "(unreadable)";
+		}
+		std::ostringstream oss;
+		for (size_t i = 0; i < count; ++i) {
+			char tmp[4];
+			snprintf(tmp, sizeof(tmp), "%02X ", buf[i]);
+			oss << tmp;
+		}
+		return oss.str();
 	}
 
 	using ManagerFindAgent_pt = void*(__cdecl*)(uint32_t agent_id);
@@ -666,12 +694,16 @@ private:
 				const auto func = reinterpret_cast<ManagerFindAgent_pt>(test_lookup_func_addr_);
 				test_lookup_result_ = reinterpret_cast<uintptr_t>(func(test_lookup_target_id_));
 			}
+			test_bytes_at_signature_ = FormatBytesHex(test_lookup_func_addr_, 24);
+			test_bytes_at_knownworking_ = FormatBytesHex(reinterpret_cast<uintptr_t>(GetSetGlobalNameTagVisibilityFunc(nullptr)), 24);
 			test_lookup_performed_ = true;
 		}
 		if (test_lookup_performed_) {
 			ImGui::Text("Signature address: 0x%08X", static_cast<unsigned>(test_lookup_func_addr_));
 			ImGui::Text("Target agent_id: %u", test_lookup_target_id_);
 			ImGui::Text("Resolved pointer: 0x%08X", static_cast<unsigned>(test_lookup_result_));
+			ImGui::TextWrapped("Bytes at signature address: %s", test_bytes_at_signature_.c_str());
+			ImGui::TextWrapped("Bytes at known-working address: %s", test_bytes_at_knownworking_.c_str());
 		}
 		ImGui::Text("Known-working scan (RefreshAllNametags target): 0x%08X", static_cast<unsigned>(reinterpret_cast<uintptr_t>(GetSetGlobalNameTagVisibilityFunc(nullptr))));
 	}
