@@ -542,6 +542,21 @@ private:
 		return address;
 	}
 
+	using SetFlagBit_pt = void(__thiscall*)(void* view_obj, uint32_t bitmask, int32_t on_off);
+
+	static uintptr_t GetSetFlagBitAddress() {
+		static bool tried_resolve = false;
+		static uintptr_t address = 0;
+		if (!tried_resolve) {
+			tried_resolve = true;
+			address = GW::Scanner::Find(
+				"\x55\x8b\xec\x83\xec\x64\x83\x7d\x0c\x00\x53\x57\x8b\xf9\x8b\x57\x58\x74\x07\x8b\xda\x0b\x5d\x08\xeb\x07\x8b\x5d\x08\xf7\xd3\x23\xda\x89\x5f\x58\x3b\xd3\x0f\x84\x36\x01\x00\x00\x8d\x45\xf4\x50\x8d\x45\x0c\x50\x52\xe8\x00\x00\x00\x00",
+				"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????"
+			);
+		}
+		return address;
+	}
+
 	using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
 
 	static SetGlobalNameTagVisibility_pt GetSetGlobalNameTagVisibilityFunc(uint32_t** out_flags_ptr) {
@@ -778,7 +793,8 @@ private:
 				if (FindNearestOtherAgent(stage2_subject_id_, stage2_subject_name_)) {
 					const uintptr_t manager_addr = GetManagerFindAgentAddress();
 					const uintptr_t create_addr = GetCreateOverlayAddress();
-					if (manager_addr && create_addr) {
+					const uintptr_t setflag_addr = GetSetFlagBitAddress();
+					if (manager_addr && create_addr && setflag_addr) {
 						const auto find_func = reinterpret_cast<ManagerFindAgent_pt>(manager_addr);
 						void* view_obj = find_func(stage2_subject_id_);
 						if (view_obj) {
@@ -789,8 +805,10 @@ private:
 							}
 							else if (read_ok) {
 								const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
-								GW::GameThread::Enqueue([create_func, view_obj] {
+								const auto setflag_func = reinterpret_cast<SetFlagBit_pt>(setflag_addr);
+								GW::GameThread::Enqueue([create_func, setflag_func, view_obj] {
 									create_func(view_obj, 1);
+									setflag_func(view_obj, 0x80, 1);
 								});
 								stage2_performed_ = true;
 							}
