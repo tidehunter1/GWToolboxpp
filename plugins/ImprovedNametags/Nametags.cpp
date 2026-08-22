@@ -294,6 +294,7 @@ private:
 	bool stage2_performed_ = false;
 	bool stage2_skipped_existing_ = false;
 	std::string stage2_subject_name_;
+	bool stage2_also_create_overlay_ = false;
 	uint32_t stage2_subject_id_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
@@ -785,6 +786,7 @@ private:
 		ImGui::TextWrapped("Tests on the nearest OTHER unit (not your target), so a real target/hover trigger can't fake a positive result. Leave your target empty or on something else, and don't hover the named unit below.");
 		ImGui::Checkbox("Enable Stage 2", &stage2_enabled_);
 		if (stage2_enabled_) {
+			ImGui::Checkbox("Also create ring overlay", &stage2_also_create_overlay_);
 			if (ImGui::Button("Test: force-create overlay on nearest other unit")) {
 				stage2_performed_ = false;
 				stage2_skipped_existing_ = false;
@@ -804,14 +806,15 @@ private:
 								stage2_skipped_existing_ = true;
 							}
 							else if (read_ok) {
-								const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
-								const auto setflag_func = reinterpret_cast<SetFlagBit_pt>(setflag_addr);
-								GW::GameThread::Enqueue([create_func, setflag_func, view_obj] {
-									create_func(view_obj, 1);
-									setflag_func(view_obj, 0x80, 1);
-								});
-								stage2_performed_ = true;
-							}
+									const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
+									const auto setflag_func = reinterpret_cast<SetFlagBit_pt>(setflag_addr);
+									const bool also_create = stage2_also_create_overlay_;
+									GW::GameThread::Enqueue([create_func, setflag_func, view_obj, also_create] {
+										if (also_create) create_func(view_obj, 1);
+										setflag_func(view_obj, 0x80, 1);
+									});
+									stage2_performed_ = true;
+								}
 						}
 					}
 				}
