@@ -321,6 +321,8 @@ private:
 	uint32_t live_test_computed_color_ = 0;
 	bool live_test_ok_ = false;
 	bool hook_install_ok_ = true;
+	std::string override_test_subject_name_;
+	bool override_test_performed_ = false;
 
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
@@ -521,6 +523,7 @@ private:
 		uint8_t* trampoline = nullptr;
 	};
 	PassthroughHookState hook_state_;
+	std::unordered_map<uint32_t, uint32_t> color_overrides_;
 
 	bool InstallPassthroughHook() {
 		if (hook_state_.installed) return true;
@@ -549,7 +552,7 @@ private:
 
 			uint8_t patch[6];
 			patch[0] = 0xE9;
-			const uintptr_t patch_jmp_target = reinterpret_cast<uintptr_t>(hook_state_.trampoline);
+			const uintptr_t patch_jmp_target = reinterpret_cast<uintptr_t>(&ColorOverrideDetour);
 			const uintptr_t patch_instr_end = target + 5;
 			const int32_t patch_rel_offset = static_cast<int32_t>(patch_jmp_target - patch_instr_end);
 			memcpy(patch + 1, &patch_rel_offset, 4);
@@ -592,6 +595,32 @@ private:
 			hook_state_.trampoline = nullptr;
 		}
 		hook_state_.installed = false;
+	}
+
+	using ComputeColorTrampoline_pt = uint32_t*(__thiscall*)(void* context, uint32_t* out_color, int32_t param3);
+
+	static uint32_t* __fastcall ColorOverrideDetour(void* context, void* /*edx_unused*/, uint32_t* out_color, int32_t param3) {
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		uint32_t agent_id = 0;
+		__try {
+			agent_id = *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(context) + 0x2c);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			agent_id = 0;
+		}
+
+		if (self && agent_id != 0) {
+			const auto it = self->color_overrides_.find(agent_id);
+			if (it != self->color_overrides_.end()) {
+				*out_color = it->second;
+				return out_color;
+			}
+		}
+
+		if (self && self->hook_state_.trampoline) {
+			return reinterpret_cast<ComputeColorTrampoline_pt>(self->hook_state_.trampoline)(context, out_color, param3);
+		}
+		return out_color;
 	}
 
 	static bool TryComputeAllegianceColor(uintptr_t func_addr, uint8_t allegiance_byte, uint32_t& out_color) {
@@ -938,6 +967,26 @@ private:
 		ImGui::Text("Status: %s", hook_state_.installed ? "installed" : "not installed");
 		if (hook_state_.installed) {
 			ImGui::TextWrapped("Now click the 'compute colors for all 6 allegiance values' button above again. Results must be IDENTICAL to before installing - that proves the hook round-trips correctly through the original function.");
+
+			ImGui::Spacing();
+			ImGui::SeparatorText("Per-Agent Override Test");
+			if (ImGui::Button("Set nearest other agent to magenta test color")) {
+				std::string subject_name;
+				GW::AgentLiving* living = FindNearestOtherLiving(subject_name);
+				if (living) {
+					color_overrides_[living->agent_id] = 0xFFFF00FF;
+					override_test_subject_name_ = subject_name;
+					override_test_performed_ = true;
+				}
+			}
+			if (override_test_performed_) {
+				ImGui::Text("Override set on: \"%s\"", override_test_subject_name_.c_str());
+				ImGui::TextWrapped("Look at this specific unit only. It should now be magenta. Every other agent should be completely unaffected.");
+			}
+			if (ImGui::Button("Clear all overrides")) {
+				color_overrides_.clear();
+				override_test_performed_ = false;
+			}
 		}
 	}
 };
