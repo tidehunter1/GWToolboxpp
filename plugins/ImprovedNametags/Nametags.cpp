@@ -293,6 +293,8 @@ private:
 	bool stage2_enabled_ = false;
 	bool stage2_performed_ = false;
 	bool stage2_skipped_existing_ = false;
+	std::string stage2_subject_name_;
+	uint32_t stage2_subject_id_ = 0;
 	GW::HookEntry nametag_hook_entry_;
 	GW::HookEntry quest_hook_entry_;
 	GW::HookEntry allegiance_hook_entry_;
@@ -471,6 +473,43 @@ private:
 			oss << tmp;
 		}
 		return oss.str();
+	}
+
+	static std::string WideToNarrow(const std::wstring& wide) {
+		if (wide.empty()) return {};
+		const int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+		if (len <= 0) return {};
+		std::string out(static_cast<size_t>(len), '\0');
+		WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), len, nullptr, nullptr);
+		return out;
+	}
+
+	bool FindNearestOtherAgent(uint32_t& out_agent_id, std::string& out_name) {
+		GW::AgentArray* agents = GW::Agents::GetAgentArray();
+		if (!agents || !agents->valid()) return false;
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (!me) return false;
+		const uint32_t target_id = GW::Agents::GetTargetId();
+		float best_dist_sq = -1.f;
+		GW::AgentLiving* best_living = nullptr;
+		for (GW::Agent* agent : *agents) {
+			if (!agent || !agent->GetIsLivingType()) continue;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) continue;
+			if (living->agent_id == me->agent_id) continue;
+			if (living->agent_id == target_id) continue;
+			const float dx = living->pos.x - me->pos.x;
+			const float dy = living->pos.y - me->pos.y;
+			const float dist_sq = dx * dx + dy * dy;
+			if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
+				best_dist_sq = dist_sq;
+				best_living = living;
+			}
+		}
+		if (!best_living) return false;
+		out_agent_id = best_living->agent_id;
+		out_name = WideToNarrow(*name_cache_.Get(best_living).lower);
+		return true;
 	}
 
 	using ManagerFindAgent_pt = void*(__cdecl*)(uint32_t agent_id);
@@ -727,39 +766,46 @@ private:
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Stage 2 - REAL RISK");
-		ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Creates an engine object. Real crash risk. Target ONE unit first.");
+		ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Creates an engine object. Real crash risk.");
+		ImGui::TextWrapped("Tests on the nearest OTHER unit (not your target), so a real target/hover trigger can't fake a positive result. Leave your target empty or on something else, and don't hover the named unit below.");
 		ImGui::Checkbox("Enable Stage 2", &stage2_enabled_);
 		if (stage2_enabled_) {
-			if (ImGui::Button("Test: force-create overlay on current target")) {
+			if (ImGui::Button("Test: force-create overlay on nearest other unit")) {
 				stage2_performed_ = false;
 				stage2_skipped_existing_ = false;
-				const uintptr_t manager_addr = GetManagerFindAgentAddress();
-				const uintptr_t create_addr = GetCreateOverlayAddress();
-				const uint32_t target_id = GW::Agents::GetTargetId();
-				if (manager_addr && create_addr && target_id != 0) {
-					const auto find_func = reinterpret_cast<ManagerFindAgent_pt>(manager_addr);
-					void* view_obj = find_func(target_id);
-					if (view_obj) {
-						uint32_t overlay_ptr = 0;
-						const bool read_ok = TryReadBytes(reinterpret_cast<uintptr_t>(view_obj) + 0x98, reinterpret_cast<uint8_t*>(&overlay_ptr), sizeof(overlay_ptr));
-						if (read_ok && overlay_ptr != 0) {
-							stage2_skipped_existing_ = true;
-						}
-						else if (read_ok) {
-							const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
-							GW::GameThread::Enqueue([create_func, view_obj] {
-								create_func(view_obj, 1);
-							});
-							stage2_performed_ = true;
+				stage2_subject_id_ = 0;
+				stage2_subject_name_.clear();
+				if (FindNearestOtherAgent(stage2_subject_id_, stage2_subject_name_)) {
+					const uintptr_t manager_addr = GetManagerFindAgentAddress();
+					const uintptr_t create_addr = GetCreateOverlayAddress();
+					if (manager_addr && create_addr) {
+						const auto find_func = reinterpret_cast<ManagerFindAgent_pt>(manager_addr);
+						void* view_obj = find_func(stage2_subject_id_);
+						if (view_obj) {
+							uint32_t overlay_ptr = 0;
+							const bool read_ok = TryReadBytes(reinterpret_cast<uintptr_t>(view_obj) + 0x98, reinterpret_cast<uint8_t*>(&overlay_ptr), sizeof(overlay_ptr));
+							if (read_ok && overlay_ptr != 0) {
+								stage2_skipped_existing_ = true;
+							}
+							else if (read_ok) {
+								const auto create_func = reinterpret_cast<CreateOverlay_pt>(create_addr);
+								GW::GameThread::Enqueue([create_func, view_obj] {
+									create_func(view_obj, 1);
+								});
+								stage2_performed_ = true;
+							}
 						}
 					}
 				}
 			}
+			if (!stage2_subject_name_.empty()) {
+				ImGui::Text("Test subject: \"%s\" (agent_id %u)", stage2_subject_name_.c_str(), stage2_subject_id_);
+			}
 			if (stage2_skipped_existing_) {
-				ImGui::TextColored(ImVec4(1.f, 1.f, 0.4f, 1.f), "Skipped: overlay already exists on this agent.");
+				ImGui::TextColored(ImVec4(1.f, 1.f, 0.4f, 1.f), "Skipped: overlay already exists on this agent (it may already be targeted/hovered).");
 			}
 			if (stage2_performed_) {
-				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "Call enqueued. Check in-game for a visual change on the target.");
+				ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "Call enqueued. Look for the named unit above WITHOUT targeting or hovering it.");
 			}
 		}
 	}
