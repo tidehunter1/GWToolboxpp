@@ -303,6 +303,7 @@ private:
 	std::optional<bool> last_show_healthbar_all_state_;
 	bool did_initial_scan_ = false;
 	char debug_override_buf_[16] = {};
+	char debug_typemap_buf_[16] = {};
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -870,6 +871,7 @@ private:
 			if (nearest_living) {
 				ImGui::Text("Nearest agent: ID %u, distance %.0f", nearest_living->agent_id, std::sqrt(nearest_dist_sq));
 				ImGui::Text("name_properties: 0x%08X", static_cast<uint32_t>(nearest_living->name_properties));
+				ImGui::Text("type_map: 0x%08X", nearest_living->type_map);
 			} else {
 				ImGui::TextDisabled("No nearby agent found");
 			}
@@ -878,7 +880,7 @@ private:
 			ImGui::SetNextItemWidth(150.f);
 			ImGui::InputText("Value (hex)##debug_override_hex", debug_override_buf_, sizeof(debug_override_buf_), ImGuiInputTextFlags_CharsHexadecimal);
 			ImGui::SameLine();
-			if (ImGui::Button("Apply to nearest") && nearest_living) {
+			if (ImGui::Button("Apply to nearest##name_properties") && nearest_living) {
 				const uint32_t override_value = static_cast<uint32_t>(strtoul(debug_override_buf_, nullptr, 16));
 				const uint32_t agent_id = nearest_living->agent_id;
 				GW::GameThread::Enqueue([agent_id, override_value] {
@@ -888,6 +890,25 @@ private:
 					GW::Agents::RefreshAgentNameTag(agent);
 				});
 			}
+			ImGui::SameLine();
+			ImGui::TextDisabled("name_properties");
+
+			ImGui::SetNextItemWidth(150.f);
+			ImGui::InputText("Value (hex)##debug_typemap_hex", debug_typemap_buf_, sizeof(debug_typemap_buf_), ImGuiInputTextFlags_CharsHexadecimal);
+			ImGui::SameLine();
+			if (ImGui::Button("Apply to nearest##type_map") && nearest_living) {
+				const uint32_t override_value = static_cast<uint32_t>(strtoul(debug_typemap_buf_, nullptr, 16));
+				const uint32_t agent_id = nearest_living->agent_id;
+				GW::GameThread::Enqueue([agent_id, override_value] {
+					GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+					if (!agent) return;
+					GW::AgentLiving* living = agent->GetAsAgentLiving();
+					if (!living) return;
+					living->type_map = override_value;
+				});
+			}
+			ImGui::SameLine();
+			ImGui::TextDisabled("type_map");
 			ShowHelpMarker("Always tracks whichever living agent is nearest to you, never your target, so you can test flag values without any target/mouseover flags contaminating the result. Walk close to whichever NPC you want to test.");
 		}
 	}
