@@ -557,6 +557,7 @@ private:
 		} else {
 			settings_.show_healthbar_all_agents = hotkey_saved_show_healthbar_all_;
 		}
+		last_show_healthbar_all_state_ = settings_.show_healthbar_all_agents;
 		RescanAllAgentsForHealthbar();
 	}
 
