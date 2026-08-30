@@ -53,7 +53,4 @@ macro(add_tb_plugin PLUGIN)
     set_target_properties(${PLUGIN} PROPERTIES FOLDER "plugins/")
 endmacro()
 
-option(GWTOOLBOX_BUILD_EXAMPLE_PLUGIN "Build the ExamplePlugin sample (plugin-author reference; skipped in CI to save build time and keep it out of release artifacts)" ON)
-if(GWTOOLBOX_BUILD_EXAMPLE_PLUGIN)
-    add_tb_plugin(ImprovedNametags)
-endif()
+add_tb_plugin(ImprovedNametags)
