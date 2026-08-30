@@ -36,6 +36,7 @@
 #include <cwchar>
 #include <optional>
 #include <algorithm>
+#include <cmath>
 #include <array>
 
 template<typename CacheMap>
@@ -842,18 +843,44 @@ private:
 		ImGui::Spacing();
 		ImGui::SeparatorText("Debug: name_properties");
 		if (ImGui::CollapsingHeader("Raw flag override (dev tool)")) {
-			GW::AgentLiving* target_agent = GW::Agents::GetTargetAsAgentLiving();
-			if (target_agent) {
-				ImGui::Text("Current target name_properties: 0x%08X", static_cast<uint32_t>(target_agent->name_properties));
-			} else {
-				ImGui::TextDisabled("No current target");
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			GW::Agent* nearest = nullptr;
+			GW::AgentLiving* nearest_living = nullptr;
+			float nearest_dist_sq = 0.f;
+			if (me) {
+				GW::AgentArray* agents = GW::Agents::GetAgentArray();
+				if (agents && agents->valid()) {
+					for (GW::Agent* agent : *agents) {
+						if (!agent || !agent->GetIsLivingType()) continue;
+						GW::AgentLiving* living = agent->GetAsAgentLiving();
+						if (!living || living->GetIsDead()) continue;
+						if (living->agent_id == me->agent_id) continue;
+						const float dx = agent->x - me->x;
+						const float dy = agent->y - me->y;
+						const float dist_sq = dx * dx + dy * dy;
+						if (!nearest || dist_sq < nearest_dist_sq) {
+							nearest = agent;
+							nearest_living = living;
+							nearest_dist_sq = dist_sq;
+						}
+					}
+				}
 			}
+
+			if (nearest_living) {
+				ImGui::Text("Nearest agent: ID %u, distance %.0f", nearest_living->agent_id, std::sqrt(nearest_dist_sq));
+				ImGui::Text("name_properties: 0x%08X", static_cast<uint32_t>(nearest_living->name_properties));
+			} else {
+				ImGui::TextDisabled("No nearby agent found");
+			}
+
+			ImGui::Spacing();
 			ImGui::SetNextItemWidth(150.f);
-			ImGui::InputText("##debug_override_hex", debug_override_buf_, sizeof(debug_override_buf_), ImGuiInputTextFlags_CharsHexadecimal);
+			ImGui::InputText("Value (hex)##debug_override_hex", debug_override_buf_, sizeof(debug_override_buf_), ImGuiInputTextFlags_CharsHexadecimal);
 			ImGui::SameLine();
-			if (ImGui::Button("Apply to target") && target_agent) {
+			if (ImGui::Button("Apply to nearest") && nearest_living) {
 				const uint32_t override_value = static_cast<uint32_t>(strtoul(debug_override_buf_, nullptr, 16));
-				const uint32_t agent_id = target_agent->agent_id;
+				const uint32_t agent_id = nearest_living->agent_id;
 				GW::GameThread::Enqueue([agent_id, override_value] {
 					GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 					if (!agent) return;
@@ -861,7 +888,7 @@ private:
 					GW::Agents::RefreshAgentNameTag(agent);
 				});
 			}
-			ShowHelpMarker("Writes a raw hex value directly to your current target's name_properties bitmask and forces a nametag refresh. For investigating undocumented bits only.");
+			ShowHelpMarker("Always tracks whichever living agent is nearest to you, never your target, so you can test flag values without any target/mouseover flags contaminating the result. Walk close to whichever NPC you want to test.");
 		}
 	}
 };
