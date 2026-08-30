@@ -22,7 +22,7 @@ target_link_libraries(plugin_base INTERFACE
     glaze::glaze
     gwca
     IconFontCppHeaders
-    GWToolboxdll # for GetFont
+    #GWToolboxdll # for GetFont
     )
 target_compile_definitions(plugin_base INTERFACE BUILD_DLL)
 
@@ -55,5 +55,5 @@ endmacro()
 
 option(GWTOOLBOX_BUILD_EXAMPLE_PLUGIN "Build the ExamplePlugin sample (plugin-author reference; skipped in CI to save build time and keep it out of release artifacts)" ON)
 if(GWTOOLBOX_BUILD_EXAMPLE_PLUGIN)
-    add_tb_plugin(ExamplePlugin)
+    add_tb_plugin(ImprovedNametags)
 endif()
