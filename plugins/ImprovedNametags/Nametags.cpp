@@ -289,6 +289,7 @@ public:
 
 		name_cache_.MaybePrune();
 		SweepStaleAgentState();
+		ReassertHpNudges();
 		ProcessBossGlowRetries();
 	}
 
@@ -528,16 +529,21 @@ private:
 		});
 	}
 
-	static void ApplyHealthbarFlag(uint32_t agent_id, bool on) {
+	static constexpr float kForcedHpNudge = 0.99f;
+
+	static void ApplyHealthbarHpNudge(uint32_t agent_id, bool on) {
 		GW::GameThread::Enqueue([agent_id, on] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent) return;
-			const uint32_t current = static_cast<uint32_t>(agent->name_properties);
-			agent->name_properties = static_cast<GW::NameTagFlags>(
-				on ? (current | GW::NameTagFlags_ManualTarget)
-				   : (current & ~GW::NameTagFlags_ManualTarget)
-			);
-			GW::Agents::RefreshAgentNameTag(agent);
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living) return;
+			if (on) {
+				if (living->hp >= 1.0f) {
+					living->hp = kForcedHpNudge;
+				}
+			} else if (living->hp == kForcedHpNudge) {
+				living->hp = 1.0f;
+			}
 		});
 	}
 
@@ -560,11 +566,11 @@ private:
 
 		if (settings_.show_healthbar_all_agents) {
 			if (!state.we_applied_flag) {
-				ApplyHealthbarFlag(living->agent_id, true);
+				ApplyHealthbarHpNudge(living->agent_id, true);
 				state.we_applied_flag = true;
 			}
 		} else if (state.we_applied_flag) {
-			ApplyHealthbarFlag(living->agent_id, false);
+			ApplyHealthbarHpNudge(living->agent_id, false);
 			state.we_applied_flag = false;
 		}
 
@@ -618,6 +624,20 @@ private:
 			} else {
 				++it;
 			}
+		}
+	}
+
+	static constexpr uint64_t kHpNudgeReassertIntervalMs = 2000;
+	uint64_t last_hp_nudge_reassert_ms_ = 0;
+
+	void ReassertHpNudges() {
+		const uint64_t now = GetTickCount64();
+		if (now - last_hp_nudge_reassert_ms_ < kHpNudgeReassertIntervalMs) return;
+		last_hp_nudge_reassert_ms_ = now;
+		if (!settings_.show_healthbar_all_agents) return;
+		for (const auto& [agent_id, state] : agent_state_) {
+			if (!state.we_applied_flag) continue;
+			ApplyHealthbarHpNudge(agent_id, true);
 		}
 	}
 
