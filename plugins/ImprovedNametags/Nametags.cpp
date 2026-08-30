@@ -308,6 +308,7 @@ private:
 	bool ctrl_reveal_down_ = false;
 	bool alt_reveal_down_ = false;
 	bool hide_hotkey_active_ = false;
+	bool hotkey_saved_show_healthbar_all_ = false;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -546,18 +547,17 @@ private:
 		});
 	}
 
-	void SuppressOrRestoreForcedHealthbars(bool restore) {
-		for (const auto& [agent_id, state] : agent_state_) {
-			if (!state.we_applied_flag) continue;
-			ApplyHealthbarFlag(agent_id, restore);
-		}
-	}
-
 	void OnRevealHotkeyStateChanged() {
 		const bool now_active = ctrl_reveal_down_ || alt_reveal_down_;
 		if (now_active == hide_hotkey_active_) return;
 		hide_hotkey_active_ = now_active;
-		SuppressOrRestoreForcedHealthbars(!now_active);
+		if (now_active) {
+			hotkey_saved_show_healthbar_all_ = settings_.show_healthbar_all_agents;
+			settings_.show_healthbar_all_agents = false;
+		} else {
+			settings_.show_healthbar_all_agents = hotkey_saved_show_healthbar_all_;
+		}
+		RescanAllAgentsForHealthbar();
 	}
 
 	static void OnRevealHotkeyDown(GW::HookStatus*, uint32_t key) {
