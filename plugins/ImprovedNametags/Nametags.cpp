@@ -301,6 +301,7 @@ private:
 	std::optional<bool> last_priority_enabled_state_;
 	std::optional<bool> last_show_healthbar_all_state_;
 	bool did_initial_scan_ = false;
+	char debug_override_buf_[16] = {};
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -512,8 +513,8 @@ private:
 
 	static void PushHealthbarColor(uint32_t agent_id, ImU32 color) {
 		if (!ResolveScannedFunc(PoolColorSetter_Func,
-			"\x55\x8b\xec\x53\x56\x57\xff\x35\xa4\xf5\xa5\x00\xff\x75\x08\xe8\x6c\x6a\xe0\xff\x8b\xf8\x83\xc4\x08\x85\xff\x75\x14\x68\xa4\x00\x00\x00\xba\x38\xbf\xa5\x00\xb9\x70\xf6\x93\x00\xe8\xcf\xe7\xe1\xff\x8b\x47\x0c\x83\xf8\x05\x74\x12\x50\x6a\x05\x68\x94\xbf\xa5\x00\x6a\x02\xe8\x38\x59\xe0\xff\x83\xc4\x10\x83\x7f\x0c\x05\x74\x14\x68\xa8\x00\x00\x00\xba\x38\xbf\xa5\x00\xb9\xcc\xbf\xa5\x00\xe8\x9b\xe7\xe1\xff\x8b\x5d\x0c\x3b\x9f\xa4\x00\x00\x00\x72\x14\x68\x39\x07\x00\x00\xba\x3c\xd2\xa5\x00\xb9\x50\xd6\xa5\x00\xe8\x7c\xe7\xe1\xff\x8b\x75\x10\x8b\x36\x3b\x9f\xa4\x00\x00\x00\x72\x14\x68\x4b\x02\x00\x00\xba\xbc\xc6\x93\x00\xb9\xd8\xc6\x93\x00\xe8\x5b\xe7\xe1\xff\x8b\x87\x9c\x00\x00\x00\x6b\xcb\x7c\x5f\x89\x74\x01\x2c\x5e\x5b\x5d\xc3",
-			"xxxxxxxx????xxxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxx????xxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxx")) return;
+			"\x55\x8b\xec\x53\x56\x57\xff\x35\xa4\xf5\xa5\x00\xff\x75\x08\xe8\x6c\x6a\xe0\xff\x8b\xf8\x83\xc4\x08\x85\xff\x75\x14\x68\xa4\x00\x00\x00\xba\x38\xbf\xa5\x00\xb9\x70\xf6\x93\x00\xe8\xcf\xe7\xe1\xff\x8b\x47\x0c\x83\xf8\x05\x74\x12\x50\x6a\x05\x68\x94\xbf\xa5\x00\x6a\x02\xe8\x38\x59\xe0\xff\x83\xc4\x10\x83\x7f\x0c\x05\x74\x14\x68\xa8\x00\x00\x00\xba\x38\xbf\xa5\x00\xb9\xcc\xbf\xa5\x00\xe8\x9b\xe7\xe1\xff\x8b\x5d\x0c\x3b\x9f\xa4\x00\x00\x00\x72\x14\x68\x39\x07\x00\x00\xba\x3c\xd2",
+			"xxxxxxxx????xxxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxx????xxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxx??")) return;
 		GW::GameThread::Enqueue([agent_id, color] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent) return;
@@ -837,6 +838,31 @@ private:
 		ImGui::SeparatorText("Health Bars");
 		ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents);
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Debug: name_properties");
+		if (ImGui::CollapsingHeader("Raw flag override (dev tool)")) {
+			GW::AgentLiving* target_agent = GW::Agents::GetTargetAsAgentLiving();
+			if (target_agent) {
+				ImGui::Text("Current target name_properties: 0x%08X", static_cast<uint32_t>(target_agent->name_properties));
+			} else {
+				ImGui::TextDisabled("No current target");
+			}
+			ImGui::SetNextItemWidth(150.f);
+			ImGui::InputText("##debug_override_hex", debug_override_buf_, sizeof(debug_override_buf_), ImGuiInputTextFlags_CharsHexadecimal);
+			ImGui::SameLine();
+			if (ImGui::Button("Apply to target") && target_agent) {
+				const uint32_t override_value = static_cast<uint32_t>(strtoul(debug_override_buf_, nullptr, 16));
+				const uint32_t agent_id = target_agent->agent_id;
+				GW::GameThread::Enqueue([agent_id, override_value] {
+					GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+					if (!agent) return;
+					agent->name_properties = static_cast<GW::NameTagFlags>(override_value);
+					GW::Agents::RefreshAgentNameTag(agent);
+				});
+			}
+			ShowHelpMarker("Writes a raw hex value directly to your current target's name_properties bitmask and forces a nametag refresh. For investigating undocumented bits only.");
+		}
 	}
 };
 
