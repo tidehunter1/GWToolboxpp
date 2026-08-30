@@ -130,13 +130,11 @@ jobs:
       # Execute the build.  You can specify a specific target with "--target <NAME>"
       #run: cmake --build . --config RelWithDebInfo
       run: cmake --build . --target ImprovedNametags --config ${{ env.BUILD_CONFIG }}
+
     - name: Save output
       uses: actions/upload-artifact@v4
       with:
-        # GWToolboxdll.pdb.gz (compress.ps1, GWToolboxdll/CMakeLists.txt POST_BUILD) already carries the
-        # debug info the raw .pdb has - excluded so the artifact doesn't ship both.
-        path: |
-          path: ${{runner.workspace}}/GWToolboxpp/bin/${{ env.BUILD_CONFIG }}/
+        path: ${{runner.workspace}}/GWToolboxpp/bin/${{ env.BUILD_CONFIG }}/
 
     - name: Determine release version
       id: version
