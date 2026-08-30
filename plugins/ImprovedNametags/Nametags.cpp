@@ -36,7 +36,6 @@
 #include <cwchar>
 #include <optional>
 #include <algorithm>
-#include <cmath>
 #include <array>
 
 template<typename CacheMap>
@@ -202,6 +201,8 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
+		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
+		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -267,6 +268,8 @@ public:
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_);
+		GW::UI::RemoveKeydownCallback(&reveal_hotkey_hook_entry_);
+		GW::UI::RemoveKeyupCallback(&reveal_hotkey_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -289,7 +292,6 @@ public:
 
 		name_cache_.MaybePrune();
 		SweepStaleAgentState();
-		ReassertHpNudges();
 		ProcessBossGlowRetries();
 	}
 
@@ -303,8 +305,9 @@ private:
 	std::optional<bool> last_priority_enabled_state_;
 	std::optional<bool> last_show_healthbar_all_state_;
 	bool did_initial_scan_ = false;
-	char debug_override_buf_[16] = {};
-	char debug_typemap_buf_[16] = {};
+	bool ctrl_reveal_down_ = false;
+	bool alt_reveal_down_ = false;
+	bool hide_hotkey_active_ = false;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -312,6 +315,7 @@ private:
 	GW::HookEntry target_change_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
+	GW::HookEntry reveal_hotkey_hook_entry_;
 
 	AgentNameCache name_cache_;
 
@@ -529,22 +533,47 @@ private:
 		});
 	}
 
-	static constexpr float kForcedHpNudge = 0.99f;
-
-	static void ApplyHealthbarHpNudge(uint32_t agent_id, bool on) {
+	static void ApplyHealthbarFlag(uint32_t agent_id, bool on) {
 		GW::GameThread::Enqueue([agent_id, on] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent) return;
-			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living) return;
-			if (on) {
-				if (living->hp >= 1.0f) {
-					living->hp = kForcedHpNudge;
-				}
-			} else if (living->hp == kForcedHpNudge) {
-				living->hp = 1.0f;
-			}
+			const uint32_t current = static_cast<uint32_t>(agent->name_properties);
+			agent->name_properties = static_cast<GW::NameTagFlags>(
+				on ? (current | GW::NameTagFlags_ManualTarget)
+				   : (current & ~GW::NameTagFlags_ManualTarget)
+			);
+			GW::Agents::RefreshAgentNameTag(agent);
 		});
+	}
+
+	void SuppressOrRestoreForcedHealthbars(bool restore) {
+		for (const auto& [agent_id, state] : agent_state_) {
+			if (!state.we_applied_flag) continue;
+			ApplyHealthbarFlag(agent_id, restore);
+		}
+	}
+
+	void OnRevealHotkeyStateChanged() {
+		const bool now_active = ctrl_reveal_down_ || alt_reveal_down_;
+		if (now_active == hide_hotkey_active_) return;
+		hide_hotkey_active_ = now_active;
+		SuppressOrRestoreForcedHealthbars(!now_active);
+	}
+
+	static void OnRevealHotkeyDown(GW::HookStatus*, uint32_t key) {
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (key == GW::UI::ControlAction_ShowOthers) self->ctrl_reveal_down_ = true;
+		else if (key == GW::UI::ControlAction_ShowTargets) self->alt_reveal_down_ = true;
+		else return;
+		self->OnRevealHotkeyStateChanged();
+	}
+
+	static void OnRevealHotkeyUp(GW::HookStatus*, uint32_t key) {
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (key == GW::UI::ControlAction_ShowOthers) self->ctrl_reveal_down_ = false;
+		else if (key == GW::UI::ControlAction_ShowTargets) self->alt_reveal_down_ = false;
+		else return;
+		self->OnRevealHotkeyStateChanged();
 	}
 
 	static void TriggerNameTagRefresh(uint32_t agent_id) {
@@ -566,11 +595,11 @@ private:
 
 		if (settings_.show_healthbar_all_agents) {
 			if (!state.we_applied_flag) {
-				ApplyHealthbarHpNudge(living->agent_id, true);
+				ApplyHealthbarFlag(living->agent_id, true);
 				state.we_applied_flag = true;
 			}
 		} else if (state.we_applied_flag) {
-			ApplyHealthbarHpNudge(living->agent_id, false);
+			ApplyHealthbarFlag(living->agent_id, false);
 			state.we_applied_flag = false;
 		}
 
@@ -624,20 +653,6 @@ private:
 			} else {
 				++it;
 			}
-		}
-	}
-
-	static constexpr uint64_t kHpNudgeReassertIntervalMs = 2000;
-	uint64_t last_hp_nudge_reassert_ms_ = 0;
-
-	void ReassertHpNudges() {
-		const uint64_t now = GetTickCount64();
-		if (now - last_hp_nudge_reassert_ms_ < kHpNudgeReassertIntervalMs) return;
-		last_hp_nudge_reassert_ms_ = now;
-		if (!settings_.show_healthbar_all_agents) return;
-		for (const auto& [agent_id, state] : agent_state_) {
-			if (!state.we_applied_flag) continue;
-			ApplyHealthbarHpNudge(agent_id, true);
 		}
 	}
 
@@ -860,77 +875,6 @@ private:
 		ImGui::SeparatorText("Health Bars");
 		ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents);
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Debug: name_properties");
-		if (ImGui::CollapsingHeader("Raw flag override (dev tool)")) {
-			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-			GW::Agent* nearest = nullptr;
-			GW::AgentLiving* nearest_living = nullptr;
-			float nearest_dist_sq = 0.f;
-			if (me) {
-				GW::AgentArray* agents = GW::Agents::GetAgentArray();
-				if (agents && agents->valid()) {
-					for (GW::Agent* agent : *agents) {
-						if (!agent || !agent->GetIsLivingType()) continue;
-						GW::AgentLiving* living = agent->GetAsAgentLiving();
-						if (!living || living->GetIsDead()) continue;
-						if (living->agent_id == me->agent_id) continue;
-						const float dx = agent->x - me->x;
-						const float dy = agent->y - me->y;
-						const float dist_sq = dx * dx + dy * dy;
-						if (!nearest || dist_sq < nearest_dist_sq) {
-							nearest = agent;
-							nearest_living = living;
-							nearest_dist_sq = dist_sq;
-						}
-					}
-				}
-			}
-
-			if (nearest_living) {
-				ImGui::Text("Nearest agent: ID %u, distance %.0f", nearest_living->agent_id, std::sqrt(nearest_dist_sq));
-				ImGui::Text("name_properties: 0x%08X", static_cast<uint32_t>(nearest_living->name_properties));
-				ImGui::Text("type_map: 0x%08X", nearest_living->type_map);
-			} else {
-				ImGui::TextDisabled("No nearby agent found");
-			}
-
-			ImGui::Spacing();
-			ImGui::SetNextItemWidth(150.f);
-			ImGui::InputText("Value (hex)##debug_override_hex", debug_override_buf_, sizeof(debug_override_buf_), ImGuiInputTextFlags_CharsHexadecimal);
-			ImGui::SameLine();
-			if (ImGui::Button("Apply to nearest##name_properties") && nearest_living) {
-				const uint32_t override_value = static_cast<uint32_t>(strtoul(debug_override_buf_, nullptr, 16));
-				const uint32_t agent_id = nearest_living->agent_id;
-				GW::GameThread::Enqueue([agent_id, override_value] {
-					GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-					if (!agent) return;
-					agent->name_properties = static_cast<GW::NameTagFlags>(override_value);
-					GW::Agents::RefreshAgentNameTag(agent);
-				});
-			}
-			ImGui::SameLine();
-			ImGui::TextDisabled("name_properties");
-
-			ImGui::SetNextItemWidth(150.f);
-			ImGui::InputText("Value (hex)##debug_typemap_hex", debug_typemap_buf_, sizeof(debug_typemap_buf_), ImGuiInputTextFlags_CharsHexadecimal);
-			ImGui::SameLine();
-			if (ImGui::Button("Apply to nearest##type_map") && nearest_living) {
-				const uint32_t override_value = static_cast<uint32_t>(strtoul(debug_typemap_buf_, nullptr, 16));
-				const uint32_t agent_id = nearest_living->agent_id;
-				GW::GameThread::Enqueue([agent_id, override_value] {
-					GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-					if (!agent) return;
-					GW::AgentLiving* living = agent->GetAsAgentLiving();
-					if (!living) return;
-					living->type_map = override_value;
-				});
-			}
-			ImGui::SameLine();
-			ImGui::TextDisabled("type_map");
-			ShowHelpMarker("Always tracks whichever living agent is nearest to you, never your target, so you can test flag values without any target/mouseover flags contaminating the result. Walk close to whichever NPC you want to test.");
-		}
 	}
 };
 
