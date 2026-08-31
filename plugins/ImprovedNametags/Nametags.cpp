@@ -36,7 +36,6 @@
 #include <cwchar>
 #include <optional>
 #include <algorithm>
-#include <cmath>
 #include <array>
 
 template<typename CacheMap>
@@ -306,8 +305,6 @@ private:
 	std::optional<bool> last_priority_enabled_state_;
 	std::optional<bool> last_show_healthbar_all_state_;
 	bool did_initial_scan_ = false;
-	char debug_override_buf_[16] = {};
-	char debug_setbit_buf_[16] = {};
 	bool ctrl_reveal_down_ = false;
 	bool alt_reveal_down_ = false;
 	bool hide_hotkey_active_ = false;
@@ -572,7 +569,7 @@ private:
 				if (!living || living->GetIsDead()) continue;
 				if (me && living->agent_id == me->agent_id) continue;
 				if (living->agent_id == target_id) continue;
-				SetNameTagBit_Func(agent, 0x8, now_active ? 1 : 0);
+				SetNameTagBit_Func(agent, GW::NameTagFlags_Suppressed, now_active ? 1 : 0);
 			}
 		});
 	}
@@ -594,16 +591,7 @@ private:
 	}
 
 	static void ApplyHealthbarFlag(uint32_t agent_id, bool on) {
-		GW::GameThread::Enqueue([agent_id, on] {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent) return;
-			const uint32_t current = static_cast<uint32_t>(agent->name_properties);
-			agent->name_properties = static_cast<GW::NameTagFlags>(
-				on ? (current | GW::NameTagFlags_ManualTarget)
-				   : (current & ~GW::NameTagFlags_ManualTarget)
-			);
-			GW::Agents::RefreshAgentNameTag(agent);
-		});
+		NativeSetNameTagBit(agent_id, GW::NameTagFlags_ManualTarget, on);
 	}
 
 	static void TriggerNameTagRefresh(uint32_t agent_id) {
@@ -906,73 +894,6 @@ private:
 		ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents);
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
 
-		ImGui::Spacing();
-		ImGui::SeparatorText("Debug: name_properties");
-		if (ImGui::CollapsingHeader("Raw flag override (dev tool)")) {
-			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-			GW::Agent* nearest = nullptr;
-			GW::AgentLiving* nearest_living = nullptr;
-			float nearest_dist_sq = 0.f;
-			if (me) {
-				GW::AgentArray* agents = GW::Agents::GetAgentArray();
-				if (agents && agents->valid()) {
-					for (GW::Agent* agent : *agents) {
-						if (!agent || !agent->GetIsLivingType()) continue;
-						GW::AgentLiving* living = agent->GetAsAgentLiving();
-						if (!living || living->GetIsDead()) continue;
-						if (living->agent_id == me->agent_id) continue;
-						const float dx = agent->x - me->x;
-						const float dy = agent->y - me->y;
-						const float dist_sq = dx * dx + dy * dy;
-						if (!nearest || dist_sq < nearest_dist_sq) {
-							nearest = agent;
-							nearest_living = living;
-							nearest_dist_sq = dist_sq;
-						}
-					}
-				}
-			}
-
-			if (nearest_living) {
-				ImGui::Text("Nearest agent: ID %u, distance %.0f", nearest_living->agent_id, std::sqrt(nearest_dist_sq));
-				ImGui::Text("name_properties: 0x%08X", static_cast<uint32_t>(nearest_living->name_properties));
-			} else {
-				ImGui::TextDisabled("No nearby agent found");
-			}
-
-			ImGui::Spacing();
-			ImGui::SetNextItemWidth(150.f);
-			ImGui::InputText("Value (hex)##debug_override_hex", debug_override_buf_, sizeof(debug_override_buf_), ImGuiInputTextFlags_CharsHexadecimal);
-			ImGui::SameLine();
-			if (ImGui::Button("Apply to nearest") && nearest_living) {
-				const uint32_t override_value = static_cast<uint32_t>(strtoul(debug_override_buf_, nullptr, 16));
-				const uint32_t agent_id = nearest_living->agent_id;
-				GW::GameThread::Enqueue([agent_id, override_value] {
-					GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-					if (!agent) return;
-					agent->name_properties = static_cast<GW::NameTagFlags>(override_value);
-					GW::Agents::RefreshAgentNameTag(agent);
-				});
-			}
-			ShowHelpMarker("Always tracks whichever living agent is nearest to you, never your target, so you can test flag values without any target/mouseover flags contaminating the result. Walk close to whichever NPC you want to test.");
-
-			ImGui::Spacing();
-			ImGui::SeparatorText("Native SetNameTagBit_Func test");
-			ImGui::Text("Scanned: %s", SetNameTagBit_Func ? "yes" : "no (will scan on first use)");
-			ImGui::SetNextItemWidth(150.f);
-			ImGui::InputText("Bit (hex)##debug_setbit_hex", debug_setbit_buf_, sizeof(debug_setbit_buf_), ImGuiInputTextFlags_CharsHexadecimal);
-			ImGui::SameLine();
-			if (ImGui::Button("Set bit") && nearest_living) {
-				const uint32_t bit_value = static_cast<uint32_t>(strtoul(debug_setbit_buf_, nullptr, 16));
-				NativeSetNameTagBit(nearest_living->agent_id, bit_value, true);
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Clear bit") && nearest_living) {
-				const uint32_t bit_value = static_cast<uint32_t>(strtoul(debug_setbit_buf_, nullptr, 16));
-				NativeSetNameTagBit(nearest_living->agent_id, bit_value, false);
-			}
-			ShowHelpMarker("Calls the real native SetNameTagBit_Func directly on the nearest agent, bypassing the raw memory overwrite above entirely. Use this to test whether the scanned function resolves and actually does anything.");
-		}
 	}
 };
 
