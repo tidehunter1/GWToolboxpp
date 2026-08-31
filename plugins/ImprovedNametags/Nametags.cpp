@@ -68,25 +68,37 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
 [[nodiscard]] inline GW::Constants::ProfessionByte GetAgentProfession(const GW::AgentLiving* living) noexcept {
     if (!living) return GW::Constants::ProfessionByte::None;
 
-    // 1. Direct living attribute
+    // 1. Direct living attribute (always set in explorable areas)
     if (living->primary != GW::Constants::ProfessionByte::None) {
         return living->primary;
     }
 
-    // 2. Player character lookup via PlayerArray (login_number != 0)
+    // 2. Player character lookup via PlayerArray
     if (living->login_number != 0) {
         const GW::PlayerArray* players = GW::Agents::GetPlayerArray();
-        if (players && players->valid() && living->player_number < players->size()) {
-            const GW::Player& player = (*players)[living->player_number];
-            if (player.primary <= 10) {
-                return static_cast<GW::Constants::ProfessionByte>(player.primary);
+        if (players && players->valid()) {
+            if (living->player_number < players->size()) {
+                const GW::Player& player = (*players)[living->player_number];
+                if (player.primary > 0 && player.primary <= 10) {
+                    return static_cast<GW::Constants::ProfessionByte>(player.primary);
+                }
+            }
+            if (living->login_number < players->size()) {
+                const GW::Player& player = (*players)[living->login_number];
+                if (player.primary > 0 && player.primary <= 10) {
+                    return static_cast<GW::Constants::ProfessionByte>(player.primary);
+                }
             }
         }
     }
 
     // 3. NPC / Hero / Henchman lookup
     const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
-    return npc ? static_cast<GW::Constants::ProfessionByte>(npc->primary) : GW::Constants::ProfessionByte::None;
+    if (npc && npc->primary <= 10) {
+        return static_cast<GW::Constants::ProfessionByte>(npc->primary);
+    }
+
+    return GW::Constants::ProfessionByte::None;
 }
 
 template<typename FuncPtr>
@@ -181,7 +193,8 @@ struct ProfessionColorConfig {
 };
 
 struct NametagSettings {
-    bool recolor_quest_nametags = true, recolor_professions = false;
+    bool recolor_quest_nametags = true;
+    bool recolor_professions = false;
     bool recolor_enemy_nametags_by_profession = false;
     uint32_t quest_color = IM_COL32(255, 179, 71, 255);
 
@@ -190,16 +203,16 @@ struct NametagSettings {
 
     std::array<ProfessionColorConfig, 11> profession_colors = {{
         {false, IM_COL32(221, 221, 221, 255)},
-        {true, IM_COL32(255, 255, 136, 255)},
-        {true, IM_COL32(204, 255, 153, 255)},
-        {true, IM_COL32(170, 204, 255, 255)},
-        {true, IM_COL32(153, 255, 204, 255)},
-        {true, IM_COL32(221, 170, 255, 255)},
-        {true, IM_COL32(255, 187, 187, 255)},
-        {true, IM_COL32(255, 204, 238, 255)},
-        {true, IM_COL32(187, 255, 255, 255)},
-        {true, IM_COL32(255, 204, 153, 255)},
-        {true, IM_COL32(221, 221, 255, 255)}
+        {true,  IM_COL32(255, 255, 136, 255)},
+        {true,  IM_COL32(204, 255, 153, 255)},
+        {true,  IM_COL32(170, 204, 255, 255)},
+        {true,  IM_COL32(153, 255, 204, 255)},
+        {true,  IM_COL32(221, 170, 255, 255)},
+        {true,  IM_COL32(255, 187, 187, 255)},
+        {true,  IM_COL32(255, 204, 238, 255)},
+        {true,  IM_COL32(187, 255, 255, 255)},
+        {true,  IM_COL32(255, 204, 153, 255)},
+        {true,  IM_COL32(221, 221, 255, 255)}
     }};
 
     bool priority_enabled = false;
@@ -236,11 +249,14 @@ public:
     void LoadSettings(const wchar_t* folder) override {
         ToolboxPlugin::LoadSettings(folder);
 #define L_SET(var) LoadSetting(#var, settings_.var)
-        L_SET(recolor_quest_nametags); L_SET(recolor_professions);
+        L_SET(recolor_quest_nametags);
+        L_SET(recolor_professions);
         L_SET(recolor_enemy_nametags_by_profession);
         L_SET(quest_color);
-        L_SET(color_by_boss); L_SET(boss_color);
-        L_SET(escape_to_embark); L_SET(escape_to_embark_threshold_pct);
+        L_SET(color_by_boss);
+        L_SET(boss_color);
+        L_SET(escape_to_embark);
+        L_SET(escape_to_embark_threshold_pct);
         L_SET(show_healthbar_all_agents);
         LoadSetting("visible", visible_);
 #undef L_SET
@@ -258,11 +274,14 @@ public:
 
     void SaveSettings(const wchar_t* folder) override {
 #define S_SET(var) SaveSetting(#var, settings_.var)
-        S_SET(recolor_quest_nametags); S_SET(recolor_professions);
+        S_SET(recolor_quest_nametags);
+        S_SET(recolor_professions);
         S_SET(recolor_enemy_nametags_by_profession);
         S_SET(quest_color);
-        S_SET(color_by_boss); S_SET(boss_color);
-        S_SET(escape_to_embark); S_SET(escape_to_embark_threshold_pct);
+        S_SET(color_by_boss);
+        S_SET(boss_color);
+        S_SET(escape_to_embark);
+        S_SET(escape_to_embark_threshold_pct);
         S_SET(show_healthbar_all_agents);
         SaveSetting("visible", visible_);
 #undef S_SET
@@ -299,6 +318,7 @@ public:
 
         if (dirty_rescan_) {
             dirty_rescan_ = false;
+            agent_state_.clear(); // Force complete re-evaluation of all agents
             RescanAllAgentsForHealthbar();
         }
 
@@ -606,7 +626,17 @@ private:
             color_to_push = GetNativeAllegianceColor(living);
         }
 
-        if (!toggle_flag && !color_changed) return;
+        if (!toggle_flag && !color_changed) {
+            // Even if unchanged in state, ensure native nametag refresh is triggered on rescan
+            GW::GameThread::Enqueue([agent_id] {
+                GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+                if (agent) {
+                    GW::Agents::RefreshAgentNameTag(agent);
+                    ApplyRingRefreshIfTarget(agent, agent_id);
+                }
+            });
+            return;
+        }
 
         if (toggle_flag) {
             EnsureSetNameTagBitScanned();
@@ -627,16 +657,15 @@ private:
                 SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
             }
 
-            if (color_changed) {
-                if (PoolColorSetter_Func) {
-                    const uint32_t healthbar_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x164);
-                    const uint32_t arrow_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x168);
-                    if (healthbar_resource_id) PoolColorSetter_Func(healthbar_resource_id, 0, &argb);
-                    if (arrow_resource_id) PoolColorSetter_Func(arrow_resource_id, 0, &argb);
-                }
-                GW::Agents::RefreshAgentNameTag(agent);
-                ApplyRingRefreshIfTarget(agent, agent_id);
+            if (color_changed && PoolColorSetter_Func) {
+                const uint32_t healthbar_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x164);
+                const uint32_t arrow_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x168);
+                if (healthbar_resource_id) PoolColorSetter_Func(healthbar_resource_id, 0, &argb);
+                if (arrow_resource_id) PoolColorSetter_Func(arrow_resource_id, 0, &argb);
             }
+
+            GW::Agents::RefreshAgentNameTag(agent);
+            ApplyRingRefreshIfTarget(agent, agent_id);
         });
     }
 
@@ -644,8 +673,6 @@ private:
         if (!agent || !agent->GetIsLivingType()) return;
         GW::AgentLiving* living = agent->GetAsAgentLiving();
         if (!living || living->GetIsDead()) return;
-        GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-        if (me && living->agent_id == me->agent_id) return;
 
         if (living->agent_id >= agent_state_.size()) {
             agent_state_.resize(living->agent_id + 128);
@@ -809,6 +836,7 @@ private:
             raw = state.buf;
             state.names = ParseNameList(raw);
             state.pending_parse_at_ms = 0;
+            dirty_rescan_ = true;
         }
     }
 
