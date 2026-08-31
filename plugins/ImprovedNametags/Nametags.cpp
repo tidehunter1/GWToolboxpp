@@ -106,7 +106,9 @@ public:
 		}
 		if (!entry.profession_resolved) {
 			entry.profession = GetAgentProfession(living);
-			entry.profession_resolved = true;
+			if (entry.profession != GW::Constants::ProfessionByte::None) {
+				entry.profession_resolved = true;
+			}
 		}
 		return { &entry.decoded_lower, &entry.decoded_words_lower, entry.profession };
 	}
