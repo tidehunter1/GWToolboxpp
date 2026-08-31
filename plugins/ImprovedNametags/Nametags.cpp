@@ -310,7 +310,6 @@ private:
 	bool ctrl_reveal_down_ = false;
 	bool alt_reveal_down_ = false;
 	bool hide_hotkey_active_ = false;
-	std::unordered_map<uint32_t, uint32_t> hidden_agent_saved_properties_;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -518,6 +517,26 @@ private:
 		});
 	}
 
+	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
+	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
+
+	static bool EnsureSetNameTagBitScanned() {
+		if (SetNameTagBit_Func) return true;
+		if (!ResolveScannedFunc(SetNameTagBit_Func,
+			"\x55\x8b\xec\x83\xec\x64\x83\x7d\x0c\x00\x53\x57\x8b\xf9\x8b\x57\x58\x74\x07\x8b\xda\x0b\x5d\x08\xeb\x07\x8b\x5d\x08\xf7\xd3\x23\xda\x89\x5f\x58\x3b\xd3\x0f\x84\x36\x01\x00\x00\x8d\x45\xf4\x50\x8d\x45\x0c\x50\x52",
+			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) return false;
+		return true;
+	}
+
+	static void NativeSetNameTagBit(uint32_t agent_id, uint32_t bit, bool on) {
+		if (!EnsureSetNameTagBitScanned()) return;
+		GW::GameThread::Enqueue([agent_id, bit, on] {
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			if (!agent) return;
+			SetNameTagBit_Func(agent, bit, on ? 1 : 0);
+		});
+	}
+
 	using PoolColorSetter_pt = void(__cdecl*)(uint32_t, uint32_t, const uint32_t*);
 	static inline PoolColorSetter_pt PoolColorSetter_Func = nullptr;
 
@@ -540,33 +559,21 @@ private:
 		const bool now_active = ctrl_reveal_down_ || alt_reveal_down_;
 		if (now_active == hide_hotkey_active_) return;
 		hide_hotkey_active_ = now_active;
-		if (now_active) {
-			GW::GameThread::Enqueue([this] {
-				GW::AgentArray* agents = GW::Agents::GetAgentArray();
-				if (!agents || !agents->valid()) return;
-				const uint32_t target_id = GW::Agents::GetTargetId();
-				GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-				for (GW::Agent* agent : *agents) {
-					if (!agent || !agent->GetIsLivingType()) continue;
-					GW::AgentLiving* living = agent->GetAsAgentLiving();
-					if (!living || living->GetIsDead()) continue;
-					if (me && living->agent_id == me->agent_id) continue;
-					if (living->agent_id == target_id) continue;
-					hidden_agent_saved_properties_[living->agent_id] = static_cast<uint32_t>(agent->name_properties);
-					agent->name_properties = static_cast<GW::NameTagFlags>(0x8);
-				}
-			});
-		} else {
-			GW::GameThread::Enqueue([this] {
-				for (const auto& [agent_id, saved_value] : hidden_agent_saved_properties_) {
-					GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-					if (!agent) continue;
-					agent->name_properties = static_cast<GW::NameTagFlags>(saved_value);
-					GW::Agents::RefreshAgentNameTag(agent);
-				}
-				hidden_agent_saved_properties_.clear();
-			});
-		}
+		if (!EnsureSetNameTagBitScanned()) return;
+		GW::GameThread::Enqueue([now_active] {
+			GW::AgentArray* agents = GW::Agents::GetAgentArray();
+			if (!agents || !agents->valid()) return;
+			const uint32_t target_id = GW::Agents::GetTargetId();
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			for (GW::Agent* agent : *agents) {
+				if (!agent || !agent->GetIsLivingType()) continue;
+				GW::AgentLiving* living = agent->GetAsAgentLiving();
+				if (!living || living->GetIsDead()) continue;
+				if (me && living->agent_id == me->agent_id) continue;
+				if (living->agent_id == target_id) continue;
+				SetNameTagBit_Func(agent, 0x8, now_active ? 1 : 0);
+			}
+		});
 	}
 
 	static void OnRevealHotkeyDown(GW::HookStatus*, uint32_t key) {
