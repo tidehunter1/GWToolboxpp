@@ -547,7 +547,8 @@ private:
 	}
 
 	void ForceNametagVisibilityResync() {
-		GW::GameThread::Enqueue([this] {
+		const bool activating = hide_hotkey_active_;
+		GW::GameThread::Enqueue([this, activating] {
 			GW::AgentArray* agents = GW::Agents::GetAgentArray();
 			if (!agents || !agents->valid()) return;
 			const uint32_t target_id = GW::Agents::GetTargetId();
@@ -558,7 +559,15 @@ private:
 				if (!living || living->GetIsDead()) continue;
 				if (me && living->agent_id == me->agent_id) continue;
 				if (living->agent_id == target_id) continue;
-				GW::Agents::RefreshAgentNameTag(agent);
+				if (activating) {
+					GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(living->agent_id)));
+				} else {
+					const uint32_t current = static_cast<uint32_t>(agent->name_properties);
+					agent->name_properties = static_cast<GW::NameTagFlags>(current | GW::NameTagFlags_PassesTransientFilter);
+					GW::Agents::RefreshAgentNameTag(agent);
+					agent->name_properties = static_cast<GW::NameTagFlags>(current);
+					GW::Agents::RefreshAgentNameTag(agent);
+				}
 			}
 		});
 	}
