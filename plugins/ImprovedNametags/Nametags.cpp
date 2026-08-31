@@ -1,7 +1,6 @@
 #include <cstdint>
 #include <cstring>
 #include <cstddef>
-#include <cstdlib>
 #include <functional>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -603,15 +602,7 @@ private:
 		RefreshTargetedRing(agent_id);
 	}
 
-	void RefreshHealthbarForAgent(GW::Agent* agent) {
-		if (!agent || !agent->GetIsLivingType()) return;
-		GW::AgentLiving* living = agent->GetAsAgentLiving();
-		if (!living || living->GetIsDead()) return;
-		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-		if (me && living->agent_id == me->agent_id) return;
-
-		auto& state = agent_state_[living->agent_id];
-
+	void UpdateAgentHealthbarState(GW::AgentLiving* living, AgentState& state) {
 		if (settings_.show_healthbar_all_agents) {
 			if (!state.we_applied_flag) {
 				ApplyHealthbarFlag(living->agent_id, true);
@@ -634,9 +625,28 @@ private:
 			RefreshNameTagVisuals(living->agent_id);
 			state.last_pushed_color = std::nullopt;
 		}
+	}
 
-		if (!state.we_applied_flag && !state.last_pushed_color.has_value() && !state.has_quest_marker) {
-			agent_state_.erase(living->agent_id);
+	void RefreshHealthbarForAgent(GW::Agent* agent) {
+		if (!agent || !agent->GetIsLivingType()) return;
+		GW::AgentLiving* living = agent->GetAsAgentLiving();
+		if (!living || living->GetIsDead()) return;
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (me && living->agent_id == me->agent_id) return;
+
+		auto it = agent_state_.find(living->agent_id);
+		if (it != agent_state_.end()) {
+			UpdateAgentHealthbarState(living, it->second);
+			if (!it->second.we_applied_flag && !it->second.last_pushed_color.has_value() && !it->second.has_quest_marker) {
+				agent_state_.erase(it);
+			}
+			return;
+		}
+
+		AgentState fresh_state{};
+		UpdateAgentHealthbarState(living, fresh_state);
+		if (fresh_state.we_applied_flag || fresh_state.last_pushed_color.has_value() || fresh_state.has_quest_marker) {
+			agent_state_.emplace(living->agent_id, std::move(fresh_state));
 		}
 	}
 
@@ -763,9 +773,10 @@ private:
 	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living) {
 		if (!living) return std::nullopt;
 
-		const auto name_lookup = name_cache_.Get(living);
-		if (const auto color = GetPriorityColor(*name_lookup.words)) {
-			return color;
+		if (settings_.priority_enabled) {
+			if (const auto color = GetPriorityColor(*name_cache_.Get(living).words)) {
+				return color;
+			}
 		}
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
@@ -778,7 +789,7 @@ private:
 				ScheduleBossGlowRetry(living->agent_id);
 			}
 			if (settings_.recolor_enemy_nametags_by_profession) {
-				if (const auto color = TryGetProfessionColor(name_lookup.profession)) {
+				if (const auto color = TryGetProfessionColor(name_cache_.Get(living).profession)) {
 					return color;
 				}
 			}
@@ -792,7 +803,7 @@ private:
 
 		if (settings_.recolor_professions
 			&& living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
-			if (const auto color = TryGetProfessionColor(name_lookup.profession)) {
+			if (const auto color = TryGetProfessionColor(name_cache_.Get(living).profession)) {
 				return color;
 			}
 		}
