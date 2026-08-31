@@ -534,6 +534,7 @@ private:
 				on ? (current | GW::NameTagFlags_ManualTarget)
 				   : (current & ~GW::NameTagFlags_ManualTarget)
 			);
+			GW::Agents::RefreshAgentNameTag(agent);
 		});
 	}
 
@@ -842,7 +843,6 @@ void ImprovedNametagsPlugin::DrawSettings() {
 	ToolboxPlugin::DrawSettings();
 	DrawSettingsInternal();
 }
-
 
 DLLAPI ToolboxPlugin* ToolboxPluginInstance() {
 	static ImprovedNametagsPlugin instance;
