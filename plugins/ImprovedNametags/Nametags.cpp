@@ -65,7 +65,7 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
 }
 
 [[nodiscard]] inline GW::Constants::ProfessionByte GetAgentProfession(const GW::AgentLiving* living) noexcept {
-	if (living->primary != GW::Constants::ProfessionByte::None) return living->primary;
+	if (living->IsPlayer() || living->primary != GW::Constants::ProfessionByte::None) return living->primary;
 	const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
 	return npc ? static_cast<GW::Constants::ProfessionByte>(npc->primary) : GW::Constants::ProfessionByte::None;
 }
@@ -658,6 +658,11 @@ private:
 		if (!pak) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		self->RefreshHealthbarForAgentId(pak->agent_id);
+		const uint32_t agent_id = pak->agent_id;
+		GW::GameThread::Enqueue([agent_id] {
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			if (agent) GW::Agents::RefreshAgentNameTag(agent);
+		});
 	}
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
