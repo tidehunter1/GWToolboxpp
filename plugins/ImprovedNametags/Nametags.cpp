@@ -558,11 +558,7 @@ private:
 				if (!living || living->GetIsDead()) continue;
 				if (me && living->agent_id == me->agent_id) continue;
 				if (living->agent_id == target_id) continue;
-				if (hide_hotkey_active_) {
-					GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(living->agent_id)));
-				} else {
-					GW::Agents::RefreshAgentNameTag(agent);
-				}
+				GW::Agents::RefreshAgentNameTag(agent);
 			}
 		});
 	}
