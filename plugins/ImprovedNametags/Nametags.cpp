@@ -542,6 +542,7 @@ private:
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent) return;
+			GW::Agents::RefreshAgentNameTag(agent);
 		});
 	}
 
