@@ -898,7 +898,7 @@ private:
                 for (int c = 0; c < 5; ++c) {
                     ImGui::TableSetupColumn("##pcol", ImGuiTableColumnFlags_WidthStretch);
                 }
-                for (size_row: size_t row = 0; row < 2; ++row) {
+                for (size_t row = 0; row < 2; ++row) {
                     ImGui::TableNextRow();
                     for (size_t col = 0; col < 5; ++col) {
                         ImGui::TableNextColumn();
