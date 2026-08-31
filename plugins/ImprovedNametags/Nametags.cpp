@@ -68,7 +68,7 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
 [[nodiscard]] inline GW::Constants::ProfessionByte GetAgentProfession(const GW::AgentLiving* living) noexcept {
     if (!living) return GW::Constants::ProfessionByte::None;
 
-    // 1. Direct living attribute (always set in explorable areas)
+    // 1. Direct living attribute
     if (living->primary != GW::Constants::ProfessionByte::None) {
         return living->primary;
     }
@@ -78,15 +78,15 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
         const GW::PlayerArray* players = GW::Agents::GetPlayerArray();
         if (players && players->valid()) {
             if (living->player_number < players->size()) {
-                const GW::Player& player = (*players)[living->player_number];
-                if (player.primary > 0 && player.primary <= 10) {
-                    return static_cast<GW::Constants::ProfessionByte>(player.primary);
+                const auto prof = static_cast<uint32_t>((*players)[living->player_number].primary);
+                if (prof > 0 && prof <= 10) {
+                    return static_cast<GW::Constants::ProfessionByte>(prof);
                 }
             }
             if (living->login_number < players->size()) {
-                const GW::Player& player = (*players)[living->login_number];
-                if (player.primary > 0 && player.primary <= 10) {
-                    return static_cast<GW::Constants::ProfessionByte>(player.primary);
+                const auto prof = static_cast<uint32_t>((*players)[living->login_number].primary);
+                if (prof > 0 && prof <= 10) {
+                    return static_cast<GW::Constants::ProfessionByte>(prof);
                 }
             }
         }
@@ -94,8 +94,11 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
 
     // 3. NPC / Hero / Henchman lookup
     const GW::NPC* npc = GW::Agents::GetNPCByID(living->player_number);
-    if (npc && npc->primary <= 10) {
-        return static_cast<GW::Constants::ProfessionByte>(npc->primary);
+    if (npc) {
+        const auto prof = static_cast<uint32_t>(npc->primary);
+        if (prof > 0 && prof <= 10) {
+            return static_cast<GW::Constants::ProfessionByte>(prof);
+        }
     }
 
     return GW::Constants::ProfessionByte::None;
@@ -318,7 +321,7 @@ public:
 
         if (dirty_rescan_) {
             dirty_rescan_ = false;
-            agent_state_.clear(); // Force complete re-evaluation of all agents
+            agent_state_.clear();
             RescanAllAgentsForHealthbar();
         }
 
@@ -627,7 +630,6 @@ private:
         }
 
         if (!toggle_flag && !color_changed) {
-            // Even if unchanged in state, ensure native nametag refresh is triggered on rescan
             GW::GameThread::Enqueue([agent_id] {
                 GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
                 if (agent) {
@@ -836,7 +838,6 @@ private:
             raw = state.buf;
             state.names = ParseNameList(raw);
             state.pending_parse_at_ms = 0;
-            dirty_rescan_ = true;
         }
     }
 
@@ -897,7 +898,7 @@ private:
                 for (int c = 0; c < 5; ++c) {
                     ImGui::TableSetupColumn("##pcol", ImGuiTableColumnFlags_WidthStretch);
                 }
-                for (size_t row = 0; row < 2; ++row) {
+                for (size_row: size_t row = 0; row < 2; ++row) {
                     ImGui::TableNextRow();
                     for (size_t col = 0; col < 5; ++col) {
                         ImGui::TableNextColumn();
