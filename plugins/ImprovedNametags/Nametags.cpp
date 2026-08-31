@@ -555,7 +555,6 @@ private:
 				on ? (current | GW::NameTagFlags_ManualTarget)
 				   : (current & ~GW::NameTagFlags_ManualTarget)
 			);
-			GW::Agents::RefreshAgentNameTag(agent);
 		});
 	}
 
