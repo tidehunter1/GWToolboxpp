@@ -145,6 +145,7 @@ private:
 		if (!w.empty()) out.push_back(std::move(w));
 	}
 	std::sort(out.begin(), out.end());
+	out.erase(std::unique(out.begin(), out.end()), out.end());
 	return out;
 }
 
@@ -275,35 +276,21 @@ public:
 		++frame_counter_;
 		EnsureAllegianceColorHookInstalled();
 
-		if (!did_initial_scan_) {
-			did_initial_scan_ = true;
+		if (dirty_rescan_) {
+			dirty_rescan_ = false;
 			RescanAllAgentsForHealthbar();
 		}
-
-		RefreshOnSettingChange(last_recolor_professions_state_, settings_.recolor_professions);
-		RefreshOnSettingChange(last_recolor_quest_state_, settings_.recolor_quest_nametags);
-		RefreshOnSettingChange(last_recolor_enemy_profession_state_, settings_.recolor_enemy_nametags_by_profession);
-		RefreshOnSettingChange(last_color_by_boss_state_, settings_.color_by_boss);
-		RefreshOnSettingChange(last_priority_enabled_state_, settings_.priority_enabled);
-		RefreshOnSettingChange(last_show_healthbar_all_state_, settings_.show_healthbar_all_agents);
 
 		UpdateEscapeToEmbark();
 
 		name_cache_.MaybePrune();
-		SweepStaleAgentState();
 		ProcessBossGlowRetries();
 	}
 
 private:
 	NametagSettings settings_;
 	bool visible_ = true;
-	std::optional<bool> last_recolor_professions_state_;
-	std::optional<bool> last_recolor_quest_state_;
-	std::optional<bool> last_recolor_enemy_profession_state_;
-	std::optional<bool> last_color_by_boss_state_;
-	std::optional<bool> last_priority_enabled_state_;
-	std::optional<bool> last_show_healthbar_all_state_;
-	bool did_initial_scan_ = false;
+	bool dirty_rescan_ = true;
 	bool ctrl_reveal_down_ = false;
 	bool alt_reveal_down_ = false;
 	bool hide_hotkey_active_ = false;
@@ -358,7 +345,7 @@ private:
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
 	};
-	std::unordered_map<uint32_t, AgentState> agent_state_;
+	std::vector<AgentState> agent_state_;
 
 	struct PriorityState {
 		static constexpr size_t kBufSize = 1024 * 16;
@@ -370,7 +357,7 @@ private:
 	static constexpr uint64_t kPriorityParseDelayMs = 150;
 
 	void RefreshPriorityBuffersAndLists() {
-		strncpy_s(priority_state_.buf, PriorityState::kBufSize, settings_.priority.raw.c_str(), PriorityState::kBufSize - 1);
+		strncpy_s(priority_state_.buf, PriorityState::kBufSize, settings_.priority.raw.c_str(), _TRUNCATE);
 		priority_state_.names = ParseNameList(settings_.priority.raw);
 		priority_state_.pending_parse_at_ms = 0;
 	}
@@ -403,8 +390,8 @@ private:
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - item_width);
 	}
 
-	static void DrawCheckboxWithColorRightAligned(const char* label, bool& toggle, uint32_t& color, const char* color_id, const char* help = nullptr) {
-		ImGui::Checkbox(label, &toggle);
+	[[nodiscard]] static bool DrawCheckboxWithColorRightAligned(const char* label, bool& toggle, uint32_t& color, const char* color_id, const char* help = nullptr) {
+		bool changed = ImGui::Checkbox(label, &toggle);
 		if (help) ShowHelpMarker(help);
 		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImGui::BeginDisabled(!toggle);
@@ -412,14 +399,16 @@ private:
 		if (ImGui::ColorEdit3(color_id, &color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			color = ImGui::ColorConvertFloat4ToU32(color_vec);
 		}
+		if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
 		ImGui::EndDisabled();
+		return changed;
 	}
 
 	void DrawProfessionCell(size_t index) {
 		ProfessionColorConfig& cfg = settings_.profession_colors[index];
 		ImGui::PushID(static_cast<int>(index));
 		if (ImGui::Checkbox("##enabled", &cfg.enabled)) {
-			RescanAllAgentsForHealthbar();
+			dirty_rescan_ = true;
 		}
 		ImGui::SameLine();
 		ImGui::BeginDisabled(!cfg.enabled);
@@ -428,7 +417,7 @@ private:
 			cfg.color = ImGui::ColorConvertFloat4ToU32(color_vec);
 		}
 		if (ImGui::IsItemDeactivatedAfterEdit()) {
-			RescanAllAgentsForHealthbar();
+			dirty_rescan_ = true;
 		}
 		ImGui::SameLine();
 		ImGui::TextUnformatted(GW::Constants::GetProfessionAcronym(static_cast<GW::Constants::Profession>(index)));
@@ -503,15 +492,27 @@ private:
 	using EvaluatedTargetWrapper_pt = void(__thiscall*)(void*, uint32_t);
 	static inline EvaluatedTargetWrapper_pt EvaluatedTargetWrapper_Func = nullptr;
 
-	static void RefreshTargetedRing(uint32_t agent_id) {
+	static bool EnsureEvaluatedTargetWrapperScanned() {
+		if (EvaluatedTargetWrapper_Func) return true;
 		if (!ResolveScannedFunc(EvaluatedTargetWrapper_Func,
 			"\x55\x8b\xec\x8b\x55\x08\x56\x8b\xf1\x8b\x4e\x58\x8b\xc1\xc1\xe8\x07\x83\xe0\x01\x3b\xd0\x74\x7c\x85\xd2\x74\x3e\xf6\xc1\x10\x74\x1d\x8b\x86\x98\x00\x00\x00\x85",
-			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) return;
-		GW::GameThread::Enqueue([agent_id] {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent || GW::Agents::GetTargetId() != agent_id) return;
+			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) return false;
+		return true;
+	}
+
+	static void ApplyRingRefreshIfTarget(GW::Agent* agent, uint32_t agent_id) {
+		if (EvaluatedTargetWrapper_Func && GW::Agents::GetTargetId() == agent_id) {
 			EvaluatedTargetWrapper_Func(agent, 0);
 			EvaluatedTargetWrapper_Func(agent, 1);
+		}
+	}
+
+	static void RefreshTargetedRing(uint32_t agent_id) {
+		if (!EnsureEvaluatedTargetWrapperScanned()) return;
+		GW::GameThread::Enqueue([agent_id] {
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			if (!agent) return;
+			ApplyRingRefreshIfTarget(agent, agent_id);
 		});
 	}
 
@@ -526,36 +527,15 @@ private:
 		return true;
 	}
 
-	template<typename Fn>
-	static void EnqueueAgentOp(uint32_t agent_id, Fn&& fn) {
-		GW::GameThread::Enqueue([agent_id, fn = std::forward<Fn>(fn)] {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent) return;
-			fn(agent);
-		});
-	}
-
-	static void NativeSetNameTagBit(uint32_t agent_id, uint32_t bit, bool on) {
-		if (!EnsureSetNameTagBitScanned()) return;
-		EnqueueAgentOp(agent_id, [bit, on](GW::Agent* agent) {
-			SetNameTagBit_Func(agent, bit, on ? 1 : 0);
-		});
-	}
-
 	using PoolColorSetter_pt = void(__cdecl*)(uint32_t, uint32_t, const uint32_t*);
 	static inline PoolColorSetter_pt PoolColorSetter_Func = nullptr;
 
-	static void PushHealthbarColor(uint32_t agent_id, ImU32 color) {
+	static bool EnsurePoolColorSetterScanned() {
+		if (PoolColorSetter_Func) return true;
 		if (!ResolveScannedFunc(PoolColorSetter_Func,
 			"\x55\x8b\xec\x53\x56\x57\xff\x35\xa4\xf5\xa5\x00\xff\x75\x08\xe8\x6c\x6a\xe0\xff\x8b\xf8\x83\xc4\x08\x85\xff\x75\x14\x68\xa4\x00\x00\x00\xba\x38\xbf\xa5\x00\xb9\x70\xf6\x93\x00\xe8\xcf\xe7\xe1\xff\x8b\x47\x0c\x83\xf8\x05\x74\x12\x50\x6a\x05\x68\x94\xbf\xa5\x00\x6a\x02\xe8\x38\x59\xe0\xff\x83\xc4\x10\x83\x7f\x0c\x05\x74\x14\x68\xa8\x00\x00\x00\xba\x38\xbf\xa5\x00\xb9\xcc\xbf\xa5\x00\xe8\x9b\xe7\xe1\xff\x8b\x5d\x0c\x3b\x9f\xa4\x00\x00\x00\x72\x14\x68\x39\x07\x00\x00\xba\x3c\xd2",
-			"xxxxxxxx????xxxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxx????xxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxx??")) return;
-		EnqueueAgentOp(agent_id, [color](GW::Agent* agent) {
-			const uint32_t argb = static_cast<uint32_t>(color);
-			const uint32_t healthbar_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x164);
-			const uint32_t arrow_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x168);
-			if (healthbar_resource_id) PoolColorSetter_Func(healthbar_resource_id, 0, &argb);
-			if (arrow_resource_id) PoolColorSetter_Func(arrow_resource_id, 0, &argb);
-		});
+			"xxxxxxxx????xxxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxx????xxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxx??")) return false;
+		return true;
 	}
 
 	void OnRevealHotkeyStateChanged() {
@@ -568,8 +548,7 @@ private:
 		} else {
 			settings_.show_healthbar_all_agents = hotkey_saved_show_healthbar_all_;
 		}
-		last_show_healthbar_all_state_ = settings_.show_healthbar_all_agents;
-		RescanAllAgentsForHealthbar();
+		dirty_rescan_ = true;
 	}
 
 	void OnRevealHotkeyKeyEvent(uint32_t key, bool down) {
@@ -587,44 +566,57 @@ private:
 		static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance())->OnRevealHotkeyKeyEvent(key, false);
 	}
 
-	static void ApplyHealthbarFlag(uint32_t agent_id, bool on) {
-		NativeSetNameTagBit(agent_id, GW::NameTagFlags_ManualTarget, on);
-	}
-
-	static void TriggerNameTagRefresh(uint32_t agent_id) {
-		EnqueueAgentOp(agent_id, [](GW::Agent* agent) {
-			GW::Agents::RefreshAgentNameTag(agent);
-		});
-	}
-
-	static void RefreshNameTagVisuals(uint32_t agent_id) {
-		TriggerNameTagRefresh(agent_id);
-		RefreshTargetedRing(agent_id);
-	}
-
 	void UpdateAgentHealthbarState(GW::AgentLiving* living, AgentState& state) {
-		if (settings_.show_healthbar_all_agents) {
-			if (!state.we_applied_flag) {
-				ApplyHealthbarFlag(living->agent_id, true);
-				state.we_applied_flag = true;
-			}
-		} else if (state.we_applied_flag) {
-			ApplyHealthbarFlag(living->agent_id, false);
-			state.we_applied_flag = false;
-		}
+		const uint32_t agent_id = living->agent_id;
+
+		const bool want_flag = settings_.show_healthbar_all_agents;
+		const bool toggle_flag = (want_flag != state.we_applied_flag);
 
 		const std::optional<ImU32> decided_color = DecideAgentColor(living);
+		bool color_changed = false;
+		ImU32 color_to_push = 0;
 		if (decided_color.has_value()) {
 			if (state.last_pushed_color != decided_color) {
-				PushHealthbarColor(living->agent_id, *decided_color);
-				RefreshNameTagVisuals(living->agent_id);
-				state.last_pushed_color = decided_color;
+				color_changed = true;
+				color_to_push = *decided_color;
 			}
 		} else if (state.last_pushed_color.has_value()) {
-			PushHealthbarColor(living->agent_id, GetNativeAllegianceColor(living));
-			RefreshNameTagVisuals(living->agent_id);
-			state.last_pushed_color = std::nullopt;
+			color_changed = true;
+			color_to_push = GetNativeAllegianceColor(living);
 		}
+
+		if (!toggle_flag && !color_changed) return;
+
+		if (toggle_flag) {
+			EnsureSetNameTagBitScanned();
+			state.we_applied_flag = want_flag;
+		}
+		if (color_changed) {
+			EnsurePoolColorSetterScanned();
+			EnsureEvaluatedTargetWrapperScanned();
+			state.last_pushed_color = decided_color;
+		}
+
+		const uint32_t argb = static_cast<uint32_t>(color_to_push);
+		GW::GameThread::Enqueue([agent_id, toggle_flag, want_flag, color_changed, argb] {
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			if (!agent) return;
+
+			if (toggle_flag && SetNameTagBit_Func) {
+				SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
+			}
+
+			if (color_changed) {
+				if (PoolColorSetter_Func) {
+					const uint32_t healthbar_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x164);
+					const uint32_t arrow_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x168);
+					if (healthbar_resource_id) PoolColorSetter_Func(healthbar_resource_id, 0, &argb);
+					if (arrow_resource_id) PoolColorSetter_Func(arrow_resource_id, 0, &argb);
+				}
+				GW::Agents::RefreshAgentNameTag(agent);
+				ApplyRingRefreshIfTarget(agent, agent_id);
+			}
+		});
 	}
 
 	void RefreshHealthbarForAgent(GW::Agent* agent) {
@@ -634,20 +626,10 @@ private:
 		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
 		if (me && living->agent_id == me->agent_id) return;
 
-		auto it = agent_state_.find(living->agent_id);
-		if (it != agent_state_.end()) {
-			UpdateAgentHealthbarState(living, it->second);
-			if (!it->second.we_applied_flag && !it->second.last_pushed_color.has_value() && !it->second.has_quest_marker) {
-				agent_state_.erase(it);
-			}
-			return;
+		if (living->agent_id >= agent_state_.size()) {
+			agent_state_.resize(living->agent_id + 128);
 		}
-
-		AgentState fresh_state{};
-		UpdateAgentHealthbarState(living, fresh_state);
-		if (fresh_state.we_applied_flag || fresh_state.last_pushed_color.has_value() || fresh_state.has_quest_marker) {
-			agent_state_.emplace(living->agent_id, std::move(fresh_state));
-		}
+		UpdateAgentHealthbarState(living, agent_state_[living->agent_id]);
 	}
 
 	void RefreshHealthbarForAgentId(uint32_t agent_id) {
@@ -655,8 +637,7 @@ private:
 	}
 
 	[[nodiscard]] bool HasQuestMarker(uint32_t agent_id) const {
-		const auto it = agent_state_.find(agent_id);
-		return it != agent_state_.end() && it->second.has_quest_marker;
+		return agent_id < agent_state_.size() && agent_state_[agent_id].has_quest_marker;
 	}
 
 	void RescanAllAgentsForHealthbar() {
@@ -665,29 +646,6 @@ private:
 		for (GW::Agent* agent : *agents) {
 			RefreshHealthbarForAgent(agent);
 		}
-	}
-
-	static constexpr uint64_t kAgentStateSweepIntervalMs = 30000;
-	uint64_t last_agent_state_sweep_ms_ = 0;
-
-	void SweepStaleAgentState() {
-		const uint64_t now = GetTickCount64();
-		if (now - last_agent_state_sweep_ms_ < kAgentStateSweepIntervalMs) return;
-		last_agent_state_sweep_ms_ = now;
-		for (auto it = agent_state_.begin(); it != agent_state_.end(); ) {
-			if (!GW::Agents::GetAgentByID(it->first)) {
-				it = agent_state_.erase(it);
-			} else {
-				++it;
-			}
-		}
-	}
-
-	void RefreshOnSettingChange(std::optional<bool>& last_state, bool current_state) {
-		if (last_state.has_value() && *last_state != current_state) {
-			RescanAllAgentsForHealthbar();
-		}
-		last_state = current_state;
 	}
 
 	static void OnTargetChanged(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
@@ -712,13 +670,15 @@ private:
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		self->agent_state_.clear();
 		self->boss_glow_retries_.clear();
-		self->did_initial_scan_ = false;
+		self->dirty_rescan_ = true;
 	}
 
 	static void OnAgentRemove(GW::HookStatus*, GW::Packet::StoC::AgentRemove* pak) {
 		if (!pak) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		self->agent_state_.erase(pak->agent_id);
+		if (pak->agent_id < self->agent_state_.size()) {
+			self->agent_state_[pak->agent_id] = AgentState{};
+		}
 	}
 
 	static void OnAgentMarkerChanged(GW::HookStatus*, GW::Packet::StoC::GenericValue* pak) {
@@ -728,11 +688,10 @@ private:
 
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		const bool applying = pak->value_id == GW::Packet::StoC::GenericValueID::apply_marker;
-		auto& state = self->agent_state_[pak->agent_id];
-		state.has_quest_marker = applying;
-		if (!applying && !state.we_applied_flag && !state.last_pushed_color.has_value()) {
-			self->agent_state_.erase(pak->agent_id);
+		if (pak->agent_id >= self->agent_state_.size()) {
+			self->agent_state_.resize(pak->agent_id + 128);
 		}
+		self->agent_state_[pak->agent_id].has_quest_marker = applying;
 		self->RefreshHealthbarForAgentId(pak->agent_id);
 	}
 
@@ -821,7 +780,7 @@ private:
 			raw = state.buf;
 			state.names = ParseNameList(raw);
 			state.pending_parse_at_ms = 0;
-			RescanAllAgentsForHealthbar();
+			dirty_rescan_ = true;
 		}
 		else if (state.pending_parse_at_ms != 0 && GetTickCount64() >= state.pending_parse_at_ms) {
 			raw = state.buf;
@@ -833,11 +792,17 @@ private:
 	void DrawSettingsInternal() {
 		ImGui::SeparatorText("Nametags");
 
-		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
+		if (DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow")) {
+			dirty_rescan_ = true;
+		}
 
-		DrawCheckboxWithColorRightAligned("Color by quest", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
+		if (DrawCheckboxWithColorRightAligned("Color by quest", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest")) {
+			dirty_rescan_ = true;
+		}
 
-		ImGui::Checkbox("##priority_enabled", &settings_.priority_enabled);
+		if (ImGui::Checkbox("##priority_enabled", &settings_.priority_enabled)) {
+			dirty_rescan_ = true;
+		}
 		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
 		ImGui::TextUnformatted("Priority coloring");
 		ShowHelpMarker("One name per line. Any single word (e.g. \"Monk\") matches any name containing that exact word.");
@@ -848,7 +813,7 @@ private:
 			settings_.priority.color = ImGui::ColorConvertFloat4ToU32(priority_color_vec);
 		}
 		if (ImGui::IsItemDeactivatedAfterEdit()) {
-			RescanAllAgentsForHealthbar();
+			dirty_rescan_ = true;
 		}
 
 		char priority_header_label[48];
@@ -860,9 +825,13 @@ private:
 		ImGui::EndDisabled();
 
 		ImGui::Spacing();
-		ImGui::Checkbox("Color allies by profession", &settings_.recolor_professions);
+		if (ImGui::Checkbox("Color allies by profession", &settings_.recolor_professions)) {
+			dirty_rescan_ = true;
+		}
 
-		ImGui::Checkbox("Color foes by profession", &settings_.recolor_enemy_nametags_by_profession);
+		if (ImGui::Checkbox("Color foes by profession", &settings_.recolor_enemy_nametags_by_profession)) {
+			dirty_rescan_ = true;
+		}
 		ShowHelpMarker("Uses the profession colors below - if a monster's profession can't be determined, its normal color is used instead.");
 
 		ImGui::BeginDisabled(!settings_.recolor_professions && !settings_.recolor_enemy_nametags_by_profession);
@@ -901,7 +870,9 @@ private:
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Health Bars");
-		ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents);
+		if (ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents)) {
+			dirty_rescan_ = true;
+		}
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
 
 	}
