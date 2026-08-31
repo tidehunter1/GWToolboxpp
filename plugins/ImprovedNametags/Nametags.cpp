@@ -35,6 +35,7 @@
 #include <cwchar>
 #include <optional>
 #include <algorithm>
+#include <cmath>
 #include <array>
 
 template<typename CacheMap>
@@ -106,9 +107,7 @@ public:
 		}
 		if (!entry.profession_resolved) {
 			entry.profession = GetAgentProfession(living);
-			if (entry.profession != GW::Constants::ProfessionByte::None) {
-				entry.profession_resolved = true;
-			}
+			entry.profession_resolved = true;
 		}
 		return { &entry.decoded_lower, &entry.decoded_words_lower, entry.profession };
 	}
@@ -881,6 +880,60 @@ private:
 			dirty_rescan_ = true;
 		}
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Debug: live agent inspector (read-only)");
+		if (ImGui::CollapsingHeader("Nearest agent details")) {
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			GW::AgentLiving* nearest_living = nullptr;
+			float nearest_dist_sq = 0.f;
+			if (me) {
+				GW::AgentArray* agents = GW::Agents::GetAgentArray();
+				if (agents && agents->valid()) {
+					for (GW::Agent* agent : *agents) {
+						if (!agent || !agent->GetIsLivingType()) continue;
+						GW::AgentLiving* living = agent->GetAsAgentLiving();
+						if (!living || living->GetIsDead()) continue;
+						if (living->agent_id == me->agent_id) continue;
+						const float dx = agent->x - me->x;
+						const float dy = agent->y - me->y;
+						const float dist_sq = dx * dx + dy * dy;
+						if (!nearest_living || dist_sq < nearest_dist_sq) {
+							nearest_living = living;
+							nearest_dist_sq = dist_sq;
+						}
+					}
+				}
+			}
+
+			if (nearest_living) {
+				ImGui::Text("Nearest agent: ID %u, distance %.0f", nearest_living->agent_id, std::sqrt(nearest_dist_sq));
+				ImGui::Text("IsPlayer: %s", nearest_living->IsPlayer() ? "yes" : "no");
+				ImGui::Text("allegiance: %d", static_cast<int>(nearest_living->allegiance));
+				ImGui::Text("primary (raw): %d", static_cast<int>(nearest_living->primary));
+				const auto lookup = name_cache_.Get(nearest_living);
+				ImGui::Text("resolved profession: %d", static_cast<int>(lookup.profession));
+				const auto decided = DecideAgentColor(nearest_living);
+				if (decided.has_value()) {
+					ImGui::Text("DecideAgentColor(): 0x%08X", static_cast<uint32_t>(*decided));
+				} else {
+					ImGui::TextDisabled("DecideAgentColor(): nullopt");
+				}
+				if (nearest_living->agent_id < agent_state_.size()) {
+					const auto& state = agent_state_[nearest_living->agent_id];
+					if (state.last_pushed_color.has_value()) {
+						ImGui::Text("state.last_pushed_color: 0x%08X", static_cast<uint32_t>(*state.last_pushed_color));
+					} else {
+						ImGui::TextDisabled("state.last_pushed_color: nullopt");
+					}
+					ImGui::Text("state.we_applied_flag: %s", state.we_applied_flag ? "true" : "false");
+				} else {
+					ImGui::TextDisabled("agent_state_: no entry (index out of range)");
+				}
+			} else {
+				ImGui::TextDisabled("No nearby agent found");
+			}
+		}
 
 	}
 };
