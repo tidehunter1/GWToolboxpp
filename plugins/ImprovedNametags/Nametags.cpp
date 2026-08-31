@@ -554,7 +554,6 @@ private:
 					if (living->agent_id == target_id) continue;
 					hidden_agent_saved_properties_[living->agent_id] = static_cast<uint32_t>(agent->name_properties);
 					agent->name_properties = static_cast<GW::NameTagFlags>(0x8);
-					GW::Agents::RefreshAgentNameTag(agent);
 				}
 			});
 		} else {
