@@ -201,8 +201,8 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
-		GW::UI::RegisterKeydownCallback(&debug_key_hook_entry_, OnDebugKeyDown);
-		GW::UI::RegisterKeyupCallback(&debug_key_hook_entry_, OnDebugKeyUp);
+		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
+		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -268,8 +268,8 @@ public:
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_);
-		GW::UI::RemoveKeydownCallback(&debug_key_hook_entry_);
-		GW::UI::RemoveKeyupCallback(&debug_key_hook_entry_);
+		GW::UI::RemoveKeydownCallback(&reveal_hotkey_hook_entry_);
+		GW::UI::RemoveKeyupCallback(&reveal_hotkey_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -305,10 +305,10 @@ private:
 	std::optional<bool> last_priority_enabled_state_;
 	std::optional<bool> last_show_healthbar_all_state_;
 	bool did_initial_scan_ = false;
-	int debug_show_others_down_count_ = 0;
-	int debug_show_others_up_count_ = 0;
-	int debug_show_targets_down_count_ = 0;
-	int debug_show_targets_up_count_ = 0;
+	bool ctrl_reveal_down_ = false;
+	bool alt_reveal_down_ = false;
+	bool hide_hotkey_active_ = false;
+	bool hotkey_saved_show_healthbar_all_ = false;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -316,7 +316,7 @@ private:
 	GW::HookEntry target_change_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
-	GW::HookEntry debug_key_hook_entry_;
+	GW::HookEntry reveal_hotkey_hook_entry_;
 
 	AgentNameCache name_cache_;
 
@@ -534,16 +534,34 @@ private:
 		});
 	}
 
-	static void OnDebugKeyDown(GW::HookStatus*, uint32_t key) {
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (key == GW::UI::ControlAction_ShowOthers) self->debug_show_others_down_count_++;
-		else if (key == GW::UI::ControlAction_ShowTargets) self->debug_show_targets_down_count_++;
+	void OnRevealHotkeyStateChanged() {
+		const bool now_active = ctrl_reveal_down_ || alt_reveal_down_;
+		if (now_active == hide_hotkey_active_) return;
+		hide_hotkey_active_ = now_active;
+		if (now_active) {
+			hotkey_saved_show_healthbar_all_ = settings_.show_healthbar_all_agents;
+			settings_.show_healthbar_all_agents = false;
+		} else {
+			settings_.show_healthbar_all_agents = hotkey_saved_show_healthbar_all_;
+		}
+		last_show_healthbar_all_state_ = settings_.show_healthbar_all_agents;
+		RescanAllAgentsForHealthbar();
 	}
 
-	static void OnDebugKeyUp(GW::HookStatus*, uint32_t key) {
+	static void OnRevealHotkeyDown(GW::HookStatus*, uint32_t key) {
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (key == GW::UI::ControlAction_ShowOthers) self->debug_show_others_up_count_++;
-		else if (key == GW::UI::ControlAction_ShowTargets) self->debug_show_targets_up_count_++;
+		if (key == GW::UI::ControlAction_ShowOthers) self->ctrl_reveal_down_ = true;
+		else if (key == GW::UI::ControlAction_ShowTargets) self->alt_reveal_down_ = true;
+		else return;
+		self->OnRevealHotkeyStateChanged();
+	}
+
+	static void OnRevealHotkeyUp(GW::HookStatus*, uint32_t key) {
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (key == GW::UI::ControlAction_ShowOthers) self->ctrl_reveal_down_ = false;
+		else if (key == GW::UI::ControlAction_ShowTargets) self->alt_reveal_down_ = false;
+		else return;
+		self->OnRevealHotkeyStateChanged();
 	}
 
 	static void ApplyHealthbarFlag(uint32_t agent_id, bool on) {
@@ -856,17 +874,6 @@ private:
 		ImGui::SeparatorText("Health Bars");
 		ImGui::Checkbox("Show health bar on all agents", &settings_.show_healthbar_all_agents);
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Debug: key-repeat test");
-		ImGui::Text("Ctrl (ShowOthers) down=%d up=%d", debug_show_others_down_count_, debug_show_others_up_count_);
-		ImGui::Text("Alt  (ShowTargets) down=%d up=%d", debug_show_targets_down_count_, debug_show_targets_up_count_);
-		if (ImGui::Button("Reset counters")) {
-			debug_show_others_down_count_ = 0;
-			debug_show_others_up_count_ = 0;
-			debug_show_targets_down_count_ = 0;
-			debug_show_targets_up_count_ = 0;
-		}
 	}
 };
 
