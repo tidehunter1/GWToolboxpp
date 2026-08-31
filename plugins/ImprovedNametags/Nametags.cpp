@@ -843,6 +843,7 @@ void ImprovedNametagsPlugin::DrawSettings() {
 	DrawSettingsInternal();
 }
 
+
 DLLAPI ToolboxPlugin* ToolboxPluginInstance() {
 	static ImprovedNametagsPlugin instance;
 	return &instance;
