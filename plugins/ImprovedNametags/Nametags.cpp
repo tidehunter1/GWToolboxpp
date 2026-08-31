@@ -38,21 +38,6 @@
 #include <algorithm>
 #include <array>
 
-template<typename CacheMap>
-inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, uint64_t interval) {
-    ++tick;
-    if (tick - last_prune < interval) return;
-    last_prune = tick;
-
-    for (auto it = cache.begin(); it != cache.end(); ) {
-        if (tick - it->second.last_seen_tick >= interval) {
-            it = cache.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
 [[nodiscard]] inline std::vector<std::wstring> SplitWords(const std::wstring& text) {
     std::vector<std::wstring> out;
     size_t start = 0;
@@ -69,22 +54,29 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
     if (!living) return GW::Constants::ProfessionByte::None;
 
     // 1. Direct living attribute
-    if (living->primary != GW::Constants::ProfessionByte::None) {
-        return living->primary;
+    const auto direct_prof = static_cast<uint32_t>(living->primary);
+    if (direct_prof > 0 && direct_prof <= 10) {
+        return static_cast<GW::Constants::ProfessionByte>(direct_prof);
     }
 
-    // 2. Player character lookup via PlayerArray
-    if (living->login_number != 0) {
-        const GW::PlayerArray* players = GW::Agents::GetPlayerArray();
-        if (players && players->valid()) {
-            if (living->player_number < players->size()) {
-                const auto prof = static_cast<uint32_t>((*players)[living->player_number].primary);
-                if (prof > 0 && prof <= 10) {
-                    return static_cast<GW::Constants::ProfessionByte>(prof);
-                }
+    // 2. PlayerArray lookup for player characters
+    const GW::PlayerArray* players = GW::Agents::GetPlayerArray();
+    if (players && players->valid()) {
+        if (living->player_number < players->size()) {
+            const auto prof = static_cast<uint32_t>((*players)[living->player_number].primary);
+            if (prof > 0 && prof <= 10) {
+                return static_cast<GW::Constants::ProfessionByte>(prof);
             }
-            if (living->login_number < players->size()) {
-                const auto prof = static_cast<uint32_t>((*players)[living->login_number].primary);
+        }
+        if (living->login_number != 0 && living->login_number < players->size()) {
+            const auto prof = static_cast<uint32_t>((*players)[living->login_number].primary);
+            if (prof > 0 && prof <= 10) {
+                return static_cast<GW::Constants::ProfessionByte>(prof);
+            }
+        }
+        for (const auto& player : *players) {
+            if (player.agent_id == living->agent_id) {
+                const auto prof = static_cast<uint32_t>(player.primary);
                 if (prof > 0 && prof <= 10) {
                     return static_cast<GW::Constants::ProfessionByte>(prof);
                 }
@@ -112,60 +104,6 @@ inline FuncPtr ResolveScannedFunc(FuncPtr& cached, const char* pattern, const ch
     }
     return cached;
 }
-
-class AgentNameCache {
-public:
-    struct NameLookup {
-        const std::wstring* lower;
-        const std::vector<std::wstring>* words;
-        GW::Constants::ProfessionByte profession;
-    };
-
-    NameLookup Get(const GW::AgentLiving* living) {
-        Entry& entry = cache_[living->agent_id];
-        entry.last_seen_tick = tick_;
-        const wchar_t* enc_name = GW::Agents::GetAgentEncName(living->agent_id);
-        if (enc_name && wcsncmp(entry.last_enc, enc_name, kMaxEncLen - 1) != 0) {
-            wcsncpy_s(entry.last_enc, enc_name, kMaxEncLen - 1);
-            entry.buffer[0] = L'\0';
-            entry.converted = false;
-            entry.profession_resolved = false;
-            GW::UI::AsyncDecodeStr(enc_name, entry.buffer, kBufferLen);
-        }
-        if (!entry.converted && entry.buffer[0] != L'\0') {
-            entry.decoded_lower = entry.buffer;
-            std::transform(entry.decoded_lower.begin(), entry.decoded_lower.end(), entry.decoded_lower.begin(), ::towlower);
-            entry.decoded_words_lower = SplitWords(entry.decoded_lower);
-            entry.converted = true;
-        }
-        if (!entry.profession_resolved || entry.profession == GW::Constants::ProfessionByte::None) {
-            entry.profession = GetAgentProfession(living);
-            if (entry.profession != GW::Constants::ProfessionByte::None) {
-                entry.profession_resolved = true;
-            }
-        }
-        return { &entry.decoded_lower, &entry.decoded_words_lower, entry.profession };
-    }
-
-    void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
-
-private:
-    static constexpr size_t kBufferLen = 256;
-    static constexpr size_t kMaxEncLen = 64;
-    static constexpr uint64_t kPruneIntervalTicks = 1800;
-    struct Entry {
-        wchar_t last_enc[kMaxEncLen] = {};
-        wchar_t buffer[kBufferLen] = {};
-        bool converted = false;
-        uint64_t last_seen_tick = 0;
-        std::wstring decoded_lower;
-        std::vector<std::wstring> decoded_words_lower;
-        GW::Constants::ProfessionByte profession = GW::Constants::ProfessionByte::None;
-        bool profession_resolved = false;
-    };
-    std::unordered_map<uint32_t, Entry> cache_;
-    uint64_t tick_ = 0, last_prune_tick_ = 0;
-};
 
 [[nodiscard]] inline std::vector<std::wstring> ParseNameList(const std::string& raw) {
     std::vector<std::wstring> out;
@@ -321,13 +259,10 @@ public:
 
         if (dirty_rescan_) {
             dirty_rescan_ = false;
-            agent_state_.clear();
             RescanAllAgentsForHealthbar();
         }
 
         UpdateEscapeToEmbark();
-
-        name_cache_.MaybePrune();
         ProcessBossGlowRetries();
     }
 
@@ -347,8 +282,6 @@ private:
     GW::HookEntry map_loaded_hook_entry_;
     GW::HookEntry chat_suppress_hook_entry_;
     GW::HookEntry reveal_hotkey_hook_entry_;
-
-    AgentNameCache name_cache_;
 
     uint64_t frame_counter_ = 0;
     struct BossGlowRetry {
@@ -384,12 +317,7 @@ private:
     bool embark_escape_armed_ = true;
     static constexpr float kEmbarkRearmHysteresisPct = 5.f;
 
-    struct AgentState {
-        std::optional<ImU32> last_pushed_color;
-        bool we_applied_flag = false;
-        bool has_quest_marker = false;
-    };
-    std::vector<AgentState> agent_state_;
+    std::vector<bool> quest_markers_;
 
     struct PriorityState {
         static constexpr size_t kBufSize = 1024 * 16;
@@ -610,76 +538,38 @@ private:
         static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance())->OnRevealHotkeyKeyEvent(key, false);
     }
 
-    void UpdateAgentHealthbarState(GW::AgentLiving* living, AgentState& state) {
-        const uint32_t agent_id = living->agent_id;
-
-        const bool want_flag = settings_.show_healthbar_all_agents;
-        const bool toggle_flag = (want_flag != state.we_applied_flag);
-
-        const std::optional<ImU32> decided_color = DecideAgentColor(living);
-        bool color_changed = false;
-        ImU32 color_to_push = 0;
-        if (decided_color.has_value()) {
-            if (state.last_pushed_color != decided_color) {
-                color_changed = true;
-                color_to_push = *decided_color;
-            }
-        } else if (state.last_pushed_color.has_value()) {
-            color_changed = true;
-            color_to_push = GetNativeAllegianceColor(living);
-        }
-
-        if (!toggle_flag && !color_changed) {
-            GW::GameThread::Enqueue([agent_id] {
-                GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-                if (agent) {
-                    GW::Agents::RefreshAgentNameTag(agent);
-                    ApplyRingRefreshIfTarget(agent, agent_id);
-                }
-            });
-            return;
-        }
-
-        if (toggle_flag) {
-            EnsureSetNameTagBitScanned();
-            state.we_applied_flag = want_flag;
-        }
-        if (color_changed) {
-            EnsurePoolColorSetterScanned();
-            EnsureEvaluatedTargetWrapperScanned();
-            state.last_pushed_color = decided_color;
-        }
-
-        const uint32_t argb = static_cast<uint32_t>(color_to_push);
-        GW::GameThread::Enqueue([agent_id, toggle_flag, want_flag, color_changed, argb] {
-            GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-            if (!agent) return;
-
-            if (toggle_flag && SetNameTagBit_Func) {
-                SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
-            }
-
-            if (color_changed && PoolColorSetter_Func) {
-                const uint32_t healthbar_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x164);
-                const uint32_t arrow_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x168);
-                if (healthbar_resource_id) PoolColorSetter_Func(healthbar_resource_id, 0, &argb);
-                if (arrow_resource_id) PoolColorSetter_Func(arrow_resource_id, 0, &argb);
-            }
-
-            GW::Agents::RefreshAgentNameTag(agent);
-            ApplyRingRefreshIfTarget(agent, agent_id);
-        });
-    }
-
     void RefreshHealthbarForAgent(GW::Agent* agent) {
         if (!agent || !agent->GetIsLivingType()) return;
         GW::AgentLiving* living = agent->GetAsAgentLiving();
         if (!living || living->GetIsDead()) return;
 
-        if (living->agent_id >= agent_state_.size()) {
-            agent_state_.resize(living->agent_id + 128);
-        }
-        UpdateAgentHealthbarState(living, agent_state_[living->agent_id]);
+        const uint32_t agent_id = living->agent_id;
+        const std::optional<ImU32> decided_color = DecideAgentColor(living);
+        const uint32_t argb = decided_color.value_or(GetNativeAllegianceColor(living));
+        const bool want_flag = settings_.show_healthbar_all_agents;
+
+        EnsureSetNameTagBitScanned();
+        EnsurePoolColorSetterScanned();
+        EnsureEvaluatedTargetWrapperScanned();
+
+        GW::GameThread::Enqueue([agent_id, want_flag, argb] {
+            GW::Agent* a = GW::Agents::GetAgentByID(agent_id);
+            if (!a) return;
+
+            if (SetNameTagBit_Func) {
+                SetNameTagBit_Func(a, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
+            }
+
+            if (PoolColorSetter_Func) {
+                const uint32_t healthbar_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(a) + 0x164);
+                const uint32_t arrow_resource_id = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(a) + 0x168);
+                if (healthbar_resource_id) PoolColorSetter_Func(healthbar_resource_id, 0, &argb);
+                if (arrow_resource_id) PoolColorSetter_Func(arrow_resource_id, 0, &argb);
+            }
+
+            GW::Agents::RefreshAgentNameTag(a);
+            ApplyRingRefreshIfTarget(a, agent_id);
+        });
     }
 
     void RefreshHealthbarForAgentId(uint32_t agent_id) {
@@ -687,15 +577,45 @@ private:
     }
 
     [[nodiscard]] bool HasQuestMarker(uint32_t agent_id) const {
-        return agent_id < agent_state_.size() && agent_state_[agent_id].has_quest_marker;
+        return agent_id < quest_markers_.size() && quest_markers_[agent_id];
     }
 
     void RescanAllAgentsForHealthbar() {
         GW::AgentArray* agents = GW::Agents::GetAgentArray();
         if (!agents || !agents->valid()) return;
-        for (GW::Agent* agent : *agents) {
-            RefreshHealthbarForAgent(agent);
-        }
+
+        EnsureSetNameTagBitScanned();
+        EnsurePoolColorSetterScanned();
+        EnsureEvaluatedTargetWrapperScanned();
+
+        GW::GameThread::Enqueue([] {
+            GW::AgentArray* ag = GW::Agents::GetAgentArray();
+            if (!ag || !ag->valid()) return;
+            auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+
+            for (GW::Agent* agent : *ag) {
+                if (!agent || !agent->GetIsLivingType()) continue;
+                GW::AgentLiving* living = agent->GetAsAgentLiving();
+                if (!living || living->GetIsDead()) continue;
+
+                const std::optional<ImU32> color = self->DecideAgentColor(living);
+                const uint32_t argb = color.value_or(GetNativeAllegianceColor(living));
+
+                if (SetNameTagBit_Func) {
+                    SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, self->settings_.show_healthbar_all_agents ? 1 : 0);
+                }
+
+                if (PoolColorSetter_Func) {
+                    const uint32_t hb_res = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x164);
+                    const uint32_t ar_res = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(agent) + 0x168);
+                    if (hb_res) PoolColorSetter_Func(hb_res, 0, &argb);
+                    if (ar_res) PoolColorSetter_Func(ar_res, 0, &argb);
+                }
+
+                GW::Agents::RefreshAgentNameTag(agent);
+                ApplyRingRefreshIfTarget(agent, agent->agent_id);
+            }
+        });
     }
 
     static void OnTargetChanged(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
@@ -718,7 +638,7 @@ private:
 
     static void OnMapLoaded(GW::HookStatus*, GW::Packet::StoC::MapLoaded*) {
         auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-        self->agent_state_.clear();
+        self->quest_markers_.clear();
         self->boss_glow_retries_.clear();
         self->dirty_rescan_ = true;
     }
@@ -726,8 +646,8 @@ private:
     static void OnAgentRemove(GW::HookStatus*, GW::Packet::StoC::AgentRemove* pak) {
         if (!pak) return;
         auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-        if (pak->agent_id < self->agent_state_.size()) {
-            self->agent_state_[pak->agent_id] = AgentState{};
+        if (pak->agent_id < self->quest_markers_.size()) {
+            self->quest_markers_[pak->agent_id] = false;
         }
     }
 
@@ -738,10 +658,10 @@ private:
 
         auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
         const bool applying = pak->value_id == GW::Packet::StoC::GenericValueID::apply_marker;
-        if (pak->agent_id >= self->agent_state_.size()) {
-            self->agent_state_.resize(pak->agent_id + 128);
+        if (pak->agent_id >= self->quest_markers_.size()) {
+            self->quest_markers_.resize(pak->agent_id + 128, false);
         }
-        self->agent_state_[pak->agent_id].has_quest_marker = applying;
+        self->quest_markers_[pak->agent_id] = applying;
         self->RefreshHealthbarForAgentId(pak->agent_id);
     }
 
@@ -783,14 +703,43 @@ private:
     [[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living) {
         if (!living) return std::nullopt;
 
-        if (settings_.priority_enabled) {
-            if (const auto color = GetPriorityColor(*name_cache_.Get(living).words)) {
-                return color;
+        // 1. Priority Names
+        if (settings_.priority_enabled && !priority_state_.names.empty()) {
+            wchar_t name_buf[256] = {};
+            bool has_name = false;
+
+            if (living->login_number != 0) {
+                const GW::PlayerArray* players = GW::Agents::GetPlayerArray();
+                if (players && players->valid() && living->player_number < players->size()) {
+                    const wchar_t* pName = (*players)[living->player_number].name;
+                    if (pName && pName[0] != L'\0') {
+                        wcsncpy_s(name_buf, pName, 255);
+                        has_name = true;
+                    }
+                }
+            }
+
+            if (!has_name) {
+                const wchar_t* enc_name = GW::Agents::GetAgentEncName(living->agent_id);
+                if (enc_name) {
+                    GW::UI::AsyncDecodeStr(enc_name, name_buf, 256);
+                    has_name = (name_buf[0] != L'\0');
+                }
+            }
+
+            if (has_name && name_buf[0] != L'\0') {
+                std::wstring lower_name = name_buf;
+                std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::towlower);
+                const auto words = SplitWords(lower_name);
+                if (const auto color = GetPriorityColor(words)) {
+                    return color;
+                }
             }
         }
 
         const bool is_enemy = (living->allegiance == GW::Constants::Allegiance::Enemy);
 
+        // 2. Enemy Coloring
         if (is_enemy) {
             if (settings_.color_by_boss) {
                 if (living->GetHasBossGlow()) {
@@ -799,22 +748,22 @@ private:
                 ScheduleBossGlowRetry(living->agent_id);
             }
             if (settings_.recolor_enemy_nametags_by_profession) {
-                if (const auto color = TryGetProfessionColor(name_cache_.Get(living).profession)) {
+                if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
                     return color;
                 }
             }
             return std::nullopt;
         }
 
+        // 3. Quest Coloring
         if (settings_.recolor_quest_nametags
             && (living->GetHasQuest() || HasQuestMarker(living->agent_id))) {
             return settings_.quest_color;
         }
 
-        // Applies to all non-enemy allies and player characters
-        if (settings_.recolor_professions
-            && (living->login_number != 0 || living->allegiance != GW::Constants::Allegiance::Enemy)) {
-            if (const auto color = TryGetProfessionColor(name_cache_.Get(living).profession)) {
+        // 4. Allied Players & NPCs
+        if (settings_.recolor_professions) {
+            if (const auto color = TryGetProfessionColor(GetAgentProfession(living))) {
                 return color;
             }
         }
@@ -838,6 +787,7 @@ private:
             raw = state.buf;
             state.names = ParseNameList(raw);
             state.pending_parse_at_ms = 0;
+            dirty_rescan_ = true;
         }
     }
 
