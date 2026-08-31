@@ -307,6 +307,7 @@ private:
 	std::optional<bool> last_show_healthbar_all_state_;
 	bool did_initial_scan_ = false;
 	char debug_override_buf_[16] = {};
+	char debug_setbit_buf_[16] = {};
 	bool ctrl_reveal_down_ = false;
 	bool alt_reveal_down_ = false;
 	bool hide_hotkey_active_ = false;
@@ -954,6 +955,23 @@ private:
 				});
 			}
 			ShowHelpMarker("Always tracks whichever living agent is nearest to you, never your target, so you can test flag values without any target/mouseover flags contaminating the result. Walk close to whichever NPC you want to test.");
+
+			ImGui::Spacing();
+			ImGui::SeparatorText("Native SetNameTagBit_Func test");
+			ImGui::Text("Scanned: %s", SetNameTagBit_Func ? "yes" : "no (will scan on first use)");
+			ImGui::SetNextItemWidth(150.f);
+			ImGui::InputText("Bit (hex)##debug_setbit_hex", debug_setbit_buf_, sizeof(debug_setbit_buf_), ImGuiInputTextFlags_CharsHexadecimal);
+			ImGui::SameLine();
+			if (ImGui::Button("Set bit") && nearest_living) {
+				const uint32_t bit_value = static_cast<uint32_t>(strtoul(debug_setbit_buf_, nullptr, 16));
+				NativeSetNameTagBit(nearest_living->agent_id, bit_value, true);
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Clear bit") && nearest_living) {
+				const uint32_t bit_value = static_cast<uint32_t>(strtoul(debug_setbit_buf_, nullptr, 16));
+				NativeSetNameTagBit(nearest_living->agent_id, bit_value, false);
+			}
+			ShowHelpMarker("Calls the real native SetNameTagBit_Func directly on the nearest agent, bypassing the raw memory overwrite above entirely. Use this to test whether the scanned function resolves and actually does anything.");
 		}
 	}
 };
