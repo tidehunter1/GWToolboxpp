@@ -201,8 +201,6 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
-		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
-		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -268,8 +266,6 @@ public:
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_);
-		GW::UI::RemoveKeydownCallback(&reveal_hotkey_hook_entry_);
-		GW::UI::RemoveKeyupCallback(&reveal_hotkey_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -305,10 +301,6 @@ private:
 	std::optional<bool> last_priority_enabled_state_;
 	std::optional<bool> last_show_healthbar_all_state_;
 	bool did_initial_scan_ = false;
-	bool ctrl_reveal_down_ = false;
-	bool alt_reveal_down_ = false;
-	bool hide_hotkey_active_ = false;
-	bool hotkey_saved_show_healthbar_all_ = false;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -316,7 +308,6 @@ private:
 	GW::HookEntry target_change_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
-	GW::HookEntry reveal_hotkey_hook_entry_;
 
 	AgentNameCache name_cache_;
 
@@ -534,38 +525,6 @@ private:
 		});
 	}
 
-	void OnRevealHotkeyStateChanged() {
-		const bool now_active = ctrl_reveal_down_ || alt_reveal_down_;
-		if (now_active == hide_hotkey_active_) return;
-		hide_hotkey_active_ = now_active;
-		GW::GameThread::Enqueue([this, now_active] {
-			if (now_active) {
-				hotkey_saved_show_healthbar_all_ = settings_.show_healthbar_all_agents;
-				settings_.show_healthbar_all_agents = false;
-			} else {
-				settings_.show_healthbar_all_agents = hotkey_saved_show_healthbar_all_;
-			}
-			last_show_healthbar_all_state_ = settings_.show_healthbar_all_agents;
-			RescanAllAgentsForHealthbar();
-		});
-	}
-
-	static void OnRevealHotkeyDown(GW::HookStatus*, uint32_t key) {
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (key == GW::UI::ControlAction_ShowOthers) self->ctrl_reveal_down_ = true;
-		else if (key == GW::UI::ControlAction_ShowTargets) self->alt_reveal_down_ = true;
-		else return;
-		self->OnRevealHotkeyStateChanged();
-	}
-
-	static void OnRevealHotkeyUp(GW::HookStatus*, uint32_t key) {
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (key == GW::UI::ControlAction_ShowOthers) self->ctrl_reveal_down_ = false;
-		else if (key == GW::UI::ControlAction_ShowTargets) self->alt_reveal_down_ = false;
-		else return;
-		self->OnRevealHotkeyStateChanged();
-	}
-
 	static void ApplyHealthbarFlag(uint32_t agent_id, bool on) {
 		GW::GameThread::Enqueue([agent_id, on] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
@@ -575,13 +534,6 @@ private:
 				on ? (current | GW::NameTagFlags_ManualTarget)
 				   : (current & ~GW::NameTagFlags_ManualTarget)
 			);
-		});
-	}
-
-	static void TriggerNameTagRefresh(uint32_t agent_id) {
-		GW::GameThread::Enqueue([agent_id] {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent) return;
 		});
 	}
 
@@ -608,13 +560,11 @@ private:
 		if (decided_color.has_value()) {
 			if (state.last_pushed_color != decided_color) {
 				PushHealthbarColor(living->agent_id, *decided_color);
-				TriggerNameTagRefresh(living->agent_id);
 				RefreshTargetedRing(living->agent_id);
 				state.last_pushed_color = decided_color;
 			}
 		} else if (state.last_pushed_color.has_value()) {
 			PushHealthbarColor(living->agent_id, GetNativeAllegianceColor(living));
-			TriggerNameTagRefresh(living->agent_id);
 			RefreshTargetedRing(living->agent_id);
 			state.last_pushed_color = std::nullopt;
 		}
