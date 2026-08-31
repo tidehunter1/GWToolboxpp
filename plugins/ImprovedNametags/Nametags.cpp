@@ -308,6 +308,7 @@ private:
 	bool ctrl_reveal_down_ = false;
 	bool alt_reveal_down_ = false;
 	bool hide_hotkey_active_ = false;
+	bool hotkey_saved_show_healthbar_all_ = false;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -557,21 +558,14 @@ private:
 		const bool now_active = ctrl_reveal_down_ || alt_reveal_down_;
 		if (now_active == hide_hotkey_active_) return;
 		hide_hotkey_active_ = now_active;
-		if (!EnsureSetNameTagBitScanned()) return;
-		GW::GameThread::Enqueue([now_active] {
-			GW::AgentArray* agents = GW::Agents::GetAgentArray();
-			if (!agents || !agents->valid()) return;
-			const uint32_t target_id = GW::Agents::GetTargetId();
-			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-			for (GW::Agent* agent : *agents) {
-				if (!agent || !agent->GetIsLivingType()) continue;
-				GW::AgentLiving* living = agent->GetAsAgentLiving();
-				if (!living || living->GetIsDead()) continue;
-				if (me && living->agent_id == me->agent_id) continue;
-				if (living->agent_id == target_id) continue;
-				SetNameTagBit_Func(agent, GW::NameTagFlags_Suppressed, now_active ? 1 : 0);
-			}
-		});
+		if (now_active) {
+			hotkey_saved_show_healthbar_all_ = settings_.show_healthbar_all_agents;
+			settings_.show_healthbar_all_agents = false;
+		} else {
+			settings_.show_healthbar_all_agents = hotkey_saved_show_healthbar_all_;
+		}
+		last_show_healthbar_all_state_ = settings_.show_healthbar_all_agents;
+		RescanAllAgentsForHealthbar();
 	}
 
 	static void OnRevealHotkeyDown(GW::HookStatus*, uint32_t key) {
