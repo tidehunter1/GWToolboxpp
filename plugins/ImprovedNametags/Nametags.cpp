@@ -201,6 +201,9 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
+		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
+		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
+		GW::UI::RegisterUIMessageCallback(&nametag_show_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnShowAgentNameTag);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -266,6 +269,9 @@ public:
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_);
+		GW::UI::RemoveKeydownCallback(&reveal_hotkey_hook_entry_);
+		GW::UI::RemoveKeyupCallback(&reveal_hotkey_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&nametag_show_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -301,6 +307,9 @@ private:
 	std::optional<bool> last_priority_enabled_state_;
 	std::optional<bool> last_show_healthbar_all_state_;
 	bool did_initial_scan_ = false;
+	bool ctrl_reveal_down_ = false;
+	bool alt_reveal_down_ = false;
+	bool hide_hotkey_active_ = false;
 	GW::HookEntry allegiance_hook_entry_;
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
@@ -308,6 +317,8 @@ private:
 	GW::HookEntry target_change_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
+	GW::HookEntry reveal_hotkey_hook_entry_;
+	GW::HookEntry nametag_show_hook_entry_;
 
 	AgentNameCache name_cache_;
 
@@ -523,6 +534,60 @@ private:
 			if (healthbar_resource_id) PoolColorSetter_Func(healthbar_resource_id, 0, &argb);
 			if (arrow_resource_id) PoolColorSetter_Func(arrow_resource_id, 0, &argb);
 		});
+	}
+
+	static void OnShowAgentNameTag(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
+		auto* info = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
+		if (!info) return;
+		if (info->agent_id == GW::Agents::GetTargetId()) return;
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (self->hide_hotkey_active_) {
+			status->blocked = true;
+		}
+	}
+
+	void ForceNametagVisibilityResync() {
+		GW::GameThread::Enqueue([this] {
+			GW::AgentArray* agents = GW::Agents::GetAgentArray();
+			if (!agents || !agents->valid()) return;
+			const uint32_t target_id = GW::Agents::GetTargetId();
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			for (GW::Agent* agent : *agents) {
+				if (!agent || !agent->GetIsLivingType()) continue;
+				GW::AgentLiving* living = agent->GetAsAgentLiving();
+				if (!living || living->GetIsDead()) continue;
+				if (me && living->agent_id == me->agent_id) continue;
+				if (living->agent_id == target_id) continue;
+				if (hide_hotkey_active_) {
+					GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(living->agent_id)));
+				} else {
+					GW::Agents::RefreshAgentNameTag(agent);
+				}
+			}
+		});
+	}
+
+	void OnRevealHotkeyStateChanged() {
+		const bool now_active = ctrl_reveal_down_ || alt_reveal_down_;
+		if (now_active == hide_hotkey_active_) return;
+		hide_hotkey_active_ = now_active;
+		ForceNametagVisibilityResync();
+	}
+
+	static void OnRevealHotkeyDown(GW::HookStatus*, uint32_t key) {
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (key == GW::UI::ControlAction_ShowOthers) self->ctrl_reveal_down_ = true;
+		else if (key == GW::UI::ControlAction_ShowTargets) self->alt_reveal_down_ = true;
+		else return;
+		self->OnRevealHotkeyStateChanged();
+	}
+
+	static void OnRevealHotkeyUp(GW::HookStatus*, uint32_t key) {
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (key == GW::UI::ControlAction_ShowOthers) self->ctrl_reveal_down_ = false;
+		else if (key == GW::UI::ControlAction_ShowTargets) self->alt_reveal_down_ = false;
+		else return;
+		self->OnRevealHotkeyStateChanged();
 	}
 
 	static void ApplyHealthbarFlag(uint32_t agent_id, bool on) {
