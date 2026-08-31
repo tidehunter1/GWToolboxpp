@@ -537,6 +537,13 @@ private:
 		});
 	}
 
+	static void TriggerNameTagRefresh(uint32_t agent_id) {
+		GW::GameThread::Enqueue([agent_id] {
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			if (!agent) return;
+		});
+	}
+
 	void RefreshHealthbarForAgent(GW::Agent* agent) {
 		if (!agent || !agent->GetIsLivingType()) return;
 		GW::AgentLiving* living = agent->GetAsAgentLiving();
@@ -560,11 +567,13 @@ private:
 		if (decided_color.has_value()) {
 			if (state.last_pushed_color != decided_color) {
 				PushHealthbarColor(living->agent_id, *decided_color);
+				TriggerNameTagRefresh(living->agent_id);
 				RefreshTargetedRing(living->agent_id);
 				state.last_pushed_color = decided_color;
 			}
 		} else if (state.last_pushed_color.has_value()) {
 			PushHealthbarColor(living->agent_id, GetNativeAllegianceColor(living));
+			TriggerNameTagRefresh(living->agent_id);
 			RefreshTargetedRing(living->agent_id);
 			state.last_pushed_color = std::nullopt;
 		}
