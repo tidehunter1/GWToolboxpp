@@ -73,11 +73,14 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
         return living->primary;
     }
 
-    // 2. Player character lookup via PlayerArray
-    if (living->GetIsPlayer()) {
-        const GW::Player* player = GW::Agents::GetPlayerByID(living->player_number);
-        if (player && player->primary <= 10) {
-            return static_cast<GW::Constants::ProfessionByte>(player->primary);
+    // 2. Player character lookup via PlayerArray (login_number != 0)
+    if (living->login_number != 0) {
+        const GW::PlayerArray* players = GW::Agents::GetPlayerArray();
+        if (players && players->valid() && living->player_number < players->size()) {
+            const GW::Player& player = (*players)[living->player_number];
+            if (player.primary <= 10) {
+                return static_cast<GW::Constants::ProfessionByte>(player.primary);
+            }
         }
     }
 
@@ -781,7 +784,7 @@ private:
 
         // Applies to all non-enemy allies and player characters
         if (settings_.recolor_professions
-            && (living->GetIsPlayer() || living->allegiance != GW::Constants::Allegiance::Enemy)) {
+            && (living->login_number != 0 || living->allegiance != GW::Constants::Allegiance::Enemy)) {
             if (const auto color = TryGetProfessionColor(name_cache_.Get(living).profession)) {
                 return color;
             }
