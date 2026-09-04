@@ -598,6 +598,11 @@ private:
 			if (!fresh_living) return;
 			const uint32_t allegiance_value = static_cast<uint32_t>(fresh_living->allegiance);
 			TriggerAllegianceRecolor(agent, allegiance_value);
+
+			const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
+			agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
+			GW::Agents::RefreshAgentNameTag(agent);
+			agent->name_properties = static_cast<GW::NameTagFlags>(current_properties);
 			GW::Agents::RefreshAgentNameTag(agent);
 		});
 	}
