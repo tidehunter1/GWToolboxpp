@@ -572,22 +572,23 @@ private:
 		static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance())->OnRevealHotkeyKeyEvent(key, false);
 	}
 
-	void UpdateAgentHealthbarState(GW::AgentLiving* living, AgentState& state) {
+	void UpdateManualTargetFlag(GW::AgentLiving* living, AgentState& state) {
 		const uint32_t agent_id = living->agent_id;
 		const bool want_flag = settings_.show_healthbar_all_agents;
+		if (want_flag == state.we_applied_flag) return;
 
-		if (want_flag != state.we_applied_flag) {
-			EnsureSetNameTagBitScanned();
-			state.we_applied_flag = want_flag;
-			GW::GameThread::Enqueue([agent_id, want_flag] {
-				GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-				if (!agent) return;
-				if (SetNameTagBit_Func) {
-					SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
-				}
-			});
-		}
+		EnsureSetNameTagBitScanned();
+		state.we_applied_flag = want_flag;
+		GW::GameThread::Enqueue([agent_id, want_flag] {
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			if (!agent) return;
+			if (SetNameTagBit_Func) {
+				SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
+			}
+		});
+	}
 
+	void TriggerAllegianceRecolorForAgentId(uint32_t agent_id) {
 		EnsureQueueEventAllocatorScanned();
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
@@ -598,6 +599,11 @@ private:
 			TriggerAllegianceRecolor(agent, allegiance_value);
 			GW::Agents::RefreshAgentNameTag(agent);
 		});
+	}
+
+	void UpdateAgentHealthbarState(GW::AgentLiving* living, AgentState& state) {
+		UpdateManualTargetFlag(living, state);
+		TriggerAllegianceRecolorForAgentId(living->agent_id);
 	}
 
 	void RefreshHealthbarForAgent(GW::Agent* agent) {
@@ -611,6 +617,20 @@ private:
 			agent_state_.resize(living->agent_id + 128);
 		}
 		UpdateAgentHealthbarState(living, agent_state_[living->agent_id]);
+	}
+
+	void RefreshManualTargetFlagForAgentId(uint32_t agent_id) {
+		GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+		if (!agent || !agent->GetIsLivingType()) return;
+		GW::AgentLiving* living = agent->GetAsAgentLiving();
+		if (!living || living->GetIsDead()) return;
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (me && living->agent_id == me->agent_id) return;
+
+		if (living->agent_id >= agent_state_.size()) {
+			agent_state_.resize(living->agent_id + 128);
+		}
+		UpdateManualTargetFlag(living, agent_state_[living->agent_id]);
 	}
 
 	void RefreshHealthbarForAgentId(uint32_t agent_id) {
@@ -638,7 +658,7 @@ private:
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		self->RefreshHealthbarForAgentId(pak->agent_id);
+		self->RefreshManualTargetFlagForAgentId(pak->agent_id);
 		const uint32_t agent_id = pak->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
