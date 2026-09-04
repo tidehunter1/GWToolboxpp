@@ -341,7 +341,6 @@ private:
 	static constexpr float kEmbarkRearmHysteresisPct = 5.f;
 
 	struct AgentState {
-		std::optional<ImU32> last_pushed_color;
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
 	};
@@ -527,27 +526,22 @@ private:
 		return true;
 	}
 
-	using PoolColorSetter_pt = void(__cdecl*)(uint32_t, uint32_t, const uint32_t*);
-	static inline PoolColorSetter_pt PoolColorSetter_Func = nullptr;
+	using QueueEventAllocator_pt = void*(__thiscall*)(void*, uint32_t);
+	static inline QueueEventAllocator_pt QueueEventAllocator_Func = nullptr;
 
-	static bool EnsurePoolColorSetterScanned() {
-		if (PoolColorSetter_Func) return true;
-		if (!ResolveScannedFunc(PoolColorSetter_Func,
-			"\x55\x8b\xec\x53\x56\x57\xff\x35\xa4\xf5\xa5\x00\xff\x75\x08\xe8\x6c\x6a\xe0\xff\x8b\xf8\x83\xc4\x08\x85\xff\x75\x14\x68\xa4\x00\x00\x00\xba\x38\xbf\xa5\x00\xb9\x70\xf6\x93\x00\xe8\xcf\xe7\xe1\xff\x8b\x47\x0c\x83\xf8\x05\x74\x12\x50\x6a\x05\x68\x94\xbf\xa5\x00\x6a\x02\xe8\x38\x59\xe0\xff\x83\xc4\x10\x83\x7f\x0c\x05\x74\x14\x68\xa8\x00\x00\x00\xba\x38\xbf\xa5\x00\xb9\xcc\xbf\xa5\x00\xe8\x9b\xe7\xe1\xff\x8b\x5d\x0c\x3b\x9f\xa4\x00\x00\x00\x72\x14\x68\x39\x07\x00\x00\xba\x3c\xd2",
-			"xxxxxxxx????xxxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxx????xxx????xxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxx??")) return false;
+	static bool EnsureQueueEventAllocatorScanned() {
+		if (QueueEventAllocator_Func) return true;
+		if (!ResolveScannedFunc(QueueEventAllocator_Func,
+			"\x55\x8b\xec\x53\x56\x57\x8b\xf9\xe8\x23\x3b\xff\xff\x8b\x55\x08\x8b\xd8\x89\x13\x8b\x57\x2c\x89\x53\x04\xc7\x43\x08\x00\x00\x00\x00\x81\xbf\x40\x01\x00\x00\xdd\xdd\xdd\xdd\x75\x14\x68\x87\x01\x00\x00\xba\x38\xdf\x93\x00\xb9\xbc\xdf\x93\x00\xe8\xcf\x23\xc9\xff\x8b\xb7\x40\x01\x00\x00\x03\xf3\x8b\x16\x8b\x4e\x04\x8b\x06\x83\xe1\xfe\x8b\x40\x04\x83\xe0\xfe\x2b\xc8\x89\x14\x31\x8b\x4e\x04\x8b\x06\x89\x48\x04\x8b\x87\x44\x01\x00\x00\x89\x06\x8b\x06\x8b\x40\x04\x89\x46\x04\x8b\x87\x44\x01\x00\x00\x89\x58\x04\x89\xb7\x44\x01\x00\x00\xa1\x38\xa8\x08\x01\x85\xc0\x0f\x84\xc0\x00\x00\x00\x50",
+			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx")) return false;
 		return true;
 	}
 
-	[[nodiscard]] static ImU32 GetNativeAllegianceColor(const GW::AgentLiving* living) noexcept {
-		if (AllegianceColor_Ret) {
-			uint32_t out_color = 0;
-			void* ctx = const_cast<void*>(static_cast<const void*>(living));
-			uint32_t* result = AllegianceColor_Ret(ctx, &out_color, 0);
-			if (result) return static_cast<ImU32>(*result);
-		}
-		if (living->allegiance == GW::Constants::Allegiance::Enemy) return static_cast<ImU32>(0xFFFF0000u);
-		if (living->allegiance == GW::Constants::Allegiance::Npc_Minipet) return static_cast<ImU32>(0xFFA0FF00u);
-		return static_cast<ImU32>(0xFF00FF00u);
+	static void TriggerAllegianceRecolor(GW::Agent* agent, uint32_t allegiance_value) {
+		if (!QueueEventAllocator_Func) return;
+		void* node = QueueEventAllocator_Func(agent, 8);
+		if (!node) return;
+		*reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(node) + 0x1c) = allegiance_value;
 	}
 
 	void OnRevealHotkeyStateChanged() {
@@ -581,19 +575,25 @@ private:
 	void UpdateAgentHealthbarState(GW::AgentLiving* living, AgentState& state) {
 		const uint32_t agent_id = living->agent_id;
 		const bool want_flag = settings_.show_healthbar_all_agents;
-		if (want_flag == state.we_applied_flag) return;
 
-		EnsureSetNameTagBitScanned();
-		state.we_applied_flag = want_flag;
+		if (want_flag != state.we_applied_flag) {
+			EnsureSetNameTagBitScanned();
+			state.we_applied_flag = want_flag;
+			GW::GameThread::Enqueue([agent_id, want_flag] {
+				GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+				if (!agent) return;
+				if (SetNameTagBit_Func) {
+					SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
+				}
+			});
+		}
 
-		GW::GameThread::Enqueue([agent_id, want_flag] {
+		EnsureQueueEventAllocatorScanned();
+		const uint32_t allegiance_value = static_cast<uint32_t>(living->allegiance);
+		GW::GameThread::Enqueue([agent_id, allegiance_value] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent) return;
-			if (SetNameTagBit_Func) {
-				SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
-			}
-			uint32_t agent_id_copy = agent_id;
-			GW::UI::SendUIMessage(GW::UI::UIMessage::kAgentUpdate, &agent_id_copy, nullptr);
+			TriggerAllegianceRecolor(agent, allegiance_value);
 		});
 	}
 
