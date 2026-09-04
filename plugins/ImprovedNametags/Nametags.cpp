@@ -884,7 +884,10 @@ private:
 			if (target_agent) {
 				ImGui::Text("Current target: ID %u", target_id);
 				if (ImGui::Button("RefreshAgentNameTag on target")) {
-					GW::Agents::RefreshAgentNameTag(target_agent);
+					GW::GameThread::Enqueue([target_id] {
+						GW::Agent* agent = GW::Agents::GetAgentByID(target_id);
+						if (agent) GW::Agents::RefreshAgentNameTag(agent);
+					});
 				}
 			} else {
 				ImGui::TextDisabled("No current target");
@@ -913,9 +916,13 @@ private:
 				}
 			}
 			if (nearest_player) {
-				ImGui::Text("Nearest player: ID %u, distance %.0f", nearest_player->agent_id, std::sqrt(nearest_dist_sq));
+				const uint32_t nearest_player_id = nearest_player->agent_id;
+				ImGui::Text("Nearest player: ID %u, distance %.0f", nearest_player_id, std::sqrt(nearest_dist_sq));
 				if (ImGui::Button("RefreshAgentNameTag on nearest player")) {
-					GW::Agents::RefreshAgentNameTag(nearest_player);
+					GW::GameThread::Enqueue([nearest_player_id] {
+						GW::Agent* agent = GW::Agents::GetAgentByID(nearest_player_id);
+						if (agent) GW::Agents::RefreshAgentNameTag(agent);
+					});
 				}
 			} else {
 				ImGui::TextDisabled("No nearby player found");
