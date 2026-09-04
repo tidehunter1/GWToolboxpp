@@ -594,6 +594,7 @@ private:
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent) return;
 			TriggerAllegianceRecolor(agent, allegiance_value);
+			GW::Agents::RefreshAgentNameTag(agent);
 		});
 	}
 
