@@ -905,6 +905,12 @@ private:
 				ImGui::Text("Nearest agent: ID %u, distance %.0f", nearest_living->agent_id, std::sqrt(nearest_dist_sq));
 				ImGui::Text("IsPlayer: %s", nearest_living->IsPlayer() ? "yes" : "no");
 				ImGui::Text("allegiance (raw): %u", static_cast<uint32_t>(nearest_living->allegiance));
+				const auto decided = DecideAgentColor(nearest_living);
+				if (decided.has_value()) {
+					ImGui::Text("DecideAgentColor(): 0x%08X", static_cast<uint32_t>(*decided));
+				} else {
+					ImGui::TextDisabled("DecideAgentColor(): nullopt");
+				}
 			} else {
 				ImGui::TextDisabled("No nearby agent found");
 			}
