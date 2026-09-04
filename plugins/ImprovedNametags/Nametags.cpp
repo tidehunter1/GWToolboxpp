@@ -729,6 +729,12 @@ private:
 	}
 
 	[[nodiscard]] static ImU32 GetNativeAllegianceColor(const GW::AgentLiving* living) noexcept {
+		if (AllegianceColor_Ret) {
+			uint32_t out_color = 0;
+			void* ctx = const_cast<void*>(static_cast<const void*>(living));
+			uint32_t* result = AllegianceColor_Ret(ctx, &out_color, 0);
+			if (result) return static_cast<ImU32>(*result);
+		}
 		if (living->allegiance == GW::Constants::Allegiance::Enemy) return static_cast<ImU32>(0xFFFF0000u);
 		if (living->allegiance == GW::Constants::Allegiance::Npc_Minipet) return static_cast<ImU32>(0xFFA0FF00u);
 		return static_cast<ImU32>(0xFF00FF00u);
