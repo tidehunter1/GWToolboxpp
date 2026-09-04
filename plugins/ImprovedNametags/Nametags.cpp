@@ -877,10 +877,22 @@ private:
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
 
 		ImGui::Spacing();
-		ImGui::SeparatorText("Debug: allegiance inspector (read-only)");
-		if (ImGui::CollapsingHeader("Nearest agent allegiance")) {
+		ImGui::SeparatorText("Debug: RefreshAgentNameTag test");
+		if (ImGui::CollapsingHeader("Manual refresh triggers")) {
+			const uint32_t target_id = GW::Agents::GetTargetId();
+			GW::Agent* target_agent = target_id ? GW::Agents::GetAgentByID(target_id) : nullptr;
+			if (target_agent) {
+				ImGui::Text("Current target: ID %u", target_id);
+				if (ImGui::Button("RefreshAgentNameTag on target")) {
+					GW::Agents::RefreshAgentNameTag(target_agent);
+				}
+			} else {
+				ImGui::TextDisabled("No current target");
+			}
+
+			ImGui::Spacing();
 			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-			GW::AgentLiving* nearest_living = nullptr;
+			GW::AgentLiving* nearest_player = nullptr;
 			float nearest_dist_sq = 0.f;
 			if (me) {
 				GW::AgentArray* agents = GW::Agents::GetAgentArray();
@@ -888,31 +900,25 @@ private:
 					for (GW::Agent* agent : *agents) {
 						if (!agent || !agent->GetIsLivingType()) continue;
 						GW::AgentLiving* living = agent->GetAsAgentLiving();
-						if (!living || living->GetIsDead()) continue;
+						if (!living || living->GetIsDead() || !living->IsPlayer()) continue;
 						if (living->agent_id == me->agent_id) continue;
 						const float dx = agent->x - me->x;
 						const float dy = agent->y - me->y;
 						const float dist_sq = dx * dx + dy * dy;
-						if (!nearest_living || dist_sq < nearest_dist_sq) {
-							nearest_living = living;
+						if (!nearest_player || dist_sq < nearest_dist_sq) {
+							nearest_player = living;
 							nearest_dist_sq = dist_sq;
 						}
 					}
 				}
 			}
-
-			if (nearest_living) {
-				ImGui::Text("Nearest agent: ID %u, distance %.0f", nearest_living->agent_id, std::sqrt(nearest_dist_sq));
-				ImGui::Text("IsPlayer: %s", nearest_living->IsPlayer() ? "yes" : "no");
-				ImGui::Text("allegiance (raw): %u", static_cast<uint32_t>(nearest_living->allegiance));
-				const auto decided = DecideAgentColor(nearest_living);
-				if (decided.has_value()) {
-					ImGui::Text("DecideAgentColor(): 0x%08X", static_cast<uint32_t>(*decided));
-				} else {
-					ImGui::TextDisabled("DecideAgentColor(): nullopt");
+			if (nearest_player) {
+				ImGui::Text("Nearest player: ID %u, distance %.0f", nearest_player->agent_id, std::sqrt(nearest_dist_sq));
+				if (ImGui::Button("RefreshAgentNameTag on nearest player")) {
+					GW::Agents::RefreshAgentNameTag(nearest_player);
 				}
 			} else {
-				ImGui::TextDisabled("No nearby agent found");
+				ImGui::TextDisabled("No nearby player found");
 			}
 		}
 
