@@ -589,10 +589,12 @@ private:
 		}
 
 		EnsureQueueEventAllocatorScanned();
-		const uint32_t allegiance_value = static_cast<uint32_t>(living->allegiance);
-		GW::GameThread::Enqueue([agent_id, allegiance_value] {
+		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent) return;
+			GW::AgentLiving* fresh_living = agent->GetAsAgentLiving();
+			if (!fresh_living) return;
+			const uint32_t allegiance_value = static_cast<uint32_t>(fresh_living->allegiance);
 			TriggerAllegianceRecolor(agent, allegiance_value);
 			GW::Agents::RefreshAgentNameTag(agent);
 		});
