@@ -35,6 +35,7 @@
 #include <cwchar>
 #include <optional>
 #include <algorithm>
+#include <cmath>
 #include <array>
 
 template<typename CacheMap>
@@ -874,6 +875,40 @@ private:
 			dirty_rescan_ = true;
 		}
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Debug: allegiance inspector (read-only)");
+		if (ImGui::CollapsingHeader("Nearest agent allegiance")) {
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			GW::AgentLiving* nearest_living = nullptr;
+			float nearest_dist_sq = 0.f;
+			if (me) {
+				GW::AgentArray* agents = GW::Agents::GetAgentArray();
+				if (agents && agents->valid()) {
+					for (GW::Agent* agent : *agents) {
+						if (!agent || !agent->GetIsLivingType()) continue;
+						GW::AgentLiving* living = agent->GetAsAgentLiving();
+						if (!living || living->GetIsDead()) continue;
+						if (living->agent_id == me->agent_id) continue;
+						const float dx = agent->x - me->x;
+						const float dy = agent->y - me->y;
+						const float dist_sq = dx * dx + dy * dy;
+						if (!nearest_living || dist_sq < nearest_dist_sq) {
+							nearest_living = living;
+							nearest_dist_sq = dist_sq;
+						}
+					}
+				}
+			}
+
+			if (nearest_living) {
+				ImGui::Text("Nearest agent: ID %u, distance %.0f", nearest_living->agent_id, std::sqrt(nearest_dist_sq));
+				ImGui::Text("IsPlayer: %s", nearest_living->IsPlayer() ? "yes" : "no");
+				ImGui::Text("allegiance (raw): %u", static_cast<uint32_t>(nearest_living->allegiance));
+			} else {
+				ImGui::TextDisabled("No nearby agent found");
+			}
+		}
 
 	}
 };
