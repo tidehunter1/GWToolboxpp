@@ -646,12 +646,19 @@ private:
 		if (!pak) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		self->RefreshManualTargetFlagForAgentId(pak->agent_id);
+		self->debug_last_agent_id_ = pak->agent_id;
+		self->debug_last_allegiance_bits_ = pak->allegiance_bits;
+		self->debug_has_last_packet_ = true;
 		const uint32_t agent_id = pak->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (agent) GW::Agents::RefreshAgentNameTag(agent);
 		});
 	}
+
+	uint32_t debug_last_agent_id_ = 0;
+	uint32_t debug_last_allegiance_bits_ = 0;
+	bool debug_has_last_packet_ = false;
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
 		if (!pak) return;
@@ -861,6 +868,19 @@ private:
 		}
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
 
+		ImGui::Spacing();
+		ImGui::SeparatorText("Debug");
+		if (debug_has_last_packet_) {
+			ImGui::Text("Last real packet: agent %u, bits 0x%08X", debug_last_agent_id_, debug_last_allegiance_bits_);
+		} else {
+			ImGui::TextUnformatted("Last real packet: none seen yet");
+		}
+		if (ImGui::Button("Fire EmulatePacket (last-seen packet)") && debug_has_last_packet_) {
+			GW::Packet::StoC::AgentUpdateAllegiance packet;
+			packet.agent_id = debug_last_agent_id_;
+			packet.allegiance_bits = debug_last_allegiance_bits_;
+			GW::StoC::EmulatePacket(&packet);
+		}
 	}
 };
 
