@@ -202,6 +202,8 @@ public:
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
+		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagDiag);
+		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagDiag);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -268,11 +270,17 @@ public:
 		GW::StoC::RemoveCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_);
 		GW::UI::RemoveKeydownCallback(&reveal_hotkey_hook_entry_);
 		GW::UI::RemoveKeyupCallback(&reveal_hotkey_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&nametag_diag_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
 		++frame_counter_;
 		EnsureAllegianceColorHookInstalled();
+
+		if (!chat_suppress_hook_detached_ && frame_counter_ >= kStartupSuppressionFrames) {
+			chat_suppress_hook_detached_ = true;
+			GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
+		}
 
 		if (dirty_rescan_) {
 			dirty_rescan_ = false;
@@ -300,6 +308,10 @@ private:
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
 	GW::HookEntry reveal_hotkey_hook_entry_;
+	GW::HookEntry nametag_diag_hook_entry_;
+	uint32_t nametag_diag_total_ = 0;
+	uint32_t nametag_diag_watch_id_ = 0;
+	uint32_t nametag_diag_watch_hits_ = 0;
 
 	AgentNameCache name_cache_;
 
@@ -430,6 +442,7 @@ private:
 		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
 		if (!me || me->GetIsDead()) return;
 		if (!GW::Map::GetIsMapLoaded()) return;
+		if (GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable) return;
 		if (GW::Map::GetMapID() == GW::Constants::MapID::Embark_Beach) return;
 
 		const float hp_pct = std::clamp(me->hp, 0.f, 1.f) * 100.f;
@@ -467,11 +480,16 @@ private:
 		return result;
 	}
 
+	bool allegiance_hook_scan_failed_ = false;
+
 	void EnsureAllegianceColorHookInstalled() {
-		if (AllegianceColor_Func) return;
+		if (AllegianceColor_Func || allegiance_hook_scan_failed_) return;
 		if (!ResolveScannedFunc(AllegianceColor_Func,
 			"\x55\x8b\xec\x51\x56\x57\x8b\xf9\xf6\x87\x5c\x01\x00\x00\x08\x74\x09\xc7\x45\xfc\xa0\xa0\xa0\xff\xeb\x25\x8a\x87\xb5\x01\x00\x00\x3c\x03\x75\x09\xc7\x45\xfc\x00\x00\xff\xff\xeb\x12\xc7\x45\xfc\x00\xff\xa0\xff\x3c\x06\x74\x07",
-			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) return;
+			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
+			allegiance_hook_scan_failed_ = true;
+			return;
+		}
 		GW::Hook::CreateHook(&AllegianceColor_Func, OnAllegianceColor, &AllegianceColor_Ret);
 		GW::Hook::EnableHooks(AllegianceColor_Func);
 	}
@@ -489,10 +507,15 @@ private:
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
 	static bool EnsureSetNameTagBitScanned() {
+		static bool scan_failed = false;
 		if (SetNameTagBit_Func) return true;
+		if (scan_failed) return false;
 		if (!ResolveScannedFunc(SetNameTagBit_Func,
 			"\x55\x8b\xec\x83\xec\x64\x83\x7d\x0c\x00\x53\x57\x8b\xf9\x8b\x57\x58\x74\x07\x8b\xda\x0b\x5d\x08\xeb\x07\x8b\x5d\x08\xf7\xd3\x23\xda\x89\x5f\x58\x3b\xd3\x0f\x84\x36\x01\x00\x00\x8d\x45\xf4\x50\x8d\x45\x0c\x50\x52",
-			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) return false;
+			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
+			scan_failed = true;
+			return false;
+		}
 		return true;
 	}
 
@@ -500,10 +523,15 @@ private:
 	static inline QueueEventAllocator_pt QueueEventAllocator_Func = nullptr;
 
 	static bool EnsureQueueEventAllocatorScanned() {
+		static bool scan_failed = false;
 		if (QueueEventAllocator_Func) return true;
+		if (scan_failed) return false;
 		if (!ResolveScannedFunc(QueueEventAllocator_Func,
 			"\x55\x8b\xec\x53\x56\x57\x8b\xf9\xe8\x23\x3b\xff\xff\x8b\x55\x08\x8b\xd8\x89\x13\x8b\x57\x2c\x89\x53\x04\xc7\x43\x08\x00\x00\x00\x00\x81\xbf\x40\x01\x00\x00\xdd\xdd\xdd\xdd\x75\x14\x68\x87\x01\x00\x00\xba\x38\xdf\x93\x00\xb9\xbc\xdf\x93\x00\xe8\xcf\x23\xc9\xff\x8b\xb7\x40\x01\x00\x00\x03\xf3\x8b\x16\x8b\x4e\x04\x8b\x06\x83\xe1\xfe\x8b\x40\x04\x83\xe0\xfe\x2b\xc8\x89\x14\x31\x8b\x4e\x04\x8b\x06\x89\x48\x04\x8b\x87\x44\x01\x00\x00\x89\x06\x8b\x06\x8b\x40\x04\x89\x46\x04\x8b\x87\x44\x01\x00\x00\x89\x58\x04\x89\xb7\x44\x01\x00\x00\xa1\x38\xa8\x08\x01\x85\xc0\x0f\x84\xc0\x00\x00\x00\x50",
-			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx")) return false;
+			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx")) {
+			scan_failed = true;
+			return false;
+		}
 		return true;
 	}
 
@@ -669,21 +697,19 @@ private:
 		self->RefreshHealthbarForAgentId(pak->agent_id);
 	}
 
-	static constexpr int kExpectedWarningMessages = 3;
-	int warnings_blocked_ = 0;
+	static constexpr int kStartupSuppressionFrames = 300;
+	bool chat_suppress_hook_detached_ = false;
 
-	[[nodiscard]] bool ShouldSuppressWarning(uint32_t channel) {
-		if (warnings_blocked_ >= kExpectedWarningMessages) return false;
+	[[nodiscard]] static bool ShouldSuppressWarning(uint32_t channel, const wchar_t* message) {
 		if (channel != GW::Chat::Channel::CHANNEL_GWCA2 && channel != GW::Chat::Channel::CHANNEL_WARNING) return false;
-		++warnings_blocked_;
-		return true;
+		if (!message) return false;
+		return wcsstr(message, L"Plugins") != nullptr;
 	}
 
 	static void OnChatLogWrite(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
 		auto* msg = static_cast<GW::UI::UIPacket::kWriteToChatLog*>(wParam);
 		if (!msg) return;
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (self->ShouldSuppressWarning(static_cast<uint32_t>(msg->channel))) {
+		if (ShouldSuppressWarning(static_cast<uint32_t>(msg->channel), msg->message)) {
 			status->blocked = true;
 		}
 	}
@@ -691,17 +717,28 @@ private:
 	static void OnChatLogWriteWithSender(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
 		auto* msg = static_cast<GW::UI::UIPacket::kWriteToChatLogWithSender*>(wParam);
 		if (!msg) return;
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (self->ShouldSuppressWarning(msg->channel)) {
+		if (ShouldSuppressWarning(msg->channel, msg->message)) {
 			status->blocked = true;
+		}
+	}
+
+	static void OnAgentNameTagDiag(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
+		auto* tag = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
+		if (!tag) return;
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		++self->nametag_diag_total_;
+		if (self->nametag_diag_watch_id_ != 0 && tag->agent_id == self->nametag_diag_watch_id_) {
+			++self->nametag_diag_watch_hits_;
 		}
 	}
 
 	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living) {
 		if (!living) return std::nullopt;
 
+		const auto lookup = name_cache_.Get(living);
+
 		if (settings_.priority_enabled) {
-			if (const auto color = GetPriorityColor(*name_cache_.Get(living).words)) {
+			if (const auto color = GetPriorityColor(*lookup.words)) {
 				return color;
 			}
 		}
@@ -716,7 +753,7 @@ private:
 				ScheduleBossGlowRetry(living->agent_id);
 			}
 			if (settings_.recolor_enemy_nametags_by_profession) {
-				if (const auto color = TryGetProfessionColor(name_cache_.Get(living).profession)) {
+				if (const auto color = TryGetProfessionColor(lookup.profession)) {
 					return color;
 				}
 			}
@@ -730,7 +767,7 @@ private:
 
 		if (settings_.recolor_professions
 			&& living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
-			if (const auto color = TryGetProfessionColor(name_cache_.Get(living).profession)) {
+			if (const auto color = TryGetProfessionColor(lookup.profession)) {
 				return color;
 			}
 		}
@@ -758,6 +795,15 @@ private:
 	}
 
 	void DrawSettingsInternal() {
+		ImGui::SeparatorText("Diagnostic");
+		ImGui::Text("Total kShowAgentNameTag/kSetAgentNameTagAttribs fires: %u", nametag_diag_total_);
+		if (ImGui::Button("Watch Target")) {
+			nametag_diag_watch_id_ = GW::Agents::GetTargetId();
+			nametag_diag_watch_hits_ = 0;
+		}
+		ImGui::SameLine();
+		ImGui::Text("watching agent %u, hits: %u", nametag_diag_watch_id_, nametag_diag_watch_hits_);
+
 		ImGui::SeparatorText("Nametags");
 
 		if (DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow")) {
