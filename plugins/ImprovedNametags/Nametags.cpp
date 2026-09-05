@@ -203,8 +203,8 @@ public:
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
-		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagDiag, 0x8000);
-		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagDiag, 0x8000);
+		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagDiag, 0x7FFFFFFF);
+		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagDiag, 0x7FFFFFFF);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
