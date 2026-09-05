@@ -664,12 +664,11 @@ private:
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (pak->agent_id >= self->agent_state_.size()) {
-			self->agent_state_.resize(pak->agent_id + 128);
-		}
-		self->agent_state_[pak->agent_id].has_allegiance_bits = true;
-		self->agent_state_[pak->agent_id].last_allegiance_bits = pak->allegiance_bits;
 		self->RefreshManualTargetFlagForAgentId(pak->agent_id);
+		if (pak->agent_id < self->agent_state_.size()) {
+			self->agent_state_[pak->agent_id].has_allegiance_bits = true;
+			self->agent_state_[pak->agent_id].last_allegiance_bits = pak->allegiance_bits;
+		}
 		const uint32_t agent_id = pak->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
