@@ -715,6 +715,9 @@ private:
 	uint32_t debug_last_allegiance_bits_ = 0;
 	bool debug_has_last_packet_ = false;
 	bool debug_watch_locked_ = false;
+	uint32_t debug_frozen_agent_id_ = 0;
+	uint32_t debug_frozen_allegiance_bits_ = 0;
+	bool debug_has_frozen_ = false;
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
 		if (!pak) return;
@@ -938,10 +941,21 @@ private:
 		if (debug_dispatcher_hook_scan_failed_) {
 			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Dispatcher hook scan failed");
 		}
-		if (ImGui::Button("Fire EmulatePacket (last-seen packet)") && debug_has_last_packet_) {
+		if (ImGui::Button("Freeze this packet for replay") && debug_has_last_packet_) {
+			debug_frozen_agent_id_ = debug_last_agent_id_;
+			debug_frozen_allegiance_bits_ = debug_last_allegiance_bits_;
+			debug_has_frozen_ = true;
+		}
+		ImGui::SameLine();
+		if (debug_has_frozen_) {
+			ImGui::Text("Frozen: agent %u, bits 0x%08X", debug_frozen_agent_id_, debug_frozen_allegiance_bits_);
+		} else {
+			ImGui::TextUnformatted("Frozen: none yet");
+		}
+		if (ImGui::Button("Fire EmulatePacket (frozen packet)") && debug_has_frozen_) {
 			GW::Packet::StoC::AgentUpdateAllegiance packet;
-			packet.agent_id = debug_last_agent_id_;
-			packet.allegiance_bits = debug_last_allegiance_bits_;
+			packet.agent_id = debug_frozen_agent_id_;
+			packet.allegiance_bits = debug_frozen_allegiance_bits_;
 			GW::StoC::EmulatePacket(&packet);
 		}
 	}
