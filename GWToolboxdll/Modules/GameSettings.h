@@ -66,6 +66,7 @@ public:
 
         bool lazy_chest_looting = false;
         bool show_amount_of_lockpicks_under_locked_chest_nametag = false;
+        bool override_name_tag_colors = false;
 
         // When entering a mission you've completed, check whether you should be doing it in HM/NM instead
         bool check_and_prompt_if_mission_already_completed = true;
