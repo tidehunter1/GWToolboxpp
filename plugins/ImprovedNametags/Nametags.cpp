@@ -203,8 +203,6 @@ public:
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
-		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagDiag, -0x7FFFFFFF);
-		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagDiag, -0x7FFFFFFF);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -263,7 +261,6 @@ public:
 
 	void Terminate() override {
 		RemoveAllegianceColorHook();
-		RemoveGWToolboxAgentNameTagHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
@@ -272,13 +269,11 @@ public:
 		GW::StoC::RemoveCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_);
 		GW::UI::RemoveKeydownCallback(&reveal_hotkey_hook_entry_);
 		GW::UI::RemoveKeyupCallback(&reveal_hotkey_hook_entry_);
-		GW::UI::RemoveUIMessageCallback(&nametag_diag_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
 		++frame_counter_;
 		EnsureAllegianceColorHookInstalled();
-		EnsureGWToolboxAgentNameTagHookInstalled();
 
 		if (!chat_suppress_hook_detached_ && frame_counter_ >= kStartupSuppressionFrames) {
 			chat_suppress_hook_detached_ = true;
@@ -311,18 +306,6 @@ private:
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
 	GW::HookEntry reveal_hotkey_hook_entry_;
-	GW::HookEntry nametag_diag_hook_entry_;
-	uint32_t nametag_diag_total_ = 0;
-	uint32_t nametag_diag_watch_id_ = 0;
-	uint32_t nametag_diag_watch_hits_ = 0;
-	uint32_t nametag_diag_watch_hits_show_ = 0;
-	uint32_t nametag_diag_watch_hits_attribs_ = 0;
-	bool nametag_diag_force_color_ = false;
-	bool nametag_diag_force_show_only_ = false;
-	bool nametag_diag_block_message_ = false;
-	int nametag_diag_force_offset_ = 0x14;
-	uintptr_t nametag_diag_last_addr_ = 0;
-	std::array<uint8_t, 32> nametag_diag_last_bytes_{};
 
 	AgentNameCache name_cache_;
 
@@ -511,131 +494,6 @@ private:
 			GW::Hook::RemoveHook(AllegianceColor_Func);
 			AllegianceColor_Func = nullptr;
 			AllegianceColor_Ret = nullptr;
-		}
-	}
-
-	using OnGWToolboxAgentNameTag_pt = void(__cdecl*)(GW::HookStatus*, GW::UI::UIMessage, void*, void*);
-	static inline OnGWToolboxAgentNameTag_pt GWToolbox_OnAgentNameTag_Func = nullptr;
-	static inline OnGWToolboxAgentNameTag_pt GWToolbox_OnAgentNameTag_Ret = nullptr;
-
-	static void __cdecl OnGWToolboxAgentNameTagDetour(GW::HookStatus* status, GW::UI::UIMessage msgid, void* wParam, void* p4) {
-		GW::Hook::EnterHook();
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (!self->nametag_diag_disable_gwtoolbox_colors_) {
-			GWToolbox_OnAgentNameTag_Ret(status, msgid, wParam, p4);
-		}
-		GW::Hook::LeaveHook();
-	}
-
-	bool gwtoolbox_hook_scan_failed_ = false;
-	bool gwtoolbox_module_found_ = false;
-	bool gwtoolbox_string_found_ = false;
-	bool gwtoolbox_string_ambiguous_ = false;
-	bool gwtoolbox_ref_found_ = false;
-	bool gwtoolbox_ref_ambiguous_ = false;
-	bool gwtoolbox_func_start_found_ = false;
-	bool nametag_diag_disable_gwtoolbox_colors_ = false;
-
-	[[nodiscard]] static uintptr_t GetModuleImageSize(HMODULE mod) {
-		auto* base = reinterpret_cast<const uint8_t*>(mod);
-		auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-		if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
-		auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-		if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
-		return nt->OptionalHeader.SizeOfImage;
-	}
-
-	[[nodiscard]] static uint8_t* FindBytesRaw(uint8_t* start, size_t range, const uint8_t* needle, size_t needle_len, uint8_t* after = nullptr) {
-		if (range < needle_len) return nullptr;
-		size_t begin_i = 0;
-		if (after) {
-			const size_t after_off = static_cast<size_t>(after - start) + 1;
-			if (after_off <= range - needle_len) begin_i = after_off;
-			else return nullptr;
-		}
-		for (size_t i = begin_i; i <= range - needle_len; ++i) {
-			if (std::memcmp(start + i, needle, needle_len) == 0) return start + i;
-		}
-		return nullptr;
-	}
-
-	void EnsureGWToolboxAgentNameTagHookInstalled() {
-		if (GWToolbox_OnAgentNameTag_Func || gwtoolbox_hook_scan_failed_) return;
-		HMODULE tb_module = GetModuleHandleA("GWToolboxdll.dll");
-		if (!tb_module) {
-			tb_module = GetModuleHandleA("GWToolbox.dll");
-		}
-		if (!tb_module) {
-			gwtoolbox_hook_scan_failed_ = true;
-			return;
-		}
-		gwtoolbox_module_found_ = true;
-
-		const uintptr_t image_size = GetModuleImageSize(tb_module);
-		if (!image_size) {
-			gwtoolbox_hook_scan_failed_ = true;
-			return;
-		}
-		auto* base = reinterpret_cast<uint8_t*>(tb_module);
-
-		static const wchar_t kLockpicksFmt[] = L"\xa35\x101%s\x10a\x8101\x730e\x1";
-		const auto* str_needle = reinterpret_cast<const uint8_t*>(kLockpicksFmt);
-		const size_t str_len = (std::wcslen(kLockpicksFmt) + 1) * sizeof(wchar_t);
-
-		uint8_t* str_addr = FindBytesRaw(base, image_size, str_needle, str_len);
-		gwtoolbox_string_found_ = str_addr != nullptr;
-		if (!str_addr) {
-			gwtoolbox_hook_scan_failed_ = true;
-			return;
-		}
-		if (FindBytesRaw(base, image_size, str_needle, str_len, str_addr)) {
-			gwtoolbox_string_ambiguous_ = true;
-			gwtoolbox_hook_scan_failed_ = true;
-			return;
-		}
-
-		uint8_t addr_bytes[sizeof(uintptr_t)];
-		const uintptr_t str_addr_val = reinterpret_cast<uintptr_t>(str_addr);
-		std::memcpy(addr_bytes, &str_addr_val, sizeof(addr_bytes));
-
-		uint8_t* ref_addr = FindBytesRaw(base, image_size, addr_bytes, sizeof(addr_bytes));
-		gwtoolbox_ref_found_ = ref_addr != nullptr;
-		if (!ref_addr) {
-			gwtoolbox_hook_scan_failed_ = true;
-			return;
-		}
-		if (FindBytesRaw(base, image_size, addr_bytes, sizeof(addr_bytes), ref_addr)) {
-			gwtoolbox_ref_ambiguous_ = true;
-			gwtoolbox_hook_scan_failed_ = true;
-			return;
-		}
-
-		uint8_t* entry = nullptr;
-		for (int i = 1; i <= 0x400; ++i) {
-			uint8_t* candidate = ref_addr - i;
-			if (candidate < base) break;
-			if (candidate[0] == 0x55 && candidate[1] == 0x8B && candidate[2] == 0xEC) {
-				entry = candidate;
-				break;
-			}
-		}
-		gwtoolbox_func_start_found_ = entry != nullptr;
-		if (!entry) {
-			gwtoolbox_hook_scan_failed_ = true;
-			return;
-		}
-
-		GWToolbox_OnAgentNameTag_Func = reinterpret_cast<OnGWToolboxAgentNameTag_pt>(entry);
-		GW::Hook::CreateHook(&GWToolbox_OnAgentNameTag_Func, OnGWToolboxAgentNameTagDetour, &GWToolbox_OnAgentNameTag_Ret);
-		GW::Hook::EnableHooks(GWToolbox_OnAgentNameTag_Func);
-	}
-
-	void RemoveGWToolboxAgentNameTagHook() {
-		if (GWToolbox_OnAgentNameTag_Func) {
-			GW::Hook::DisableHooks(GWToolbox_OnAgentNameTag_Func);
-			GW::Hook::RemoveHook(GWToolbox_OnAgentNameTag_Func);
-			GWToolbox_OnAgentNameTag_Func = nullptr;
-			GWToolbox_OnAgentNameTag_Ret = nullptr;
 		}
 	}
 
@@ -858,37 +716,6 @@ private:
 		}
 	}
 
-	static void OnAgentNameTagDiag(GW::HookStatus* status, GW::UI::UIMessage msgid, void* wParam, void*) {
-		auto* tag = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
-		if (!tag) return;
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		++self->nametag_diag_total_;
-		const bool is_show_msg = msgid == GW::UI::UIMessage::kShowAgentNameTag;
-		if (self->nametag_diag_watch_id_ != 0 && tag->agent_id == self->nametag_diag_watch_id_) {
-			++self->nametag_diag_watch_hits_;
-			if (is_show_msg) {
-				++self->nametag_diag_watch_hits_show_;
-			} else {
-				++self->nametag_diag_watch_hits_attribs_;
-			}
-			self->nametag_diag_last_addr_ = reinterpret_cast<uintptr_t>(tag);
-			std::memcpy(self->nametag_diag_last_bytes_.data(), tag, self->nametag_diag_last_bytes_.size());
-			const bool should_force = self->nametag_diag_force_color_ &&
-				(!self->nametag_diag_force_show_only_ || is_show_msg);
-			if (should_force) {
-				auto* base = reinterpret_cast<uint8_t*>(tag);
-				const int off = self->nametag_diag_force_offset_;
-				if (off >= 0 && static_cast<size_t>(off) + 4 <= self->nametag_diag_last_bytes_.size()) {
-					uint32_t magenta = 0xFFFF00FFu;
-					std::memcpy(base + off, &magenta, sizeof(magenta));
-				}
-			}
-			if (self->nametag_diag_block_message_ && status) {
-				status->blocked = true;
-			}
-		}
-	}
-
 	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living) {
 		if (!living) return std::nullopt;
 
@@ -952,55 +779,6 @@ private:
 	}
 
 	void DrawSettingsInternal() {
-		ImGui::SeparatorText("Diagnostic");
-		ImGui::Text("Total kShowAgentNameTag/kSetAgentNameTagAttribs fires: %u", nametag_diag_total_);
-		if (ImGui::Button("Watch Target")) {
-			nametag_diag_watch_id_ = GW::Agents::GetTargetId();
-			nametag_diag_watch_hits_ = 0;
-			nametag_diag_watch_hits_show_ = 0;
-			nametag_diag_watch_hits_attribs_ = 0;
-		}
-		ImGui::SameLine();
-		ImGui::Text("watching agent %u, hits: %u", nametag_diag_watch_id_, nametag_diag_watch_hits_);
-		ImGui::Text("  kShowAgentNameTag hits: %u, kSetAgentNameTagAttribs hits: %u", nametag_diag_watch_hits_show_, nametag_diag_watch_hits_attribs_);
-		ImGui::Checkbox("Force magenta on watched agent", &nametag_diag_force_color_);
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(80.f);
-		ImGui::InputInt("offset (decimal)", &nametag_diag_force_offset_);
-		ImGui::Checkbox("Only force on kShowAgentNameTag (skip kSetAgentNameTagAttribs)", &nametag_diag_force_show_only_);
-		ImGui::Checkbox("Block message for watched agent (runs before GWToolbox)", &nametag_diag_block_message_);
-		ImGui::Checkbox("Disable GWToolbox's OnAgentNameTag entirely (hooked)", &nametag_diag_disable_gwtoolbox_colors_);
-		if (gwtoolbox_hook_scan_failed_) {
-			if (!gwtoolbox_module_found_) {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "GWToolbox module not found (name mismatch?)");
-			} else if (!gwtoolbox_string_found_) {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Module found, but lockpicks string not located (source string changed?)");
-			} else if (gwtoolbox_string_ambiguous_) {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Lockpicks string found more than once (ambiguous)");
-			} else if (!gwtoolbox_ref_found_) {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "String found, but no code reference to it located");
-			} else if (gwtoolbox_ref_ambiguous_) {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Code reference to string found more than once (ambiguous)");
-			} else if (!gwtoolbox_func_start_found_) {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "String reference found, but function prologue not found nearby");
-			} else {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "GWToolbox hook scan failed (unknown stage)");
-			}
-		} else if (GWToolbox_OnAgentNameTag_Func) {
-			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "GWToolbox hook installed");
-		}
-		ImGui::Text("last struct address: 0x%08zX", nametag_diag_last_addr_);
-		if (nametag_diag_last_addr_ != 0) {
-			std::string hex_line;
-			for (size_t i = 0; i < nametag_diag_last_bytes_.size(); ++i) {
-				char byte_buf[4];
-				snprintf(byte_buf, sizeof(byte_buf), "%02X ", nametag_diag_last_bytes_[i]);
-				hex_line += byte_buf;
-				if ((i + 1) % 16 == 0) hex_line += '\n';
-			}
-			ImGui::TextUnformatted(hex_line.c_str());
-		}
-
 		ImGui::SeparatorText("Nametags");
 
 		if (DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow")) {
