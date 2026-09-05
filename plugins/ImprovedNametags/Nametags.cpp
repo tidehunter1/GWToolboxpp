@@ -654,6 +654,9 @@ private:
 
 	uint32_t debug_source_agent_id_ = 0;
 	bool debug_source_locked_ = false;
+	std::string debug_last_apply_result_ = "none yet";
+	uint32_t debug_frozen_allegiance_bits_ = 0;
+	bool debug_has_frozen_ = false;
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
 		if (!pak) return;
@@ -866,15 +869,32 @@ private:
 		ImGui::Spacing();
 		ImGui::SeparatorText("Debug");
 		ImGui::Checkbox("Lock source agent", &debug_source_locked_);
-		ImGui::Text("Source agent: %u", debug_source_agent_id_);
-		if (ImGui::Button("Apply source's allegiance to current target")) {
+		const bool source_has_bits = debug_source_agent_id_ < agent_state_.size()
+			&& agent_state_[debug_source_agent_id_].has_allegiance_bits;
+		ImGui::Text("Source agent: %u (has bits: %s)", debug_source_agent_id_, source_has_bits ? "yes" : "no");
+		if (ImGui::Button("Freeze source's current bits") && source_has_bits) {
+			debug_frozen_allegiance_bits_ = agent_state_[debug_source_agent_id_].last_allegiance_bits;
+			debug_has_frozen_ = true;
+		}
+		ImGui::SameLine();
+		if (debug_has_frozen_) {
+			ImGui::Text("Frozen bits: 0x%08X", debug_frozen_allegiance_bits_);
+		} else {
+			ImGui::TextUnformatted("Frozen bits: none yet");
+		}
+		ImGui::Text("Current target: %u", GW::Agents::GetTargetId());
+		if (ImGui::Button("Apply frozen bits to current target")) {
 			const uint32_t target_id = GW::Agents::GetTargetId();
-			if (target_id != 0 && debug_source_agent_id_ < agent_state_.size()
-				&& agent_state_[debug_source_agent_id_].has_allegiance_bits) {
-				const uint32_t bits = agent_state_[debug_source_agent_id_].last_allegiance_bits;
-				TriggerAllegianceRecolorViaEmulatePacket(target_id, bits);
+			if (target_id != 0 && debug_has_frozen_) {
+				TriggerAllegianceRecolorViaEmulatePacket(target_id, debug_frozen_allegiance_bits_);
+				debug_last_apply_result_ = "fired";
+			} else if (target_id == 0) {
+				debug_last_apply_result_ = "skipped: no current target (target it first)";
+			} else {
+				debug_last_apply_result_ = "skipped: nothing frozen yet";
 			}
 		}
+		ImGui::Text("Last click result: %s", debug_last_apply_result_.c_str());
 	}
 };
 
