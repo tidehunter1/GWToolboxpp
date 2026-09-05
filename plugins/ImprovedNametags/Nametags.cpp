@@ -202,8 +202,8 @@ public:
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
-		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagDiag);
-		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagDiag);
+		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagDiag, 0x8000);
+		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagDiag, 0x8000);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -312,6 +312,7 @@ private:
 	uint32_t nametag_diag_total_ = 0;
 	uint32_t nametag_diag_watch_id_ = 0;
 	uint32_t nametag_diag_watch_hits_ = 0;
+	bool nametag_diag_force_color_ = false;
 
 	AgentNameCache name_cache_;
 
@@ -729,6 +730,9 @@ private:
 		++self->nametag_diag_total_;
 		if (self->nametag_diag_watch_id_ != 0 && tag->agent_id == self->nametag_diag_watch_id_) {
 			++self->nametag_diag_watch_hits_;
+			if (self->nametag_diag_force_color_) {
+				tag->text_color = 0xFFFF00FFu;
+			}
 		}
 	}
 
@@ -803,6 +807,7 @@ private:
 		}
 		ImGui::SameLine();
 		ImGui::Text("watching agent %u, hits: %u", nametag_diag_watch_id_, nametag_diag_watch_hits_);
+		ImGui::Checkbox("Force magenta on watched agent", &nametag_diag_force_color_);
 
 		ImGui::SeparatorText("Nametags");
 
