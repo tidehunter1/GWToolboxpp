@@ -529,6 +529,8 @@ private:
 
 	bool gwtoolbox_hook_scan_failed_ = false;
 	bool gwtoolbox_module_found_ = false;
+	bool gwtoolbox_string_found_ = false;
+	bool gwtoolbox_func_start_found_ = false;
 	bool nametag_diag_disable_gwtoolbox_colors_ = false;
 
 	void EnsureGWToolboxAgentNameTagHookInstalled() {
@@ -544,7 +546,9 @@ private:
 		gwtoolbox_module_found_ = true;
 		GW::Scanner::Initialize(tb_module);
 		const uintptr_t use_addr = GW::Scanner::FindUseOfString(L"\xa35\x101%s\x10a\x8101\x730e\x1");
+		gwtoolbox_string_found_ = use_addr != 0;
 		const uintptr_t addr = use_addr ? GW::Scanner::ToFunctionStart(use_addr) : 0;
+		gwtoolbox_func_start_found_ = addr != 0;
 		GW::Scanner::Initialize();
 		if (!addr) {
 			gwtoolbox_hook_scan_failed_ = true;
@@ -896,10 +900,14 @@ private:
 		ImGui::Checkbox("Block message for watched agent (runs before GWToolbox)", &nametag_diag_block_message_);
 		ImGui::Checkbox("Disable GWToolbox's OnAgentNameTag entirely (hooked)", &nametag_diag_disable_gwtoolbox_colors_);
 		if (gwtoolbox_hook_scan_failed_) {
-			if (gwtoolbox_module_found_) {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "GWToolbox module found, but byte pattern did not match (different build)");
-			} else {
+			if (!gwtoolbox_module_found_) {
 				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "GWToolbox module not found (name mismatch?)");
+			} else if (!gwtoolbox_string_found_) {
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Module found, but lockpicks string not located (source string changed?)");
+			} else if (!gwtoolbox_func_start_found_) {
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "String found and referenced, but function prologue not found nearby");
+			} else {
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "GWToolbox hook scan failed (unknown stage)");
 			}
 		} else if (GWToolbox_OnAgentNameTag_Func) {
 			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "GWToolbox hook installed");
