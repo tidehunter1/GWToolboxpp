@@ -271,6 +271,7 @@ public:
 
 	void Terminate() override {
 		RemoveAllegianceColorHook();
+		RemoveDebugDispatcherHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
@@ -284,6 +285,7 @@ public:
 	void Draw(IDirect3DDevice9*) override {
 		++frame_counter_;
 		EnsureAllegianceColorHookInstalled();
+		EnsureDebugDispatcherHookInstalled();
 
 		if (!chat_suppress_hook_detached_ && frame_counter_ >= kStartupSuppressionFrames) {
 			chat_suppress_hook_detached_ = true;
@@ -506,6 +508,54 @@ private:
 		}
 	}
 
+	using AllegianceReasonDispatcher_pt = void(__cdecl*)(void*);
+	static inline AllegianceReasonDispatcher_pt AllegianceReasonDispatcher_Func = nullptr;
+	static inline AllegianceReasonDispatcher_pt AllegianceReasonDispatcher_Ret = nullptr;
+	bool debug_dispatcher_hook_scan_failed_ = false;
+
+	uint32_t debug_watch_agent_id_ = 0;
+	uint32_t debug_watch_hit_count_ = 0;
+	uint32_t debug_watch_last_reason_ = 0xFFFFFFFFu;
+
+	static void __cdecl OnAllegianceReasonDispatchDebug(void* param_1) {
+		GW::Hook::EnterHook();
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (param_1) {
+			auto* base = reinterpret_cast<uint8_t*>(param_1);
+			const uint32_t reason = *reinterpret_cast<uint32_t*>(base);
+			auto** agent_struct = reinterpret_cast<uint32_t**>(base + 0xC);
+			if (*agent_struct) {
+				const uint32_t agent_id = *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(*agent_struct) + 0x14);
+				if (self->debug_watch_agent_id_ != 0 && agent_id == self->debug_watch_agent_id_) {
+					++self->debug_watch_hit_count_;
+					self->debug_watch_last_reason_ = reason;
+				}
+			}
+		}
+		AllegianceReasonDispatcher_Ret(param_1);
+		GW::Hook::LeaveHook();
+	}
+
+	void EnsureDebugDispatcherHookInstalled() {
+		if (AllegianceReasonDispatcher_Func || debug_dispatcher_hook_scan_failed_) return;
+		if (!EnsureScanned(AllegianceReasonDispatcher_Func, debug_dispatcher_hook_scan_failed_,
+			"\x55\x8b\xec\x83\xec\x18\x56\x57\x8b\x7d\x08\x8b\x77\x0c\x85\xf6\x75\x14\x68\x08\x01\x00\x00\xba\xdd\xdd\xdd\xdd\xb9\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\x83\x3f",
+			"xxxxxxxxxxxxxxxxxxxxxxxx????x????x????xx")) {
+			return;
+		}
+		GW::Hook::CreateHook(&AllegianceReasonDispatcher_Func, OnAllegianceReasonDispatchDebug, &AllegianceReasonDispatcher_Ret);
+		GW::Hook::EnableHooks(AllegianceReasonDispatcher_Func);
+	}
+
+	void RemoveDebugDispatcherHook() {
+		if (AllegianceReasonDispatcher_Func) {
+			GW::Hook::DisableHooks(AllegianceReasonDispatcher_Func);
+			GW::Hook::RemoveHook(AllegianceReasonDispatcher_Func);
+			AllegianceReasonDispatcher_Func = nullptr;
+			AllegianceReasonDispatcher_Ret = nullptr;
+		}
+	}
+
 	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
@@ -649,6 +699,11 @@ private:
 		self->debug_last_agent_id_ = pak->agent_id;
 		self->debug_last_allegiance_bits_ = pak->allegiance_bits;
 		self->debug_has_last_packet_ = true;
+		if (!self->debug_watch_locked_ && self->debug_watch_agent_id_ != pak->agent_id) {
+			self->debug_watch_agent_id_ = pak->agent_id;
+			self->debug_watch_hit_count_ = 0;
+			self->debug_watch_last_reason_ = 0xFFFFFFFFu;
+		}
 		const uint32_t agent_id = pak->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
@@ -659,6 +714,7 @@ private:
 	uint32_t debug_last_agent_id_ = 0;
 	uint32_t debug_last_allegiance_bits_ = 0;
 	bool debug_has_last_packet_ = false;
+	bool debug_watch_locked_ = false;
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
 		if (!pak) return;
@@ -874,6 +930,13 @@ private:
 			ImGui::Text("Last real packet: agent %u, bits 0x%08X", debug_last_agent_id_, debug_last_allegiance_bits_);
 		} else {
 			ImGui::TextUnformatted("Last real packet: none seen yet");
+		}
+		ImGui::Checkbox("Lock watch target (stop auto-following newest packet)", &debug_watch_locked_);
+		ImGui::Text("Watching agent %u dispatch calls: %u hits, last reason: %s",
+			debug_watch_agent_id_, debug_watch_hit_count_,
+			debug_watch_last_reason_ == 0xFFFFFFFFu ? "none yet" : std::to_string(debug_watch_last_reason_).c_str());
+		if (debug_dispatcher_hook_scan_failed_) {
+			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Dispatcher hook scan failed");
 		}
 		if (ImGui::Button("Fire EmulatePacket (last-seen packet)") && debug_has_last_packet_) {
 			GW::Packet::StoC::AgentUpdateAllegiance packet;
