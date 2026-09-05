@@ -202,6 +202,8 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
+		GW::UI::RegisterUIMessageCallback(&nametag_color_late_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagLate, 0x8000);
+		GW::UI::RegisterUIMessageCallback(&nametag_color_late_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagLate, 0x8000);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
 	}
@@ -263,6 +265,7 @@ public:
 	void Terminate() override {
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&nametag_color_late_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&target_change_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
@@ -303,6 +306,7 @@ private:
 	GW::HookEntry target_change_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
+	GW::HookEntry nametag_color_late_hook_entry_;
 	GW::HookEntry reveal_hotkey_hook_entry_;
 
 	AgentNameCache name_cache_;
@@ -732,6 +736,19 @@ private:
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		if (self->ShouldSuppressWarning(msg->channel)) {
 			status->blocked = true;
+		}
+	}
+
+	static void OnAgentNameTagLate(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
+		auto* tag = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
+		if (!tag) return;
+		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
+		if (!agent) return;
+		GW::AgentLiving* living = agent->GetAsAgentLiving();
+		if (!living) return;
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (const auto color = self->DecideAgentColor(living)) {
+			tag->text_color = static_cast<uint32_t>(*color);
 		}
 	}
 
