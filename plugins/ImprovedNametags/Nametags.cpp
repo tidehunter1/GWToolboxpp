@@ -530,8 +530,34 @@ private:
 	bool gwtoolbox_hook_scan_failed_ = false;
 	bool gwtoolbox_module_found_ = false;
 	bool gwtoolbox_string_found_ = false;
+	bool gwtoolbox_string_ambiguous_ = false;
+	bool gwtoolbox_ref_found_ = false;
+	bool gwtoolbox_ref_ambiguous_ = false;
 	bool gwtoolbox_func_start_found_ = false;
 	bool nametag_diag_disable_gwtoolbox_colors_ = false;
+
+	[[nodiscard]] static uintptr_t GetModuleImageSize(HMODULE mod) {
+		auto* base = reinterpret_cast<const uint8_t*>(mod);
+		auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+		if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+		auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+		if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
+		return nt->OptionalHeader.SizeOfImage;
+	}
+
+	[[nodiscard]] static uint8_t* FindBytesRaw(uint8_t* start, size_t range, const uint8_t* needle, size_t needle_len, uint8_t* after = nullptr) {
+		if (range < needle_len) return nullptr;
+		size_t begin_i = 0;
+		if (after) {
+			const size_t after_off = static_cast<size_t>(after - start) + 1;
+			if (after_off <= range - needle_len) begin_i = after_off;
+			else return nullptr;
+		}
+		for (size_t i = begin_i; i <= range - needle_len; ++i) {
+			if (std::memcmp(start + i, needle, needle_len) == 0) return start + i;
+		}
+		return nullptr;
+	}
 
 	void EnsureGWToolboxAgentNameTagHookInstalled() {
 		if (GWToolbox_OnAgentNameTag_Func || gwtoolbox_hook_scan_failed_) return;
@@ -544,17 +570,62 @@ private:
 			return;
 		}
 		gwtoolbox_module_found_ = true;
-		GW::Scanner::Initialize(tb_module);
-		const uintptr_t use_addr = GW::Scanner::FindUseOfString(L"\xa35\x101%s\x10a\x8101\x730e\x1");
-		gwtoolbox_string_found_ = use_addr != 0;
-		const uintptr_t addr = use_addr ? GW::Scanner::ToFunctionStart(use_addr) : 0;
-		gwtoolbox_func_start_found_ = addr != 0;
-		GW::Scanner::Initialize();
-		if (!addr) {
+
+		const uintptr_t image_size = GetModuleImageSize(tb_module);
+		if (!image_size) {
 			gwtoolbox_hook_scan_failed_ = true;
 			return;
 		}
-		GWToolbox_OnAgentNameTag_Func = reinterpret_cast<OnGWToolboxAgentNameTag_pt>(addr);
+		auto* base = reinterpret_cast<uint8_t*>(tb_module);
+
+		static const wchar_t kLockpicksFmt[] = L"\xa35\x101%s\x10a\x8101\x730e\x1";
+		const auto* str_needle = reinterpret_cast<const uint8_t*>(kLockpicksFmt);
+		const size_t str_len = (std::wcslen(kLockpicksFmt) + 1) * sizeof(wchar_t);
+
+		uint8_t* str_addr = FindBytesRaw(base, image_size, str_needle, str_len);
+		gwtoolbox_string_found_ = str_addr != nullptr;
+		if (!str_addr) {
+			gwtoolbox_hook_scan_failed_ = true;
+			return;
+		}
+		if (FindBytesRaw(base, image_size, str_needle, str_len, str_addr)) {
+			gwtoolbox_string_ambiguous_ = true;
+			gwtoolbox_hook_scan_failed_ = true;
+			return;
+		}
+
+		uint8_t addr_bytes[sizeof(uintptr_t)];
+		const uintptr_t str_addr_val = reinterpret_cast<uintptr_t>(str_addr);
+		std::memcpy(addr_bytes, &str_addr_val, sizeof(addr_bytes));
+
+		uint8_t* ref_addr = FindBytesRaw(base, image_size, addr_bytes, sizeof(addr_bytes));
+		gwtoolbox_ref_found_ = ref_addr != nullptr;
+		if (!ref_addr) {
+			gwtoolbox_hook_scan_failed_ = true;
+			return;
+		}
+		if (FindBytesRaw(base, image_size, addr_bytes, sizeof(addr_bytes), ref_addr)) {
+			gwtoolbox_ref_ambiguous_ = true;
+			gwtoolbox_hook_scan_failed_ = true;
+			return;
+		}
+
+		uint8_t* entry = nullptr;
+		for (int i = 1; i <= 0x400; ++i) {
+			uint8_t* candidate = ref_addr - i;
+			if (candidate < base) break;
+			if (candidate[0] == 0x55 && candidate[1] == 0x8B && candidate[2] == 0xEC) {
+				entry = candidate;
+				break;
+			}
+		}
+		gwtoolbox_func_start_found_ = entry != nullptr;
+		if (!entry) {
+			gwtoolbox_hook_scan_failed_ = true;
+			return;
+		}
+
+		GWToolbox_OnAgentNameTag_Func = reinterpret_cast<OnGWToolboxAgentNameTag_pt>(entry);
 		GW::Hook::CreateHook(&GWToolbox_OnAgentNameTag_Func, OnGWToolboxAgentNameTagDetour, &GWToolbox_OnAgentNameTag_Ret);
 		GW::Hook::EnableHooks(GWToolbox_OnAgentNameTag_Func);
 	}
@@ -904,8 +975,14 @@ private:
 				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "GWToolbox module not found (name mismatch?)");
 			} else if (!gwtoolbox_string_found_) {
 				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Module found, but lockpicks string not located (source string changed?)");
+			} else if (gwtoolbox_string_ambiguous_) {
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Lockpicks string found more than once (ambiguous)");
+			} else if (!gwtoolbox_ref_found_) {
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "String found, but no code reference to it located");
+			} else if (gwtoolbox_ref_ambiguous_) {
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Code reference to string found more than once (ambiguous)");
 			} else if (!gwtoolbox_func_start_found_) {
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "String found and referenced, but function prologue not found nearby");
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "String reference found, but function prologue not found nearby");
 			} else {
 				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "GWToolbox hook scan failed (unknown stage)");
 			}
