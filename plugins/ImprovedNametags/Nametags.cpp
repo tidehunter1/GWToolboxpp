@@ -35,7 +35,6 @@
 #include <cwchar>
 #include <optional>
 #include <algorithm>
-#include <cmath>
 #include <array>
 
 template<typename CacheMap>
@@ -194,7 +193,6 @@ struct NametagSettings {
 class ImprovedNametagsPlugin : public ToolboxPlugin {
 public:
 	ImprovedNametagsPlugin() {
-		GW::UI::RegisterUIMessageCallback(&target_change_hook_entry_, GW::UI::UIMessage::kChangeTarget, OnTargetChanged);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceChanged, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_, OnAgentAdd, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_, OnAgentRemove, 1);
@@ -202,8 +200,6 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
-		GW::UI::RegisterUIMessageCallback(&nametag_color_late_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagLate, 0x8000);
-		GW::UI::RegisterUIMessageCallback(&nametag_color_late_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagLate, 0x8000);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
 	}
@@ -265,7 +261,6 @@ public:
 	void Terminate() override {
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
-		GW::UI::RemoveUIMessageCallback(&nametag_color_late_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&target_change_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
@@ -306,7 +301,6 @@ private:
 	GW::HookEntry target_change_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
-	GW::HookEntry nametag_color_late_hook_entry_;
 	GW::HookEntry reveal_hotkey_hook_entry_;
 
 	AgentNameCache name_cache_;
@@ -616,7 +610,8 @@ private:
 		TriggerAllegianceRecolorForAgentId(living->agent_id);
 	}
 
-	void RefreshHealthbarForAgent(GW::Agent* agent) {
+	template<typename Fn>
+	void WithValidAgentState(GW::Agent* agent, Fn&& fn) {
 		if (!agent || !agent->GetIsLivingType()) return;
 		GW::AgentLiving* living = agent->GetAsAgentLiving();
 		if (!living || living->GetIsDead()) return;
@@ -626,21 +621,19 @@ private:
 		if (living->agent_id >= agent_state_.size()) {
 			agent_state_.resize(living->agent_id + 128);
 		}
-		UpdateAgentHealthbarState(living, agent_state_[living->agent_id]);
+		fn(living, agent_state_[living->agent_id]);
+	}
+
+	void RefreshHealthbarForAgent(GW::Agent* agent) {
+		WithValidAgentState(agent, [this](GW::AgentLiving* living, AgentState& state) {
+			UpdateAgentHealthbarState(living, state);
+		});
 	}
 
 	void RefreshManualTargetFlagForAgentId(uint32_t agent_id) {
-		GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-		if (!agent || !agent->GetIsLivingType()) return;
-		GW::AgentLiving* living = agent->GetAsAgentLiving();
-		if (!living || living->GetIsDead()) return;
-		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-		if (me && living->agent_id == me->agent_id) return;
-
-		if (living->agent_id >= agent_state_.size()) {
-			agent_state_.resize(living->agent_id + 128);
-		}
-		UpdateManualTargetFlag(living, agent_state_[living->agent_id]);
+		WithValidAgentState(GW::Agents::GetAgentByID(agent_id), [this](GW::AgentLiving* living, AgentState& state) {
+			UpdateManualTargetFlag(living, state);
+		});
 	}
 
 	void RefreshHealthbarForAgentId(uint32_t agent_id) {
@@ -736,19 +729,6 @@ private:
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		if (self->ShouldSuppressWarning(msg->channel)) {
 			status->blocked = true;
-		}
-	}
-
-	static void OnAgentNameTagLate(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
-		auto* tag = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
-		if (!tag) return;
-		GW::Agent* agent = GW::Agents::GetAgentByID(tag->agent_id);
-		if (!agent) return;
-		GW::AgentLiving* living = agent->GetAsAgentLiving();
-		if (!living) return;
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (const auto color = self->DecideAgentColor(living)) {
-			tag->text_color = static_cast<uint32_t>(*color);
 		}
 	}
 
@@ -897,59 +877,6 @@ private:
 			dirty_rescan_ = true;
 		}
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Debug: RefreshAgentNameTag test");
-		if (ImGui::CollapsingHeader("Manual refresh triggers")) {
-			const uint32_t target_id = GW::Agents::GetTargetId();
-			GW::Agent* target_agent = target_id ? GW::Agents::GetAgentByID(target_id) : nullptr;
-			if (target_agent) {
-				ImGui::Text("Current target: ID %u", target_id);
-				if (ImGui::Button("RefreshAgentNameTag on target")) {
-					GW::GameThread::Enqueue([target_id] {
-						GW::Agent* agent = GW::Agents::GetAgentByID(target_id);
-						if (agent) GW::Agents::RefreshAgentNameTag(agent);
-					});
-				}
-			} else {
-				ImGui::TextDisabled("No current target");
-			}
-
-			ImGui::Spacing();
-			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-			GW::AgentLiving* nearest_player = nullptr;
-			float nearest_dist_sq = 0.f;
-			if (me) {
-				GW::AgentArray* agents = GW::Agents::GetAgentArray();
-				if (agents && agents->valid()) {
-					for (GW::Agent* agent : *agents) {
-						if (!agent || !agent->GetIsLivingType()) continue;
-						GW::AgentLiving* living = agent->GetAsAgentLiving();
-						if (!living || living->GetIsDead() || !living->IsPlayer()) continue;
-						if (living->agent_id == me->agent_id) continue;
-						const float dx = agent->x - me->x;
-						const float dy = agent->y - me->y;
-						const float dist_sq = dx * dx + dy * dy;
-						if (!nearest_player || dist_sq < nearest_dist_sq) {
-							nearest_player = living;
-							nearest_dist_sq = dist_sq;
-						}
-					}
-				}
-			}
-			if (nearest_player) {
-				const uint32_t nearest_player_id = nearest_player->agent_id;
-				ImGui::Text("Nearest player: ID %u, distance %.0f", nearest_player_id, std::sqrt(nearest_dist_sq));
-				if (ImGui::Button("RefreshAgentNameTag on nearest player")) {
-					GW::GameThread::Enqueue([nearest_player_id] {
-						GW::Agent* agent = GW::Agents::GetAgentByID(nearest_player_id);
-						if (agent) GW::Agents::RefreshAgentNameTag(agent);
-					});
-				}
-			} else {
-				ImGui::TextDisabled("No nearby player found");
-			}
-		}
 
 	}
 };
