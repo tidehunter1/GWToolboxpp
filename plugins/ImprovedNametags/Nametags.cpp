@@ -203,8 +203,8 @@ public:
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
-		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagDiag, 0x7FFFFFFF);
-		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagDiag, 0x7FFFFFFF);
+		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnAgentNameTagDiag, -0x7FFFFFFF);
+		GW::UI::RegisterUIMessageCallback(&nametag_diag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnAgentNameTagDiag, -0x7FFFFFFF);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -314,6 +314,7 @@ private:
 	uint32_t nametag_diag_watch_id_ = 0;
 	uint32_t nametag_diag_watch_hits_ = 0;
 	bool nametag_diag_force_color_ = false;
+	bool nametag_diag_block_message_ = false;
 	int nametag_diag_force_offset_ = 0x14;
 	uintptr_t nametag_diag_last_addr_ = 0;
 	std::array<uint8_t, 32> nametag_diag_last_bytes_{};
@@ -727,7 +728,7 @@ private:
 		}
 	}
 
-	static void OnAgentNameTagDiag(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
+	static void OnAgentNameTagDiag(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
 		auto* tag = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
 		if (!tag) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
@@ -743,6 +744,9 @@ private:
 					uint32_t magenta = 0xFFFF00FFu;
 					std::memcpy(base + off, &magenta, sizeof(magenta));
 				}
+			}
+			if (self->nametag_diag_block_message_ && status) {
+				status->blocked = true;
 			}
 		}
 	}
@@ -822,6 +826,7 @@ private:
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(80.f);
 		ImGui::InputInt("offset (decimal)", &nametag_diag_force_offset_);
+		ImGui::Checkbox("Block message for watched agent (runs before GWToolbox)", &nametag_diag_block_message_);
 		ImGui::Text("last struct address: 0x%08zX", nametag_diag_last_addr_);
 		if (nametag_diag_last_addr_ != 0) {
 			std::string hex_line;
