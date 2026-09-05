@@ -2001,15 +2001,19 @@ void GameSettings::DrawSettingsInternal()
     ImGui::Unindent();
     ImGui::NewLine();
     ImGui::Checkbox("Show 'You have N Lockpicks' on Locked Chest name tags", &settings.show_amount_of_lockpicks_under_locked_chest_nametag);
-    ImGui::Text("In-game name tag colors:");
-    ImGui::ShowHelp("These set global name tag colors by category.\nTo set a custom color for a specific agent, see Minimap > Custom Agents > Text Color.");
+    if (ImGui::Checkbox("In-game name tag colors", &settings.override_name_tag_colors)) {
+        nametag_color_cache.clear();
+    }
+    ImGui::ShowHelp("These set global name tag colors by category.\nTo set a custom color for a specific agent, see Minimap > Custom Agents > Text Color.\nUncheck to let Guild Wars use its own configured name tag colors instead.");
     ImGui::Indent();
+    ImGui::BeginDisabled(!settings.override_name_tag_colors);
     ImGui::StartSpacedElements(checkbox_w);
     constexpr uint32_t flags = ImGuiColorEditFlags_NoInputs;
     for (auto& c : nametag_color_settings) {
         ImGui::NextSpacedElement();
         Colors::DrawSettingHueWheel(c.label, c.ptr, flags);
     }
+    ImGui::EndDisabled();
     ImGui::Unindent();
 
     ImGui::NewLine();
@@ -2502,35 +2506,37 @@ void GameSettings::OnAgentNameTag(GW::HookStatus*, const GW::UI::UIMessage msgid
         return;
     }
     const auto tag = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
-    // Apply default colors for nametags
-    for (const auto& c : nametag_color_settings) {
-        if (c.player_override) {
-            continue;
-        }
-        if (tag->text_color == static_cast<Color>(c.default_val)) {
-            tag->text_color = *c.ptr;
-            break;
-        }
-    }
-    // Override colors for friends, guildies and party members
-    if (tag->name_enc) {
-        const auto player_name = TextUtils::GetPlayerNameFromEncodedString(tag->name_enc);
-        if (!player_name.empty() && player_name != GetPlayerName()) {
-            const auto cached = nametag_color_cache.find(player_name);
-            if (cached != nametag_color_cache.end()) {
-                tag->text_color = cached->second;
+    if (settings.override_name_tag_colors) {
+        // Apply default colors for nametags
+        for (const auto& c : nametag_color_settings) {
+            if (c.player_override) {
+                continue;
             }
-            else {
-                if (GW::FriendListMgr::GetFriend(nullptr, player_name.c_str(), GW::FriendType::Friend)) {
-                    tag->text_color = settings.nametag_color_friends;
+            if (tag->text_color == static_cast<Color>(c.default_val)) {
+                tag->text_color = *c.ptr;
+                break;
+            }
+        }
+        // Override colors for friends, guildies and party members
+        if (tag->name_enc) {
+            const auto player_name = TextUtils::GetPlayerNameFromEncodedString(tag->name_enc);
+            if (!player_name.empty() && player_name != GetPlayerName()) {
+                const auto cached = nametag_color_cache.find(player_name);
+                if (cached != nametag_color_cache.end()) {
+                    tag->text_color = cached->second;
                 }
-                else if (IsGuildMemberPlayer(player_name.c_str())) {
-                    tag->text_color = settings.nametag_color_guild_members;
+                else {
+                    if (GW::FriendListMgr::GetFriend(nullptr, player_name.c_str(), GW::FriendType::Friend)) {
+                        tag->text_color = settings.nametag_color_friends;
+                    }
+                    else if (IsGuildMemberPlayer(player_name.c_str())) {
+                        tag->text_color = settings.nametag_color_guild_members;
+                    }
+                    else if (IsAgentInMyParty(tag->agent_id)) {
+                        tag->text_color = settings.nametag_color_player_in_my_party;
+                    }
+                    nametag_color_cache[player_name] = tag->text_color;
                 }
-                else if (IsAgentInMyParty(tag->agent_id)) {
-                    tag->text_color = settings.nametag_color_player_in_my_party;
-                }
-                nametag_color_cache[player_name] = tag->text_color;
             }
         }
     }
