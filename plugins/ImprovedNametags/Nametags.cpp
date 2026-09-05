@@ -271,7 +271,6 @@ public:
 
 	void Terminate() override {
 		RemoveAllegianceColorHook();
-		RemoveDebugDispatcherHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
@@ -285,7 +284,6 @@ public:
 	void Draw(IDirect3DDevice9*) override {
 		++frame_counter_;
 		EnsureAllegianceColorHookInstalled();
-		EnsureDebugDispatcherHookInstalled();
 
 		if (!chat_suppress_hook_detached_ && frame_counter_ >= kStartupSuppressionFrames) {
 			chat_suppress_hook_detached_ = true;
@@ -358,6 +356,8 @@ private:
 	struct AgentState {
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
+		bool has_allegiance_bits = false;
+		uint32_t last_allegiance_bits = 0;
 	};
 	std::vector<AgentState> agent_state_;
 
@@ -508,54 +508,6 @@ private:
 		}
 	}
 
-	using AllegianceReasonDispatcher_pt = void(__cdecl*)(void*);
-	static inline AllegianceReasonDispatcher_pt AllegianceReasonDispatcher_Func = nullptr;
-	static inline AllegianceReasonDispatcher_pt AllegianceReasonDispatcher_Ret = nullptr;
-	bool debug_dispatcher_hook_scan_failed_ = false;
-
-	uint32_t debug_watch_agent_id_ = 0;
-	uint32_t debug_watch_hit_count_ = 0;
-	uint32_t debug_watch_last_reason_ = 0xFFFFFFFFu;
-
-	static void __cdecl OnAllegianceReasonDispatchDebug(void* param_1) {
-		GW::Hook::EnterHook();
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		if (param_1) {
-			auto* base = reinterpret_cast<uint8_t*>(param_1);
-			const uint32_t reason = *reinterpret_cast<uint32_t*>(base);
-			auto** agent_struct = reinterpret_cast<uint32_t**>(base + 0xC);
-			if (*agent_struct) {
-				const uint32_t agent_id = *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(*agent_struct) + 0x14);
-				if (self->debug_watch_agent_id_ != 0 && agent_id == self->debug_watch_agent_id_) {
-					++self->debug_watch_hit_count_;
-					self->debug_watch_last_reason_ = reason;
-				}
-			}
-		}
-		AllegianceReasonDispatcher_Ret(param_1);
-		GW::Hook::LeaveHook();
-	}
-
-	void EnsureDebugDispatcherHookInstalled() {
-		if (AllegianceReasonDispatcher_Func || debug_dispatcher_hook_scan_failed_) return;
-		if (!EnsureScanned(AllegianceReasonDispatcher_Func, debug_dispatcher_hook_scan_failed_,
-			"\x55\x8b\xec\x83\xec\x18\x56\x57\x8b\x7d\x08\x8b\x77\x0c\x85\xf6\x75\x14\x68\x08\x01\x00\x00\xba\xdd\xdd\xdd\xdd\xb9\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\x83\x3f",
-			"xxxxxxxxxxxxxxxxxxxxxxxx????x????x????xx")) {
-			return;
-		}
-		GW::Hook::CreateHook(&AllegianceReasonDispatcher_Func, OnAllegianceReasonDispatchDebug, &AllegianceReasonDispatcher_Ret);
-		GW::Hook::EnableHooks(AllegianceReasonDispatcher_Func);
-	}
-
-	void RemoveDebugDispatcherHook() {
-		if (AllegianceReasonDispatcher_Func) {
-			GW::Hook::DisableHooks(AllegianceReasonDispatcher_Func);
-			GW::Hook::RemoveHook(AllegianceReasonDispatcher_Func);
-			AllegianceReasonDispatcher_Func = nullptr;
-			AllegianceReasonDispatcher_Ret = nullptr;
-		}
-	}
-
 	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
@@ -566,21 +518,11 @@ private:
 			"xxxxxxxxxxxxxxxx");
 	}
 
-	using QueueEventAllocator_pt = void*(__thiscall*)(void*, uint32_t);
-	static inline QueueEventAllocator_pt QueueEventAllocator_Func = nullptr;
-
-	static bool EnsureQueueEventAllocatorScanned() {
-		static bool scan_failed = false;
-		return EnsureScanned(QueueEventAllocator_Func, scan_failed,
-			"\x55\x8b\xec\x53\x56\x57\x8b\xf9\xe8\x23\x3b\xff\xff\x8b\x55\x08\x8b\xd8\x89\x13\x8b\x57\x2c\x89\x53\x04\xc7\x43\x08\x00\x00\x00\x00\x81\xbf\x40\x01\x00\x00\xdd\xdd\xdd\xdd\x75\x14\x68\x87\x01\x00\x00\xba\x38\xdf\x93\x00\xb9\xbc\xdf\x93\x00\xe8\xcf\x23\xc9\xff\x8b\xb7\x40\x01\x00\x00\x03\xf3\x8b\x16\x8b\x4e\x04\x8b\x06\x83\xe1\xfe\x8b\x40\x04\x83\xe0\xfe\x2b\xc8\x89\x14\x31\x8b\x4e\x04\x8b\x06\x89\x48\x04\x8b\x87\x44\x01\x00\x00\x89\x06\x8b\x06\x8b\x40\x04\x89\x46\x04\x8b\x87\x44\x01\x00\x00\x89\x58\x04\x89\xb7\x44\x01\x00\x00\xa1\x38\xa8\x08\x01\x85\xc0\x0f\x84\xc0\x00\x00\x00\x50",
-			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx");
-	}
-
-	static void TriggerAllegianceRecolor(GW::Agent* agent, uint32_t allegiance_value) {
-		if (!QueueEventAllocator_Func) return;
-		void* node = QueueEventAllocator_Func(agent, 8);
-		if (!node) return;
-		*reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(node) + 0x1c) = allegiance_value;
+	static void TriggerAllegianceRecolorViaEmulatePacket(uint32_t agent_id, uint32_t allegiance_bits) {
+		GW::Packet::StoC::AgentUpdateAllegiance packet;
+		packet.agent_id = agent_id;
+		packet.allegiance_bits = allegiance_bits;
+		GW::StoC::EmulatePacket(&packet);
 	}
 
 	void OnRevealHotkeyStateChanged() {
@@ -628,14 +570,14 @@ private:
 	}
 
 	void TriggerAllegianceRecolorForAgentId(uint32_t agent_id) {
-		EnsureQueueEventAllocatorScanned();
-		GW::GameThread::Enqueue([agent_id] {
+		const bool has_bits = agent_id < agent_state_.size() && agent_state_[agent_id].has_allegiance_bits;
+		const uint32_t bits = has_bits ? agent_state_[agent_id].last_allegiance_bits : 0;
+		GW::GameThread::Enqueue([agent_id, has_bits, bits] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent) return;
-			GW::AgentLiving* fresh_living = agent->GetAsAgentLiving();
-			if (!fresh_living) return;
-			const uint32_t allegiance_value = static_cast<uint32_t>(fresh_living->allegiance);
-			TriggerAllegianceRecolor(agent, allegiance_value);
+			if (has_bits) {
+				TriggerAllegianceRecolorViaEmulatePacket(agent_id, bits);
+			}
 
 			const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
 			agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
@@ -696,13 +638,12 @@ private:
 		if (!pak) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		self->RefreshManualTargetFlagForAgentId(pak->agent_id);
-		self->debug_last_agent_id_ = pak->agent_id;
-		self->debug_last_allegiance_bits_ = pak->allegiance_bits;
-		self->debug_has_last_packet_ = true;
-		if (!self->debug_watch_locked_ && self->debug_watch_agent_id_ != pak->agent_id) {
-			self->debug_watch_agent_id_ = pak->agent_id;
-			self->debug_watch_hit_count_ = 0;
-			self->debug_watch_last_reason_ = 0xFFFFFFFFu;
+		if (pak->agent_id < self->agent_state_.size()) {
+			self->agent_state_[pak->agent_id].has_allegiance_bits = true;
+			self->agent_state_[pak->agent_id].last_allegiance_bits = pak->allegiance_bits;
+		}
+		if (!self->debug_source_locked_) {
+			self->debug_source_agent_id_ = pak->agent_id;
 		}
 		const uint32_t agent_id = pak->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
@@ -711,13 +652,8 @@ private:
 		});
 	}
 
-	uint32_t debug_last_agent_id_ = 0;
-	uint32_t debug_last_allegiance_bits_ = 0;
-	bool debug_has_last_packet_ = false;
-	bool debug_watch_locked_ = false;
-	uint32_t debug_frozen_agent_id_ = 0;
-	uint32_t debug_frozen_allegiance_bits_ = 0;
-	bool debug_has_frozen_ = false;
+	uint32_t debug_source_agent_id_ = 0;
+	bool debug_source_locked_ = false;
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
 		if (!pak) return;
@@ -929,34 +865,15 @@ private:
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Debug");
-		if (debug_has_last_packet_) {
-			ImGui::Text("Last real packet: agent %u, bits 0x%08X", debug_last_agent_id_, debug_last_allegiance_bits_);
-		} else {
-			ImGui::TextUnformatted("Last real packet: none seen yet");
-		}
-		ImGui::Checkbox("Lock watch target (stop auto-following newest packet)", &debug_watch_locked_);
-		ImGui::Text("Watching agent %u dispatch calls: %u hits, last reason: %s",
-			debug_watch_agent_id_, debug_watch_hit_count_,
-			debug_watch_last_reason_ == 0xFFFFFFFFu ? "none yet" : std::to_string(debug_watch_last_reason_).c_str());
-		if (debug_dispatcher_hook_scan_failed_) {
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Dispatcher hook scan failed");
-		}
-		if (ImGui::Button("Freeze this packet for replay") && debug_has_last_packet_) {
-			debug_frozen_agent_id_ = debug_last_agent_id_;
-			debug_frozen_allegiance_bits_ = debug_last_allegiance_bits_;
-			debug_has_frozen_ = true;
-		}
-		ImGui::SameLine();
-		if (debug_has_frozen_) {
-			ImGui::Text("Frozen: agent %u, bits 0x%08X", debug_frozen_agent_id_, debug_frozen_allegiance_bits_);
-		} else {
-			ImGui::TextUnformatted("Frozen: none yet");
-		}
-		if (ImGui::Button("Fire EmulatePacket (frozen packet)") && debug_has_frozen_) {
-			GW::Packet::StoC::AgentUpdateAllegiance packet;
-			packet.agent_id = debug_frozen_agent_id_;
-			packet.allegiance_bits = debug_frozen_allegiance_bits_;
-			GW::StoC::EmulatePacket(&packet);
+		ImGui::Checkbox("Lock source agent", &debug_source_locked_);
+		ImGui::Text("Source agent: %u", debug_source_agent_id_);
+		if (ImGui::Button("Apply source's allegiance to current target")) {
+			const uint32_t target_id = GW::Agents::GetTargetId();
+			if (target_id != 0 && debug_source_agent_id_ < agent_state_.size()
+				&& agent_state_[debug_source_agent_id_].has_allegiance_bits) {
+				const uint32_t bits = agent_state_[debug_source_agent_id_].last_allegiance_bits;
+				TriggerAllegianceRecolorViaEmulatePacket(target_id, bits);
+			}
 		}
 	}
 };
