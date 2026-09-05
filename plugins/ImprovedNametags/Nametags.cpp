@@ -314,6 +314,7 @@ private:
 	uint32_t nametag_diag_watch_id_ = 0;
 	uint32_t nametag_diag_watch_hits_ = 0;
 	bool nametag_diag_force_color_ = false;
+	int nametag_diag_force_offset_ = 0x14;
 	uintptr_t nametag_diag_last_addr_ = 0;
 	std::array<uint8_t, 32> nametag_diag_last_bytes_{};
 
@@ -736,7 +737,12 @@ private:
 			self->nametag_diag_last_addr_ = reinterpret_cast<uintptr_t>(tag);
 			std::memcpy(self->nametag_diag_last_bytes_.data(), tag, self->nametag_diag_last_bytes_.size());
 			if (self->nametag_diag_force_color_) {
-				tag->text_color = 0xFFFF00FFu;
+				auto* base = reinterpret_cast<uint8_t*>(tag);
+				const int off = self->nametag_diag_force_offset_;
+				if (off >= 0 && static_cast<size_t>(off) + 4 <= self->nametag_diag_last_bytes_.size()) {
+					uint32_t magenta = 0xFFFF00FFu;
+					std::memcpy(base + off, &magenta, sizeof(magenta));
+				}
 			}
 		}
 	}
@@ -813,6 +819,9 @@ private:
 		ImGui::SameLine();
 		ImGui::Text("watching agent %u, hits: %u", nametag_diag_watch_id_, nametag_diag_watch_hits_);
 		ImGui::Checkbox("Force magenta on watched agent", &nametag_diag_force_color_);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(80.f);
+		ImGui::InputInt("offset (decimal)", &nametag_diag_force_offset_);
 		ImGui::Text("last struct address: 0x%08zX", nametag_diag_last_addr_);
 		if (nametag_diag_last_addr_ != 0) {
 			std::string hex_line;
