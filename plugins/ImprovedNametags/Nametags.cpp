@@ -1,8 +1,6 @@
 #include <cstdint>
-#include <cstring>
 #include <cstddef>
 #include <cstdio>
-#include <functional>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -78,6 +76,17 @@ inline FuncPtr ResolveScannedFunc(FuncPtr& cached, const char* pattern, const ch
 		if (addr) cached = reinterpret_cast<FuncPtr>(addr);
 	}
 	return cached;
+}
+
+template<typename FuncPtr>
+inline bool EnsureScanned(FuncPtr& cached, bool& failed, const char* pattern, const char* mask) {
+	if (cached) return true;
+	if (failed) return false;
+	if (!ResolveScannedFunc(cached, pattern, mask)) {
+		failed = true;
+		return false;
+	}
+	return true;
 }
 
 class AgentNameCache {
@@ -346,6 +355,8 @@ private:
 	struct AgentState {
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
+		bool has_allegiance_bits = false;
+		uint32_t last_allegiance_bits = 0;
 	};
 	std::vector<AgentState> agent_state_;
 
@@ -477,11 +488,9 @@ private:
 	bool allegiance_hook_scan_failed_ = false;
 
 	void EnsureAllegianceColorHookInstalled() {
-		if (AllegianceColor_Func || allegiance_hook_scan_failed_) return;
-		if (!ResolveScannedFunc(AllegianceColor_Func,
+		if (!EnsureScanned(AllegianceColor_Func, allegiance_hook_scan_failed_,
 			"\x55\x8b\xec\x51\x56\x57\x8b\xf9\xf6\x87\x5c\x01\x00\x00\x08\x74\x09\xc7\x45\xfc\xa0\xa0\xa0\xff\xeb\x25\x8a\x87\xb5\x01\x00\x00\x3c\x03\x75\x09\xc7\x45\xfc\x00\x00\xff\xff\xeb\x12\xc7\x45\xfc\x00\xff\xa0\xff\x3c\x06\x74\x07",
 			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
-			allegiance_hook_scan_failed_ = true;
 			return;
 		}
 		GW::Hook::CreateHook(&AllegianceColor_Func, OnAllegianceColor, &AllegianceColor_Ret);
@@ -502,15 +511,9 @@ private:
 
 	static bool EnsureSetNameTagBitScanned() {
 		static bool scan_failed = false;
-		if (SetNameTagBit_Func) return true;
-		if (scan_failed) return false;
-		if (!ResolveScannedFunc(SetNameTagBit_Func,
+		return EnsureScanned(SetNameTagBit_Func, scan_failed,
 			"\x55\x8b\xec\x83\xec\x64\x83\x7d\x0c\x00\x53\x57\x8b\xf9\x8b\x57\x58\x74\x07\x8b\xda\x0b\x5d\x08\xeb\x07\x8b\x5d\x08\xf7\xd3\x23\xda\x89\x5f\x58\x3b\xd3\x0f\x84\x36\x01\x00\x00\x8d\x45\xf4\x50\x8d\x45\x0c\x50\x52",
-			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
-			scan_failed = true;
-			return false;
-		}
-		return true;
+			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
 	}
 
 	using QueueEventAllocator_pt = void*(__thiscall*)(void*, uint32_t);
@@ -518,15 +521,9 @@ private:
 
 	static bool EnsureQueueEventAllocatorScanned() {
 		static bool scan_failed = false;
-		if (QueueEventAllocator_Func) return true;
-		if (scan_failed) return false;
-		if (!ResolveScannedFunc(QueueEventAllocator_Func,
+		return EnsureScanned(QueueEventAllocator_Func, scan_failed,
 			"\x55\x8b\xec\x53\x56\x57\x8b\xf9\xe8\x23\x3b\xff\xff\x8b\x55\x08\x8b\xd8\x89\x13\x8b\x57\x2c\x89\x53\x04\xc7\x43\x08\x00\x00\x00\x00\x81\xbf\x40\x01\x00\x00\xdd\xdd\xdd\xdd\x75\x14\x68\x87\x01\x00\x00\xba\x38\xdf\x93\x00\xb9\xbc\xdf\x93\x00\xe8\xcf\x23\xc9\xff\x8b\xb7\x40\x01\x00\x00\x03\xf3\x8b\x16\x8b\x4e\x04\x8b\x06\x83\xe1\xfe\x8b\x40\x04\x83\xe0\xfe\x2b\xc8\x89\x14\x31\x8b\x4e\x04\x8b\x06\x89\x48\x04\x8b\x87\x44\x01\x00\x00\x89\x06\x8b\x06\x8b\x40\x04\x89\x46\x04\x8b\x87\x44\x01\x00\x00\x89\x58\x04\x89\xb7\x44\x01\x00\x00\xa1\x38\xa8\x08\x01\x85\xc0\x0f\x84\xc0\x00\x00\x00\x50",
-			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx")) {
-			scan_failed = true;
-			return false;
-		}
-		return true;
+			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx");
 	}
 
 	static void TriggerAllegianceRecolor(GW::Agent* agent, uint32_t allegiance_value) {
@@ -534,6 +531,15 @@ private:
 		void* node = QueueEventAllocator_Func(agent, 8);
 		if (!node) return;
 		*reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(node) + 0x1c) = allegiance_value;
+	}
+
+	bool test_use_emulate_packet_recolor_ = false;
+
+	static void TriggerAllegianceRecolorViaEmulatePacket(uint32_t agent_id, uint32_t allegiance_bits) {
+		GW::Packet::StoC::AgentUpdateAllegiance packet;
+		packet.agent_id = agent_id;
+		packet.allegiance_bits = allegiance_bits;
+		GW::StoC::EmulatePacket(&packet);
 	}
 
 	void OnRevealHotkeyStateChanged() {
@@ -581,6 +587,15 @@ private:
 	}
 
 	void TriggerAllegianceRecolorForAgentId(uint32_t agent_id) {
+		if (test_use_emulate_packet_recolor_
+			&& agent_id < agent_state_.size()
+			&& agent_state_[agent_id].has_allegiance_bits) {
+			const uint32_t bits = agent_state_[agent_id].last_allegiance_bits;
+			GW::GameThread::Enqueue([agent_id, bits] {
+				TriggerAllegianceRecolorViaEmulatePacket(agent_id, bits);
+			});
+			return;
+		}
 		EnsureQueueEventAllocatorScanned();
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
@@ -648,6 +663,11 @@ private:
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (pak->agent_id >= self->agent_state_.size()) {
+			self->agent_state_.resize(pak->agent_id + 128);
+		}
+		self->agent_state_[pak->agent_id].has_allegiance_bits = true;
+		self->agent_state_[pak->agent_id].last_allegiance_bits = pak->allegiance_bits;
 		self->RefreshManualTargetFlagForAgentId(pak->agent_id);
 		const uint32_t agent_id = pak->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
@@ -864,6 +884,10 @@ private:
 		}
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
 
+		ImGui::Spacing();
+		ImGui::SeparatorText("Experimental");
+		ImGui::Checkbox("Use EmulatePacket for allegiance recolor (test)", &test_use_emulate_packet_recolor_);
+		ShowHelpMarker("Replaces the QueueEventAllocator_Func signature scan with GW::StoC::EmulatePacket, replaying the last real allegiance packet seen for that agent. Falls back to the old path if no real packet has been seen yet for that agent this session.");
 	}
 };
 
