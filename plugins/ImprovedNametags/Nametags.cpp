@@ -261,7 +261,6 @@ public:
 	void Terminate() override {
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
-		GW::UI::RemoveUIMessageCallback(&target_change_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_);
@@ -298,7 +297,6 @@ private:
 	GW::HookEntry agent_add_hook_entry_;
 	GW::HookEntry agent_remove_hook_entry_;
 	GW::HookEntry marker_hook_entry_;
-	GW::HookEntry target_change_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
 	GW::HookEntry reveal_hotkey_hook_entry_;
@@ -487,33 +485,6 @@ private:
 		}
 	}
 
-	using EvaluatedTargetWrapper_pt = void(__thiscall*)(void*, uint32_t);
-	static inline EvaluatedTargetWrapper_pt EvaluatedTargetWrapper_Func = nullptr;
-
-	static bool EnsureEvaluatedTargetWrapperScanned() {
-		if (EvaluatedTargetWrapper_Func) return true;
-		if (!ResolveScannedFunc(EvaluatedTargetWrapper_Func,
-			"\x55\x8b\xec\x8b\x55\x08\x56\x8b\xf1\x8b\x4e\x58\x8b\xc1\xc1\xe8\x07\x83\xe0\x01\x3b\xd0\x74\x7c\x85\xd2\x74\x3e\xf6\xc1\x10\x74\x1d\x8b\x86\x98\x00\x00\x00\x85",
-			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) return false;
-		return true;
-	}
-
-	static void ApplyRingRefreshIfTarget(GW::Agent* agent, uint32_t agent_id) {
-		if (EvaluatedTargetWrapper_Func && GW::Agents::GetTargetId() == agent_id) {
-			EvaluatedTargetWrapper_Func(agent, 0);
-			EvaluatedTargetWrapper_Func(agent, 1);
-		}
-	}
-
-	static void RefreshTargetedRing(uint32_t agent_id) {
-		if (!EnsureEvaluatedTargetWrapperScanned()) return;
-		GW::GameThread::Enqueue([agent_id] {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent) return;
-			ApplyRingRefreshIfTarget(agent, agent_id);
-		});
-	}
-
 	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
@@ -650,12 +621,6 @@ private:
 		for (GW::Agent* agent : *agents) {
 			RefreshHealthbarForAgent(agent);
 		}
-	}
-
-	static void OnTargetChanged(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
-		auto* pak = static_cast<GW::UI::UIPacket::kChangeTarget*>(wParam);
-		if (!pak || !pak->has_evaluated_target_changed || pak->evaluated_target_id == 0) return;
-		RefreshTargetedRing(pak->evaluated_target_id);
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
