@@ -356,6 +356,8 @@ private:
 	struct AgentState {
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
+		bool has_allegiance_bits = false;
+		uint32_t last_allegiance_bits = 0;
 	};
 	std::vector<AgentState> agent_state_;
 
@@ -487,6 +489,7 @@ private:
 	bool allegiance_hook_scan_failed_ = false;
 
 	void EnsureAllegianceColorHookInstalled() {
+		if (AllegianceColor_Func || allegiance_hook_scan_failed_) return;
 		if (!EnsureScanned(AllegianceColor_Func, allegiance_hook_scan_failed_,
 			"\x55\x8b\xec\x51\x56\x57\x8b\xf9\xf6\x87\x5c\x01\x00\x00\x08\x74\x09\xc7\x45\xfc\xa0\xa0\xa0\xff\xeb\x25\x8a\x87\xb5\x01\x00\x00\x3c\x03\x75\x09\xc7\x45\xfc\x00\x00\xff\xff\xeb\x12\xc7\x45\xfc\x00\xff\xa0\xff\x3c\x06\x74\x07",
 			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
@@ -530,6 +533,15 @@ private:
 		void* node = QueueEventAllocator_Func(agent, 8);
 		if (!node) return;
 		*reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(node) + 0x1c) = allegiance_value;
+	}
+
+	bool test_use_emulate_packet_recolor_ = false;
+
+	static void TriggerAllegianceRecolorViaEmulatePacket(uint32_t agent_id, uint32_t allegiance_bits) {
+		GW::Packet::StoC::AgentUpdateAllegiance packet;
+		packet.agent_id = agent_id;
+		packet.allegiance_bits = allegiance_bits;
+		GW::StoC::EmulatePacket(&packet);
 	}
 
 	void OnRevealHotkeyStateChanged() {
@@ -577,6 +589,15 @@ private:
 	}
 
 	void TriggerAllegianceRecolorForAgentId(uint32_t agent_id) {
+		if (test_use_emulate_packet_recolor_
+			&& agent_id < agent_state_.size()
+			&& agent_state_[agent_id].has_allegiance_bits) {
+			const uint32_t bits = agent_state_[agent_id].last_allegiance_bits;
+			GW::GameThread::Enqueue([agent_id, bits] {
+				TriggerAllegianceRecolorViaEmulatePacket(agent_id, bits);
+			});
+			return;
+		}
 		EnsureQueueEventAllocatorScanned();
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
@@ -645,6 +666,10 @@ private:
 		if (!pak) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		self->RefreshManualTargetFlagForAgentId(pak->agent_id);
+		if (pak->agent_id < self->agent_state_.size()) {
+			self->agent_state_[pak->agent_id].has_allegiance_bits = true;
+			self->agent_state_[pak->agent_id].last_allegiance_bits = pak->allegiance_bits;
+		}
 		const uint32_t agent_id = pak->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
@@ -860,6 +885,10 @@ private:
 		}
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
 
+		ImGui::Spacing();
+		ImGui::SeparatorText("Experimental");
+		ImGui::Checkbox("Use EmulatePacket for allegiance recolor (test)", &test_use_emulate_packet_recolor_);
+		ShowHelpMarker("Replaces the QueueEventAllocator_Func signature scan with GW::StoC::EmulatePacket, replaying the last real allegiance packet seen for that agent. Falls back to the old path if no real packet has been seen yet for that agent this session.");
 	}
 };
 
