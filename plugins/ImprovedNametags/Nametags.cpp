@@ -263,6 +263,7 @@ public:
 
 	void Terminate() override {
 		RemoveAllegianceColorHook();
+		RemoveGWToolboxAgentNameTagHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
@@ -277,6 +278,7 @@ public:
 	void Draw(IDirect3DDevice9*) override {
 		++frame_counter_;
 		EnsureAllegianceColorHookInstalled();
+		EnsureGWToolboxAgentNameTagHookInstalled();
 
 		if (!chat_suppress_hook_detached_ && frame_counter_ >= kStartupSuppressionFrames) {
 			chat_suppress_hook_detached_ = true;
@@ -313,7 +315,10 @@ private:
 	uint32_t nametag_diag_total_ = 0;
 	uint32_t nametag_diag_watch_id_ = 0;
 	uint32_t nametag_diag_watch_hits_ = 0;
+	uint32_t nametag_diag_watch_hits_show_ = 0;
+	uint32_t nametag_diag_watch_hits_attribs_ = 0;
 	bool nametag_diag_force_color_ = false;
+	bool nametag_diag_force_show_only_ = false;
 	bool nametag_diag_block_message_ = false;
 	int nametag_diag_force_offset_ = 0x14;
 	uintptr_t nametag_diag_last_addr_ = 0;
@@ -506,6 +511,52 @@ private:
 			GW::Hook::RemoveHook(AllegianceColor_Func);
 			AllegianceColor_Func = nullptr;
 			AllegianceColor_Ret = nullptr;
+		}
+	}
+
+	using OnGWToolboxAgentNameTag_pt = void(__cdecl*)(GW::HookStatus*, GW::UI::UIMessage, void*, void*);
+	static inline OnGWToolboxAgentNameTag_pt GWToolbox_OnAgentNameTag_Func = nullptr;
+	static inline OnGWToolboxAgentNameTag_pt GWToolbox_OnAgentNameTag_Ret = nullptr;
+
+	static void __cdecl OnGWToolboxAgentNameTagDetour(GW::HookStatus* status, GW::UI::UIMessage msgid, void* wParam, void* p4) {
+		GW::Hook::EnterHook();
+		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		if (!self->nametag_diag_disable_gwtoolbox_colors_) {
+			GWToolbox_OnAgentNameTag_Ret(status, msgid, wParam, p4);
+		}
+		GW::Hook::LeaveHook();
+	}
+
+	bool gwtoolbox_hook_scan_failed_ = false;
+	bool nametag_diag_disable_gwtoolbox_colors_ = false;
+
+	void EnsureGWToolboxAgentNameTagHookInstalled() {
+		if (GWToolbox_OnAgentNameTag_Func || gwtoolbox_hook_scan_failed_) return;
+		HMODULE tb_module = GetModuleHandleA("GWToolboxdll.dll");
+		if (!tb_module) {
+			gwtoolbox_hook_scan_failed_ = true;
+			return;
+		}
+		GW::Scanner::Initialize(tb_module);
+		const uintptr_t addr = GW::Scanner::Find(
+			"\x55\x8b\xec\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x64\xa1\x00\x00\x00\x00\x50\x83\xec\x40\xdd\xdd\xdd\xdd\xdd\x33\xc5\xdd\xdd\xdd\x56\x57\x50\xdd\xdd\xdd\x64\xa3\x00\x00\x00\x00\x8b\x45\x0c\x8b\x7d\x10\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x66\x90\x80\x79\x0c\x00\xdd\xdd\x8b\x47\x14\x3b\x41\x04\xdd\xdd\x83\xc1\x10\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x8b\x41\x08\x8b\x00\x89\x47\x14\x8b\x57\x0c\x85\xd2\xdd\xdd\xdd\xdd\xdd\xdd\x83\xec\x08\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\x83\xc4\x08\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x33\xd2\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\x8b\xd0\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x84\xc0\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x50\xe8\xdd\xdd\xdd\xdd\x83\xc4\x08\xdd\xdd\xdd\xdd\xdd\x50\xdd\xdd\xdd\x50\xdd\xdd\xdd\x50\xe8\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x8b\xd1\x8b\x40\x04\x85\xc0\x0f\x45\xd0\x3b\xd1\xdd\xdd\x8b\x42\x20\x89\x47\x14\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x6a\x01\xdd\xdd\xdd\xdd\x50\x6a\x00\xff\xdd\xdd\xdd\xdd\xdd\x83\xc4\x0c\x85\xc0\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\x84\xc0\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x8b\x0f\xe8\xdd\xdd\xdd\xdd\x84\xc0\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x89\x47\x14\x8b\x77\x14\xdd\xdd\xdd\x50\xdd\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\x89\x30\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x8b\x4f\x0c\x85\xc9\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\x84\xc0\xdd\xdd\x80\x7f\x1d\x00\xdd\xdd\x6a\x04\x6a\x01\x68\xdf\x58\x00\x00\xff\xdd\xdd\xdd\xdd\xdd\x6a\x04\xdd\xdd\xdd\xdd\xdd\x50\xff\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x6a\x0c\xdd\xdd\xdd\xdd\xdd\xe8\xdd\xdd\xdd\xdd\x83\xc4\x28\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\xdd\x64\x89\x0d\x00\x00\x00\x00\x59\x5f\x5e\xdd\xdd\xdd\x33\xcd\xe8\xdd\xdd\xdd\xdd\x8b\xe5\x5d\xc3",
+			"xxx???????xxxxxxxxxx?????xx???xxx???xxxxxxxxxxxx??????????????????????????????xxxxxx??xxxxxx??xxx??????????xxxxxxxxxxxxx??????xxx???x????xxx?????????????xx???x????xx??????????x????????xx???????????????x????????????????????????????xx????xxx?????x???x???xx??????????xxxxxxxxxxxx??xxxxxx?????????xx????xxxx?????xxxxx????????????????????x????xx?????????xxx????xx???????xxxxxx???x?????x????xx??????????x?????????????xxxxx???????x????xx??xxxx??xxxxxxxxxx?????xx?????xx???????????????xx?????x????xxx??????????xxxxxxxxxx???xxx????xxxx");
+		GW::Scanner::Initialize();
+		if (!addr) {
+			gwtoolbox_hook_scan_failed_ = true;
+			return;
+		}
+		GWToolbox_OnAgentNameTag_Func = reinterpret_cast<OnGWToolboxAgentNameTag_pt>(addr);
+		GW::Hook::CreateHook(&GWToolbox_OnAgentNameTag_Func, OnGWToolboxAgentNameTagDetour, &GWToolbox_OnAgentNameTag_Ret);
+		GW::Hook::EnableHooks(GWToolbox_OnAgentNameTag_Func);
+	}
+
+	void RemoveGWToolboxAgentNameTagHook() {
+		if (GWToolbox_OnAgentNameTag_Func) {
+			GW::Hook::DisableHooks(GWToolbox_OnAgentNameTag_Func);
+			GW::Hook::RemoveHook(GWToolbox_OnAgentNameTag_Func);
+			GWToolbox_OnAgentNameTag_Func = nullptr;
+			GWToolbox_OnAgentNameTag_Ret = nullptr;
 		}
 	}
 
@@ -728,16 +779,24 @@ private:
 		}
 	}
 
-	static void OnAgentNameTagDiag(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
+	static void OnAgentNameTagDiag(GW::HookStatus* status, GW::UI::UIMessage msgid, void* wParam, void*) {
 		auto* tag = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
 		if (!tag) return;
 		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
 		++self->nametag_diag_total_;
+		const bool is_show_msg = msgid == GW::UI::UIMessage::kShowAgentNameTag;
 		if (self->nametag_diag_watch_id_ != 0 && tag->agent_id == self->nametag_diag_watch_id_) {
 			++self->nametag_diag_watch_hits_;
+			if (is_show_msg) {
+				++self->nametag_diag_watch_hits_show_;
+			} else {
+				++self->nametag_diag_watch_hits_attribs_;
+			}
 			self->nametag_diag_last_addr_ = reinterpret_cast<uintptr_t>(tag);
 			std::memcpy(self->nametag_diag_last_bytes_.data(), tag, self->nametag_diag_last_bytes_.size());
-			if (self->nametag_diag_force_color_) {
+			const bool should_force = self->nametag_diag_force_color_ &&
+				(!self->nametag_diag_force_show_only_ || is_show_msg);
+			if (should_force) {
 				auto* base = reinterpret_cast<uint8_t*>(tag);
 				const int off = self->nametag_diag_force_offset_;
 				if (off >= 0 && static_cast<size_t>(off) + 4 <= self->nametag_diag_last_bytes_.size()) {
@@ -819,14 +878,24 @@ private:
 		if (ImGui::Button("Watch Target")) {
 			nametag_diag_watch_id_ = GW::Agents::GetTargetId();
 			nametag_diag_watch_hits_ = 0;
+			nametag_diag_watch_hits_show_ = 0;
+			nametag_diag_watch_hits_attribs_ = 0;
 		}
 		ImGui::SameLine();
 		ImGui::Text("watching agent %u, hits: %u", nametag_diag_watch_id_, nametag_diag_watch_hits_);
+		ImGui::Text("  kShowAgentNameTag hits: %u, kSetAgentNameTagAttribs hits: %u", nametag_diag_watch_hits_show_, nametag_diag_watch_hits_attribs_);
 		ImGui::Checkbox("Force magenta on watched agent", &nametag_diag_force_color_);
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(80.f);
 		ImGui::InputInt("offset (decimal)", &nametag_diag_force_offset_);
+		ImGui::Checkbox("Only force on kShowAgentNameTag (skip kSetAgentNameTagAttribs)", &nametag_diag_force_show_only_);
 		ImGui::Checkbox("Block message for watched agent (runs before GWToolbox)", &nametag_diag_block_message_);
+		ImGui::Checkbox("Disable GWToolbox's OnAgentNameTag entirely (hooked)", &nametag_diag_disable_gwtoolbox_colors_);
+		if (gwtoolbox_hook_scan_failed_) {
+			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "GWToolbox hook scan failed");
+		} else if (GWToolbox_OnAgentNameTag_Func) {
+			ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "GWToolbox hook installed");
+		}
 		ImGui::Text("last struct address: 0x%08zX", nametag_diag_last_addr_);
 		if (nametag_diag_last_addr_ != 0) {
 			std::string hex_line;
