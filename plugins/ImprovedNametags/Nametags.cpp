@@ -219,8 +219,6 @@ public:
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
-		GW::UI::RegisterUIMessageCallback(&diag_nametag_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnDiagNameTagMessage);
-		GW::UI::RegisterUIMessageCallback(&diag_nametag_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnDiagNameTagMessage);
 	}
 
 	const char* Name() const override { return "ImprovedNametags"; }
@@ -291,7 +289,6 @@ public:
 		GW::StoC::RemoveCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_);
 		GW::UI::RemoveKeydownCallback(&reveal_hotkey_hook_entry_);
 		GW::UI::RemoveKeyupCallback(&reveal_hotkey_hook_entry_);
-		GW::UI::RemoveUIMessageCallback(&diag_nametag_hook_entry_);
 	}
 
 	void Draw(IDirect3DDevice9*) override {
@@ -358,7 +355,7 @@ private:
 			GW::Agent* agent = GW::Agents::GetAgentByID(entry.agent_id);
 			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 			if (living && living->GetHasBossGlow()) {
-				TouchAgent(entry.agent_id, true, true);
+				TouchAgent(entry.agent_id, true, true, true);
 			}
 		}
 		boss_glow_retries_.resize(write);
@@ -575,12 +572,14 @@ private:
 		g_plugin->OnRevealHotkeyKeyEvent(key, false);
 	}
 
-	void TouchAgent(uint32_t agent_id, bool recolor, bool retarget) {
-		if (retarget || recolor) {
+	void TouchAgent(uint32_t agent_id, bool recolor, bool retarget, bool force_reveal) {
+		if (retarget || force_reveal) {
 			EnsureSetNameTagBitScanned();
+		}
+		if (recolor) {
 			EnsureQueueEventAllocatorScanned();
 		}
-		GW::GameThread::Enqueue([this, agent_id, recolor, retarget] {
+		GW::GameThread::Enqueue([this, agent_id, recolor, retarget, force_reveal] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent || !agent->GetIsLivingType()) return;
 			GW::AgentLiving* living = agent->GetAsAgentLiving();
@@ -606,12 +605,11 @@ private:
 			if (recolor) {
 				const uint32_t allegiance_value = static_cast<uint32_t>(living->allegiance);
 				TriggerAllegianceRecolor(agent, allegiance_value);
+			}
 
-				const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
-				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
-				GW::Agents::RefreshAgentNameTag(agent);
-				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties);
-				GW::Agents::RefreshAgentNameTag(agent);
+			if (force_reveal && SetNameTagBit_Func) {
+				SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 1);
+				SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 0);
 			}
 		});
 	}
@@ -649,24 +647,23 @@ private:
 				const uint32_t allegiance_value = static_cast<uint32_t>(living->allegiance);
 				TriggerAllegianceRecolor(agent, allegiance_value);
 
-				const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
-				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
-				GW::Agents::RefreshAgentNameTag(agent);
-				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties);
-				GW::Agents::RefreshAgentNameTag(agent);
+				if (SetNameTagBit_Func) {
+					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 1);
+					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 0);
+				}
 			}
 		});
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
-		GW::Agents::RefreshAgentNameTag(GW::Agents::GetAgentByID(pak->agent_id));
+		g_plugin->TouchAgent(pak->agent_id, false, false, true);
 	}
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
 		if (!pak) return;
 		auto* self = g_plugin;
-		self->TouchAgent(pak->agent_id, true, true);
+		self->TouchAgent(pak->agent_id, true, true, true);
 	}
 
 	static void OnMapLoaded(GW::HookStatus*, GW::Packet::StoC::MapLoaded*) {
@@ -697,7 +694,7 @@ private:
 			self->agent_state_.resize(pak->agent_id + 128);
 		}
 		self->agent_state_[pak->agent_id].has_quest_marker = applying;
-		self->TouchAgent(pak->agent_id, true, true);
+		self->TouchAgent(pak->agent_id, true, true, true);
 	}
 
 	static constexpr int kStartupSuppressionFrames = 300;
@@ -722,29 +719,6 @@ private:
 		if (!msg) return;
 		if (ShouldSuppressWarning(msg->channel, msg->message)) {
 			status->blocked = true;
-		}
-	}
-
-	GW::HookEntry diag_nametag_hook_entry_;
-	uint32_t diag_agent_a_id_ = 0;
-	uint32_t diag_agent_a_show_count_ = 0;
-	uint32_t diag_agent_a_attribs_count_ = 0;
-	uint32_t diag_agent_b_id_ = 0;
-	uint32_t diag_agent_b_show_count_ = 0;
-	uint32_t diag_agent_b_attribs_count_ = 0;
-
-	static void OnDiagNameTagMessage(GW::HookStatus*, GW::UI::UIMessage msgid, void* wParam, void*) {
-		auto* tag = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
-		if (!tag) return;
-		auto* self = g_plugin;
-		const bool is_show = msgid == GW::UI::UIMessage::kShowAgentNameTag;
-		if (self->diag_agent_a_id_ != 0 && tag->agent_id == self->diag_agent_a_id_) {
-			if (is_show) ++self->diag_agent_a_show_count_;
-			else ++self->diag_agent_a_attribs_count_;
-		}
-		if (self->diag_agent_b_id_ != 0 && tag->agent_id == self->diag_agent_b_id_) {
-			if (is_show) ++self->diag_agent_b_show_count_;
-			else ++self->diag_agent_b_attribs_count_;
 		}
 	}
 
@@ -903,20 +877,6 @@ private:
 		}
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
 
-		ImGui::Spacing();
-		ImGui::SeparatorText("Debug");
-		if (ImGui::Button("Capture Agent A (from current target)")) {
-			diag_agent_a_id_ = GW::Agents::GetTargetId();
-			diag_agent_a_show_count_ = 0;
-			diag_agent_a_attribs_count_ = 0;
-		}
-		ImGui::Text("Agent A: %u, kShowAgentNameTag: %u, kSetAgentNameTagAttribs: %u", diag_agent_a_id_, diag_agent_a_show_count_, diag_agent_a_attribs_count_);
-		if (ImGui::Button("Capture Agent B (from current target)")) {
-			diag_agent_b_id_ = GW::Agents::GetTargetId();
-			diag_agent_b_show_count_ = 0;
-			diag_agent_b_attribs_count_ = 0;
-		}
-		ImGui::Text("Agent B: %u, kShowAgentNameTag: %u, kSetAgentNameTagAttribs: %u", diag_agent_b_id_, diag_agent_b_show_count_, diag_agent_b_attribs_count_);
 	}
 };
 
