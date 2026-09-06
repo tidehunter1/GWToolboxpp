@@ -657,13 +657,7 @@ private:
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
-		auto* self = g_plugin;
-		self->TouchAgent(pak->agent_id, true, true);
-		const uint32_t agent_id = pak->agent_id;
-		GW::GameThread::Enqueue([agent_id] {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (agent) GW::Agents::RefreshAgentNameTag(agent);
-		});
+		GW::Agents::RefreshAgentNameTag(GW::Agents::GetAgentByID(pak->agent_id));
 	}
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
