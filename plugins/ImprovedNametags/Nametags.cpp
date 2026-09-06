@@ -32,6 +32,7 @@
 #include <string>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <cwchar>
 #include <optional>
 #include <algorithm>
@@ -124,6 +125,8 @@ public:
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
 
+	void Erase(uint32_t agent_id) { cache_.erase(agent_id); }
+
 private:
 	static constexpr size_t kBufferLen = 256;
 	static constexpr size_t kMaxEncLen = 64;
@@ -203,7 +206,10 @@ struct NametagSettings {
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
 public:
+	static inline ImprovedNametagsPlugin* g_plugin = nullptr;
+
 	ImprovedNametagsPlugin() {
+		g_plugin = this;
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_, OnAgentAllegianceChanged, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_, OnAgentAdd, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_, OnAgentRemove, 1);
@@ -224,15 +230,17 @@ public:
 
 	void LoadSettings(const wchar_t* folder) override {
 		ToolboxPlugin::LoadSettings(folder);
-		#define L_SET(var) LoadSetting(#var, settings_.var)
-		L_SET(recolor_quest_nametags); L_SET(recolor_professions);
-		L_SET(recolor_enemy_nametags_by_profession);
-		L_SET(quest_color);
-		L_SET(color_by_boss); L_SET(boss_color);
-		L_SET(escape_to_embark); L_SET(escape_to_embark_threshold_pct);
-		L_SET(show_healthbar_all_agents);
-		LoadSetting("visible", visible_);
-		#undef L_SET
+		auto load = [this](const char* name, auto& value) { LoadSetting(name, value); };
+		load("recolor_quest_nametags", settings_.recolor_quest_nametags);
+		load("recolor_professions", settings_.recolor_professions);
+		load("recolor_enemy_nametags_by_profession", settings_.recolor_enemy_nametags_by_profession);
+		load("quest_color", settings_.quest_color);
+		load("color_by_boss", settings_.color_by_boss);
+		load("boss_color", settings_.boss_color);
+		load("escape_to_embark", settings_.escape_to_embark);
+		load("escape_to_embark_threshold_pct", settings_.escape_to_embark_threshold_pct);
+		load("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
+		load("visible", visible_);
 
 		LoadSetting("priority_enabled", settings_.priority_enabled);
 		LoadSetting("priority_raw", settings_.priority.raw);
@@ -246,15 +254,17 @@ public:
 	}
 
 	void SaveSettings(const wchar_t* folder) override {
-		#define S_SET(var) SaveSetting(#var, settings_.var)
-		S_SET(recolor_quest_nametags); S_SET(recolor_professions);
-		S_SET(recolor_enemy_nametags_by_profession);
-		S_SET(quest_color);
-		S_SET(color_by_boss); S_SET(boss_color);
-		S_SET(escape_to_embark); S_SET(escape_to_embark_threshold_pct);
-		S_SET(show_healthbar_all_agents);
-		SaveSetting("visible", visible_);
-		#undef S_SET
+		auto save = [this](const char* name, auto& value) { SaveSetting(name, value); };
+		save("recolor_quest_nametags", settings_.recolor_quest_nametags);
+		save("recolor_professions", settings_.recolor_professions);
+		save("recolor_enemy_nametags_by_profession", settings_.recolor_enemy_nametags_by_profession);
+		save("quest_color", settings_.quest_color);
+		save("color_by_boss", settings_.color_by_boss);
+		save("boss_color", settings_.boss_color);
+		save("escape_to_embark", settings_.escape_to_embark);
+		save("escape_to_embark_threshold_pct", settings_.escape_to_embark_threshold_pct);
+		save("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
+		save("visible", visible_);
 
 		SaveSetting("priority_enabled", settings_.priority_enabled);
 		SaveSetting("priority_raw", settings_.priority.raw);
@@ -325,29 +335,30 @@ private:
 		uint64_t scheduled_frame;
 	};
 	std::vector<BossGlowRetry> boss_glow_retries_;
+	std::unordered_set<uint32_t> boss_glow_pending_ids_;
 
 	void ScheduleBossGlowRetry(uint32_t agent_id) {
-		for (const auto& r : boss_glow_retries_) {
-			if (r.agent_id == agent_id) return;
-		}
+		if (!boss_glow_pending_ids_.insert(agent_id).second) return;
 		boss_glow_retries_.push_back({agent_id, frame_counter_});
 	}
 
 	void ProcessBossGlowRetries() {
-		for (auto it = boss_glow_retries_.begin(); it != boss_glow_retries_.end(); ) {
-			if (frame_counter_ <= it->scheduled_frame) {
-				++it;
+		size_t write = 0;
+		for (size_t read = 0; read < boss_glow_retries_.size(); ++read) {
+			const BossGlowRetry entry = boss_glow_retries_[read];
+			if (frame_counter_ <= entry.scheduled_frame) {
+				boss_glow_retries_[write++] = entry;
 				continue;
 			}
-			const uint32_t agent_id = it->agent_id;
-			it = boss_glow_retries_.erase(it);
+			boss_glow_pending_ids_.erase(entry.agent_id);
 
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			GW::Agent* agent = GW::Agents::GetAgentByID(entry.agent_id);
 			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 			if (living && living->GetHasBossGlow()) {
-				RefreshHealthbarForAgent(agent);
+				TouchAgent(entry.agent_id, true, true);
 			}
 		}
+		boss_glow_retries_.resize(write);
 	}
 
 	bool embark_escape_armed_ = true;
@@ -474,7 +485,7 @@ private:
 			auto* agent = static_cast<GW::Agent*>(ctx);
 			GW::AgentLiving* living = agent->GetAsAgentLiving();
 			if (living) {
-				auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+				auto* self = g_plugin;
 				if (const auto color = self->DecideAgentColor(living)) {
 					*result = static_cast<uint32_t>(*color);
 				}
@@ -554,80 +565,52 @@ private:
 	}
 
 	static void OnRevealHotkeyDown(GW::HookStatus*, uint32_t key) {
-		static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance())->OnRevealHotkeyKeyEvent(key, true);
+		g_plugin->OnRevealHotkeyKeyEvent(key, true);
 	}
 
 	static void OnRevealHotkeyUp(GW::HookStatus*, uint32_t key) {
-		static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance())->OnRevealHotkeyKeyEvent(key, false);
+		g_plugin->OnRevealHotkeyKeyEvent(key, false);
 	}
 
-	void UpdateManualTargetFlag(GW::AgentLiving* living, AgentState& state) {
-		const uint32_t agent_id = living->agent_id;
-		const bool want_flag = settings_.show_healthbar_all_agents;
-		if (want_flag == state.we_applied_flag) return;
-
-		EnsureSetNameTagBitScanned();
-		state.we_applied_flag = want_flag;
-		GW::GameThread::Enqueue([agent_id, want_flag] {
+	void TouchAgent(uint32_t agent_id, bool recolor, bool retarget) {
+		if (retarget || recolor) {
+			EnsureSetNameTagBitScanned();
+			EnsureQueueEventAllocatorScanned();
+		}
+		GW::GameThread::Enqueue([this, agent_id, recolor, retarget] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent) return;
-			if (SetNameTagBit_Func) {
-				SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
+			if (!agent || !agent->GetIsLivingType()) return;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) return;
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			if (me && living->agent_id == me->agent_id) return;
+
+			if (living->agent_id >= agent_state_.size()) {
+				agent_state_.resize(living->agent_id + 128);
+			}
+			AgentState& state = agent_state_[living->agent_id];
+
+			if (retarget) {
+				const bool want_flag = settings_.show_healthbar_all_agents;
+				if (want_flag != state.we_applied_flag) {
+					state.we_applied_flag = want_flag;
+					if (SetNameTagBit_Func) {
+						SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
+					}
+				}
+			}
+
+			if (recolor) {
+				const uint32_t allegiance_value = static_cast<uint32_t>(living->allegiance);
+				TriggerAllegianceRecolor(agent, allegiance_value);
+
+				const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
+				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
+				GW::Agents::RefreshAgentNameTag(agent);
+				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties);
+				GW::Agents::RefreshAgentNameTag(agent);
 			}
 		});
-	}
-
-	void TriggerAllegianceRecolorForAgentId(uint32_t agent_id) {
-		EnsureQueueEventAllocatorScanned();
-		GW::GameThread::Enqueue([agent_id] {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent) return;
-			GW::AgentLiving* fresh_living = agent->GetAsAgentLiving();
-			if (!fresh_living) return;
-			const uint32_t allegiance_value = static_cast<uint32_t>(fresh_living->allegiance);
-			TriggerAllegianceRecolor(agent, allegiance_value);
-
-			const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
-			agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
-			GW::Agents::RefreshAgentNameTag(agent);
-			agent->name_properties = static_cast<GW::NameTagFlags>(current_properties);
-			GW::Agents::RefreshAgentNameTag(agent);
-		});
-	}
-
-	void UpdateAgentHealthbarState(GW::AgentLiving* living, AgentState& state) {
-		UpdateManualTargetFlag(living, state);
-		TriggerAllegianceRecolorForAgentId(living->agent_id);
-	}
-
-	template<typename Fn>
-	void WithValidAgentState(GW::Agent* agent, Fn&& fn) {
-		if (!agent || !agent->GetIsLivingType()) return;
-		GW::AgentLiving* living = agent->GetAsAgentLiving();
-		if (!living || living->GetIsDead()) return;
-		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-		if (me && living->agent_id == me->agent_id) return;
-
-		if (living->agent_id >= agent_state_.size()) {
-			agent_state_.resize(living->agent_id + 128);
-		}
-		fn(living, agent_state_[living->agent_id]);
-	}
-
-	void RefreshHealthbarForAgent(GW::Agent* agent) {
-		WithValidAgentState(agent, [this](GW::AgentLiving* living, AgentState& state) {
-			UpdateAgentHealthbarState(living, state);
-		});
-	}
-
-	void RefreshManualTargetFlagForAgentId(uint32_t agent_id) {
-		WithValidAgentState(GW::Agents::GetAgentByID(agent_id), [this](GW::AgentLiving* living, AgentState& state) {
-			UpdateManualTargetFlag(living, state);
-		});
-	}
-
-	void RefreshHealthbarForAgentId(uint32_t agent_id) {
-		RefreshHealthbarForAgent(GW::Agents::GetAgentByID(agent_id));
 	}
 
 	[[nodiscard]] bool HasQuestMarker(uint32_t agent_id) const {
@@ -635,17 +618,47 @@ private:
 	}
 
 	void RescanAllAgentsForHealthbar() {
-		GW::AgentArray* agents = GW::Agents::GetAgentArray();
-		if (!agents || !agents->valid()) return;
-		for (GW::Agent* agent : *agents) {
-			RefreshHealthbarForAgent(agent);
-		}
+		EnsureSetNameTagBitScanned();
+		EnsureQueueEventAllocatorScanned();
+		const bool want_flag = settings_.show_healthbar_all_agents;
+		GW::GameThread::Enqueue([this, want_flag] {
+			GW::AgentArray* agents = GW::Agents::GetAgentArray();
+			if (!agents || !agents->valid()) return;
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			for (GW::Agent* agent : *agents) {
+				if (!agent || !agent->GetIsLivingType()) continue;
+				GW::AgentLiving* living = agent->GetAsAgentLiving();
+				if (!living || living->GetIsDead()) continue;
+				if (me && living->agent_id == me->agent_id) continue;
+
+				if (living->agent_id >= agent_state_.size()) {
+					agent_state_.resize(living->agent_id + 128);
+				}
+				AgentState& state = agent_state_[living->agent_id];
+
+				if (want_flag != state.we_applied_flag) {
+					state.we_applied_flag = want_flag;
+					if (SetNameTagBit_Func) {
+						SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
+					}
+				}
+
+				const uint32_t allegiance_value = static_cast<uint32_t>(living->allegiance);
+				TriggerAllegianceRecolor(agent, allegiance_value);
+
+				const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
+				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
+				GW::Agents::RefreshAgentNameTag(agent);
+				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties);
+				GW::Agents::RefreshAgentNameTag(agent);
+			}
+		});
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		self->RefreshManualTargetFlagForAgentId(pak->agent_id);
+		auto* self = g_plugin;
+		self->TouchAgent(pak->agent_id, false, true);
 		const uint32_t agent_id = pak->agent_id;
 		GW::GameThread::Enqueue([agent_id] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
@@ -655,23 +668,25 @@ private:
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
 		if (!pak) return;
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
-		self->RefreshHealthbarForAgentId(pak->agent_id);
+		auto* self = g_plugin;
+		self->TouchAgent(pak->agent_id, true, true);
 	}
 
 	static void OnMapLoaded(GW::HookStatus*, GW::Packet::StoC::MapLoaded*) {
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		auto* self = g_plugin;
 		self->agent_state_.clear();
 		self->boss_glow_retries_.clear();
+		self->boss_glow_pending_ids_.clear();
 		self->dirty_rescan_ = true;
 	}
 
 	static void OnAgentRemove(GW::HookStatus*, GW::Packet::StoC::AgentRemove* pak) {
 		if (!pak) return;
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		auto* self = g_plugin;
 		if (pak->agent_id < self->agent_state_.size()) {
 			self->agent_state_[pak->agent_id] = AgentState{};
 		}
+		self->name_cache_.Erase(pak->agent_id);
 	}
 
 	static void OnAgentMarkerChanged(GW::HookStatus*, GW::Packet::StoC::GenericValue* pak) {
@@ -679,13 +694,13 @@ private:
 		if (pak->value_id != GW::Packet::StoC::GenericValueID::apply_marker
 			&& pak->value_id != GW::Packet::StoC::GenericValueID::remove_marker) return;
 
-		auto* self = static_cast<ImprovedNametagsPlugin*>(ToolboxPluginInstance());
+		auto* self = g_plugin;
 		const bool applying = pak->value_id == GW::Packet::StoC::GenericValueID::apply_marker;
 		if (pak->agent_id >= self->agent_state_.size()) {
 			self->agent_state_.resize(pak->agent_id + 128);
 		}
 		self->agent_state_[pak->agent_id].has_quest_marker = applying;
-		self->RefreshHealthbarForAgentId(pak->agent_id);
+		self->TouchAgent(pak->agent_id, true, true);
 	}
 
 	static constexpr int kStartupSuppressionFrames = 300;
@@ -716,15 +731,22 @@ private:
 	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living) {
 		if (!living) return std::nullopt;
 
-		const auto lookup = name_cache_.Get(living);
+		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
+		const bool need_names = settings_.priority_enabled;
+		const bool need_prof = is_enemy
+			? settings_.recolor_enemy_nametags_by_profession
+			: settings_.recolor_professions;
 
-		if (settings_.priority_enabled) {
+		AgentNameCache::NameLookup lookup{};
+		if (need_names || need_prof) {
+			lookup = name_cache_.Get(living);
+		}
+
+		if (need_names) {
 			if (const auto color = GetPriorityColor(*lookup.words)) {
 				return color;
 			}
 		}
-
-		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
 
 		if (is_enemy) {
 			if (settings_.color_by_boss) {
@@ -733,7 +755,7 @@ private:
 				}
 				ScheduleBossGlowRetry(living->agent_id);
 			}
-			if (settings_.recolor_enemy_nametags_by_profession) {
+			if (need_prof) {
 				if (const auto color = TryGetProfessionColor(lookup.profession)) {
 					return color;
 				}
@@ -746,7 +768,7 @@ private:
 			return settings_.quest_color;
 		}
 
-		if (settings_.recolor_professions
+		if (need_prof
 			&& living->allegiance == GW::Constants::Allegiance::Ally_NonAttackable) {
 			if (const auto color = TryGetProfessionColor(lookup.profession)) {
 				return color;
