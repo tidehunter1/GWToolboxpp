@@ -309,6 +309,7 @@ public:
 
 		name_cache_.MaybePrune();
 		ProcessBossGlowRetries();
+		ProcessAllegianceRecolorCooldowns();
 	}
 
 private:
@@ -355,10 +356,44 @@ private:
 			GW::Agent* agent = GW::Agents::GetAgentByID(entry.agent_id);
 			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
 			if (living && living->GetHasBossGlow()) {
-				TouchAgent(entry.agent_id, true, true, true);
+				TouchAgent(entry.agent_id, true, true);
 			}
 		}
 		boss_glow_retries_.resize(write);
+	}
+
+	struct AllegianceRecolorCooldown {
+		uint32_t agent_id;
+		uint64_t cooldown_until_frame;
+	};
+	static constexpr uint64_t kAllegianceRecolorCooldownFrames = 30;
+	std::vector<AllegianceRecolorCooldown> allegiance_recolor_cooldowns_;
+	std::unordered_set<uint32_t> allegiance_recolor_pending_ids_;
+	std::unordered_set<uint32_t> allegiance_recolor_needs_retry_ids_;
+
+	void RequestAllegianceRecolor(uint32_t agent_id) {
+		if (!allegiance_recolor_pending_ids_.insert(agent_id).second) {
+			allegiance_recolor_needs_retry_ids_.insert(agent_id);
+			return;
+		}
+		allegiance_recolor_cooldowns_.push_back({agent_id, frame_counter_ + kAllegianceRecolorCooldownFrames});
+		TouchAgent(agent_id, true, false);
+	}
+
+	void ProcessAllegianceRecolorCooldowns() {
+		size_t write = 0;
+		for (size_t read = 0; read < allegiance_recolor_cooldowns_.size(); ++read) {
+			const AllegianceRecolorCooldown entry = allegiance_recolor_cooldowns_[read];
+			if (frame_counter_ <= entry.cooldown_until_frame) {
+				allegiance_recolor_cooldowns_[write++] = entry;
+				continue;
+			}
+			allegiance_recolor_pending_ids_.erase(entry.agent_id);
+			if (allegiance_recolor_needs_retry_ids_.erase(entry.agent_id)) {
+				RequestAllegianceRecolor(entry.agent_id);
+			}
+		}
+		allegiance_recolor_cooldowns_.resize(write);
 	}
 
 	bool embark_escape_armed_ = true;
@@ -572,14 +607,12 @@ private:
 		g_plugin->OnRevealHotkeyKeyEvent(key, false);
 	}
 
-	void TouchAgent(uint32_t agent_id, bool recolor, bool retarget, bool force_reveal) {
-		if (retarget || force_reveal) {
+	void TouchAgent(uint32_t agent_id, bool recolor, bool retarget) {
+		if (retarget || recolor) {
 			EnsureSetNameTagBitScanned();
-		}
-		if (recolor) {
 			EnsureQueueEventAllocatorScanned();
 		}
-		GW::GameThread::Enqueue([this, agent_id, recolor, retarget, force_reveal] {
+		GW::GameThread::Enqueue([this, agent_id, recolor, retarget] {
 			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
 			if (!agent || !agent->GetIsLivingType()) return;
 			GW::AgentLiving* living = agent->GetAsAgentLiving();
@@ -605,11 +638,12 @@ private:
 			if (recolor) {
 				const uint32_t allegiance_value = static_cast<uint32_t>(living->allegiance);
 				TriggerAllegianceRecolor(agent, allegiance_value);
-			}
 
-			if (force_reveal && SetNameTagBit_Func) {
-				SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 1);
-				SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 0);
+				const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
+				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
+				GW::Agents::RefreshAgentNameTag(agent);
+				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties);
+				GW::Agents::RefreshAgentNameTag(agent);
 			}
 		});
 	}
@@ -647,23 +681,24 @@ private:
 				const uint32_t allegiance_value = static_cast<uint32_t>(living->allegiance);
 				TriggerAllegianceRecolor(agent, allegiance_value);
 
-				if (SetNameTagBit_Func) {
-					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 1);
-					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 0);
-				}
+				const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
+				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
+				GW::Agents::RefreshAgentNameTag(agent);
+				agent->name_properties = static_cast<GW::NameTagFlags>(current_properties);
+				GW::Agents::RefreshAgentNameTag(agent);
 			}
 		});
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
-		g_plugin->TouchAgent(pak->agent_id, false, false, true);
+		g_plugin->RequestAllegianceRecolor(pak->agent_id);
 	}
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
 		if (!pak) return;
 		auto* self = g_plugin;
-		self->TouchAgent(pak->agent_id, true, true, true);
+		self->TouchAgent(pak->agent_id, true, true);
 	}
 
 	static void OnMapLoaded(GW::HookStatus*, GW::Packet::StoC::MapLoaded*) {
@@ -671,6 +706,9 @@ private:
 		self->agent_state_.clear();
 		self->boss_glow_retries_.clear();
 		self->boss_glow_pending_ids_.clear();
+		self->allegiance_recolor_cooldowns_.clear();
+		self->allegiance_recolor_pending_ids_.clear();
+		self->allegiance_recolor_needs_retry_ids_.clear();
 		self->dirty_rescan_ = true;
 	}
 
@@ -694,7 +732,7 @@ private:
 			self->agent_state_.resize(pak->agent_id + 128);
 		}
 		self->agent_state_[pak->agent_id].has_quest_marker = applying;
-		self->TouchAgent(pak->agent_id, true, true, true);
+		self->TouchAgent(pak->agent_id, true, true);
 	}
 
 	static constexpr int kStartupSuppressionFrames = 300;
