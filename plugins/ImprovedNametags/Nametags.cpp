@@ -537,6 +537,17 @@ private:
 			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx");
 	}
 
+	using SetGlobalNameTagVisibility_pt = void(__cdecl*)(uint32_t);
+	static inline SetGlobalNameTagVisibility_pt SetGlobalNameTagVisibility_Func = nullptr;
+	static inline uint32_t* const GlobalNameTagVisibilityFlags = reinterpret_cast<uint32_t*>(0x0108aa0cu);
+
+	static bool EnsureSetGlobalNameTagVisibilityScanned() {
+		static bool scan_failed = false;
+		return EnsureScanned(SetGlobalNameTagVisibility_Func, scan_failed,
+			"\x55\x8b\xec\x51\x53\x8b\x5d\x08\x3b\x1d\x0c\xaa\x08\x01\x74\x59\xa1\xdd\xdd\xdd\xdd\x56\x8b\x35\xdd\xdd\xdd\xdd\x8d\x04\x86\x89\x45\x08\x3b\xf0\x74\x3c\x57\x8b\x3e\x85\xff\x74\x2d\x85\xdb\x74\x17\x8b\x07\x8d\x4d\xfc\x51\x53",
+			"xxxxxxxxxxxxxxxxx????xxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+	}
+
 	static void TriggerAllegianceRecolor(GW::Agent* agent, uint32_t allegiance_value) {
 		if (!QueueEventAllocator_Func) return;
 		void* node = QueueEventAllocator_Func(agent, 8);
@@ -655,25 +666,14 @@ private:
 		});
 	}
 
-	void RefreshNameTagViaFilterToggle(uint32_t agent_id) {
-		EnsureSetNameTagBitScanned();
-		GW::GameThread::Enqueue([agent_id] {
-			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-			if (!agent || !agent->GetIsLivingType()) return;
-			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living || living->GetIsDead()) return;
-			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-			if (me && living->agent_id == me->agent_id) return;
-			if (SetNameTagBit_Func) {
-				SetNameTagBit_Func(agent, GW::NameTagFlags_PassesFilter, 1);
-				SetNameTagBit_Func(agent, GW::NameTagFlags_PassesFilter, 0);
-			}
-		});
-	}
-
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
-		g_plugin->RefreshNameTagViaFilterToggle(pak->agent_id);
+		if (!EnsureSetGlobalNameTagVisibilityScanned()) return;
+		GW::GameThread::Enqueue([] {
+			const uint32_t prev_flags = *GlobalNameTagVisibilityFlags;
+			SetGlobalNameTagVisibility_Func(0);
+			SetGlobalNameTagVisibility_Func(prev_flags);
+		});
 	}
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
