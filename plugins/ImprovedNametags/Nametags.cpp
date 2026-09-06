@@ -309,7 +309,6 @@ public:
 
 		name_cache_.MaybePrune();
 		ProcessBossGlowRetries();
-		ProcessAllegianceRecolorCooldowns();
 	}
 
 private:
@@ -360,40 +359,6 @@ private:
 			}
 		}
 		boss_glow_retries_.resize(write);
-	}
-
-	struct AllegianceRecolorCooldown {
-		uint32_t agent_id;
-		uint64_t cooldown_until_frame;
-	};
-	static constexpr uint64_t kAllegianceRecolorCooldownFrames = 30;
-	std::vector<AllegianceRecolorCooldown> allegiance_recolor_cooldowns_;
-	std::unordered_set<uint32_t> allegiance_recolor_pending_ids_;
-	std::unordered_set<uint32_t> allegiance_recolor_needs_retry_ids_;
-
-	void RequestAllegianceRecolor(uint32_t agent_id) {
-		if (!allegiance_recolor_pending_ids_.insert(agent_id).second) {
-			allegiance_recolor_needs_retry_ids_.insert(agent_id);
-			return;
-		}
-		allegiance_recolor_cooldowns_.push_back({agent_id, frame_counter_ + kAllegianceRecolorCooldownFrames});
-		TouchAgent(agent_id, true, false);
-	}
-
-	void ProcessAllegianceRecolorCooldowns() {
-		size_t write = 0;
-		for (size_t read = 0; read < allegiance_recolor_cooldowns_.size(); ++read) {
-			const AllegianceRecolorCooldown entry = allegiance_recolor_cooldowns_[read];
-			if (frame_counter_ <= entry.cooldown_until_frame) {
-				allegiance_recolor_cooldowns_[write++] = entry;
-				continue;
-			}
-			allegiance_recolor_pending_ids_.erase(entry.agent_id);
-			if (allegiance_recolor_needs_retry_ids_.erase(entry.agent_id)) {
-				RequestAllegianceRecolor(entry.agent_id);
-			}
-		}
-		allegiance_recolor_cooldowns_.resize(write);
 	}
 
 	bool embark_escape_armed_ = true;
@@ -690,9 +655,25 @@ private:
 		});
 	}
 
+	void RefreshNameTagViaFilterToggle(uint32_t agent_id) {
+		EnsureSetNameTagBitScanned();
+		GW::GameThread::Enqueue([agent_id] {
+			GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+			if (!agent || !agent->GetIsLivingType()) return;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) return;
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			if (me && living->agent_id == me->agent_id) return;
+			if (SetNameTagBit_Func) {
+				SetNameTagBit_Func(agent, GW::NameTagFlags_PassesFilter, 1);
+				SetNameTagBit_Func(agent, GW::NameTagFlags_PassesFilter, 0);
+			}
+		});
+	}
+
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
-		g_plugin->RequestAllegianceRecolor(pak->agent_id);
+		g_plugin->RefreshNameTagViaFilterToggle(pak->agent_id);
 	}
 
 	static void OnAgentAdd(GW::HookStatus*, GW::Packet::StoC::AgentAdd* pak) {
@@ -706,9 +687,6 @@ private:
 		self->agent_state_.clear();
 		self->boss_glow_retries_.clear();
 		self->boss_glow_pending_ids_.clear();
-		self->allegiance_recolor_cooldowns_.clear();
-		self->allegiance_recolor_pending_ids_.clear();
-		self->allegiance_recolor_needs_retry_ids_.clear();
 		self->dirty_rescan_ = true;
 	}
 
