@@ -1032,6 +1032,22 @@ private:
 				SetNameTagBit_Func(enemy_agent, 0x200, 1);
 			}
 		}
+
+		if (ImGui::Button("SEND kHideAgentNameTag directly via SendUIMessage (bypasses SetNameTagBit_Func entirely)")) {
+			const uint32_t enemy_id = PickNearestNonTargetEnemy();
+			if (enemy_id) {
+				GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(enemy_id)));
+			}
+		}
+
+		if (ImGui::Button("SET Suppressed via RAW WRITE (no SetNameTagBit_Func call, no message fired)")) {
+			const uint32_t enemy_id = PickNearestNonTargetEnemy();
+			GW::Agent* enemy_agent = enemy_id ? GW::Agents::GetAgentByID(enemy_id) : nullptr;
+			if (enemy_agent) {
+				const uint32_t current = static_cast<uint32_t>(enemy_agent->name_properties);
+				enemy_agent->name_properties = static_cast<GW::NameTagFlags>(current | GW::NameTagFlags_Suppressed);
+			}
+		}
 	}
 
 	void DrawSettingsInternal() {
