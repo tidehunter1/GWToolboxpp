@@ -594,23 +594,21 @@ private:
 		GW::Agents::RefreshAgentNameTag(agent);
 	}
 
+	static bool ApplyNameTagBit(GW::Agent* agent, bool& applied, GW::NameTagFlags flag, bool want) {
+		if (want == applied) return false;
+		applied = want;
+		if (SetNameTagBit_Func) SetNameTagBit_Func(agent, flag, want ? 1 : 0);
+		return true;
+	}
+
 	static void ApplyHealthbarFlag(GW::Agent* agent, AgentState& state, bool want_flag) {
-		if (want_flag == state.we_applied_flag) return;
-		state.we_applied_flag = want_flag;
-		if (SetNameTagBit_Func) {
-			SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
-		}
+		ApplyNameTagBit(agent, state.we_applied_flag, GW::NameTagFlags_ManualTarget, want_flag);
 	}
 
 	static void ApplyHideFlag(GW::Agent* agent, AgentState& state, bool want_hidden) {
-		if (want_hidden == state.tag_hidden) return;
-		state.tag_hidden = want_hidden;
-		if (SetNameTagBit_Func) {
-			SetNameTagBit_Func(agent, GW::NameTagFlags_Suppressed, want_hidden ? 1 : 0);
-			if (want_hidden && state.we_applied_flag) {
-				state.we_applied_flag = false;
-				SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, 0);
-			}
+		if (!ApplyNameTagBit(agent, state.tag_hidden, GW::NameTagFlags_Suppressed, want_hidden)) return;
+		if (want_hidden) {
+			ApplyNameTagBit(agent, state.we_applied_flag, GW::NameTagFlags_ManualTarget, false);
 		}
 	}
 
@@ -703,20 +701,26 @@ private:
 	std::unordered_set<uint32_t> pending_allegiance_refresh_ids_;
 	std::unordered_set<uint32_t> pending_hide_refresh_ids_;
 
-	void ProcessPendingAllegianceRefreshes() {
-		if (pending_allegiance_refresh_ids_.empty()) return;
-		std::vector<uint32_t> ids(pending_allegiance_refresh_ids_.begin(), pending_allegiance_refresh_ids_.end());
-		pending_allegiance_refresh_ids_.clear();
-		EnsureSetNameTagBitScanned();
-		EnsureQueueEventAllocatorScanned();
-		GW::GameThread::Enqueue([ids] {
+	template<typename Fn>
+	static void DrainPendingIds(std::unordered_set<uint32_t>& ids_set, Fn&& action) {
+		if (ids_set.empty()) return;
+		std::vector<uint32_t> ids(ids_set.begin(), ids_set.end());
+		ids_set.clear();
+		GW::GameThread::Enqueue([ids, action] {
 			for (uint32_t agent_id : ids) {
 				GW::Agent* agent;
 				GW::AgentLiving* living = GetLivingAgentByID(agent_id, agent);
 				if (!living) continue;
-
-				RecolorAndRefreshNameTag(agent, living);
+				action(agent, living);
 			}
+		});
+	}
+
+	void ProcessPendingAllegianceRefreshes() {
+		EnsureSetNameTagBitScanned();
+		EnsureQueueEventAllocatorScanned();
+		DrainPendingIds(pending_allegiance_refresh_ids_, [](GW::Agent* agent, GW::AgentLiving* living) {
+			RecolorAndRefreshNameTag(agent, living);
 		});
 	}
 
@@ -727,19 +731,9 @@ private:
 	}
 
 	void ProcessPendingHideRefreshes() {
-		if (pending_hide_refresh_ids_.empty()) return;
-		std::vector<uint32_t> ids(pending_hide_refresh_ids_.begin(), pending_hide_refresh_ids_.end());
-		pending_hide_refresh_ids_.clear();
 		EnsureSetNameTagBitScanned();
-		GW::GameThread::Enqueue([this, ids] {
-			for (uint32_t agent_id : ids) {
-				GW::Agent* agent;
-				GW::AgentLiving* living = GetLivingAgentByID(agent_id, agent);
-				if (!living) continue;
-
-				AgentNameCache::NameLookup lookup = name_cache_.Get(living);
-				ApplyHideFlag(agent, GetOrCreateAgentState(agent_id), ShouldApplyHideFilter(living, lookup));
-			}
+		DrainPendingIds(pending_hide_refresh_ids_, [this](GW::Agent* agent, GW::AgentLiving* living) {
+			ApplyHideFlag(agent, GetOrCreateAgentState(living->agent_id), ShouldApplyHideFilter(living, name_cache_.Get(living)));
 		});
 	}
 
