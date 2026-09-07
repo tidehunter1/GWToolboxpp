@@ -1036,7 +1036,9 @@ private:
 		if (ImGui::Button("SEND kHideAgentNameTag directly via SendUIMessage (bypasses SetNameTagBit_Func entirely)")) {
 			const uint32_t enemy_id = PickNearestNonTargetEnemy();
 			if (enemy_id) {
-				GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(enemy_id)));
+				GW::GameThread::Enqueue([enemy_id] {
+					GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(enemy_id)));
+				});
 			}
 		}
 
