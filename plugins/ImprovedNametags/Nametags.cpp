@@ -414,6 +414,8 @@ private:
 		if (living->GetIsDead()) return false;
 		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
 		if (me && living->agent_id == me->agent_id) return false;
+		if (living->agent_id == GW::Agents::GetTargetId()) return false;
+		if ((static_cast<uint32_t>(living->name_properties) & GW::NameTagFlags_Highlighted) != 0) return false;
 		if (priority_state_.names.empty()) return false;
 		if (!settings_.priority_enabled || !settings_.hide_all_other) return false;
 
@@ -902,7 +904,7 @@ private:
 
 		static const char* kFlagNames[] = {
 			"Picked (0x8)", "Highlighted (0x10)", "InRange (0x20)", "EvaluatedTarget (0x80)",
-			"ManualTarget (0x100)", "Suppressed (0x200)", "PassesFilter (0x400)",
+			"ManualTarget (0x100)", "Suppressed (0x200) - CONFIRMED CRASH, DO NOT USE", "PassesFilter (0x400)",
 			"NotOwnedByPlayer (0x800)", "PassesTransientFilter (0x1000)", "Disabled (0x20000)"
 		};
 		static constexpr uint32_t kFlagValues[] = {
@@ -912,13 +914,41 @@ private:
 		static char custom_hex[16] = "";
 		static bool also_refresh = false;
 		static bool also_full_dance = false;
+		static bool override_known_crash = false;
 
-		GW::Agent* target = GW::Agents::GetTarget();
+		static uint32_t test_agent_id = 0;
+		if (ImGui::Button("Pick nearest non-target agent")) {
+			test_agent_id = 0;
+			GW::AgentArray* agents = GW::Agents::GetAgentArray();
+			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+			const uint32_t current_target_id = GW::Agents::GetTargetId();
+			if (agents && agents->valid() && me) {
+				float best_dist_sq = -1.f;
+				for (GW::Agent* agent : *agents) {
+					if (!agent || !agent->GetIsLivingType()) continue;
+					GW::AgentLiving* living = agent->GetAsAgentLiving();
+					if (!living || living->GetIsDead()) continue;
+					if (living->agent_id == me->agent_id) continue;
+					if (living->agent_id == current_target_id) continue;
+					const float dx = living->pos.x - me->pos.x;
+					const float dy = living->pos.y - me->pos.y;
+					const float dist_sq = dx * dx + dy * dy;
+					if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
+						best_dist_sq = dist_sq;
+						test_agent_id = living->agent_id;
+					}
+				}
+			}
+		}
+		ImGui::SameLine();
+		ImGui::TextDisabled("(never picks your current target - avoids EvaluatedTarget/ManualTarget contamination)");
+
+		GW::Agent* target = test_agent_id ? GW::Agents::GetAgentByID(test_agent_id) : nullptr;
 		GW::AgentLiving* target_living = target ? target->GetAsAgentLiving() : nullptr;
 		if (target_living) {
-			ImGui::Text("Target: agent %u, current name_properties = 0x%X", target_living->agent_id, static_cast<uint32_t>(target->name_properties));
+			ImGui::Text("Test agent: %u, current name_properties = 0x%X", target_living->agent_id, static_cast<uint32_t>(target->name_properties));
 		} else {
-			ImGui::TextDisabled("No living agent targeted");
+			ImGui::TextDisabled("No test agent picked yet");
 		}
 
 		ImGui::Combo("Flag to test", &selected_flag, kFlagNames, IM_ARRAYSIZE(kFlagNames));
@@ -931,21 +961,28 @@ private:
 			: kFlagValues[selected_flag];
 		ImGui::Text("Will apply: 0x%X", flag_value);
 
-		const bool can_act = target_living && SetNameTagBit_Func;
-		if (ImGui::Button("SET on target") && can_act) {
+		const bool is_known_crash = flag_value == 0x200;
+		if (is_known_crash) {
+			ImGui::TextColored(ImVec4(1.f, 0.3f, 0.3f, 1.f), "0x200 (Suppressed) confirmed to crash the client - refcounted global state, not a plain per-agent bit.");
+			ImGui::Checkbox("I understand this crashed before and want to try again anyway", &override_known_crash);
+		}
+
+		const bool can_act = target_living && SetNameTagBit_Func && (!is_known_crash || override_known_crash);
+		if (ImGui::Button("SET on test agent") && can_act) {
 			SetNameTagBit_Func(target, flag_value, 1);
 			if (also_refresh) GW::Agents::RefreshAgentNameTag(target);
 			if (also_full_dance) RecolorAndRefreshNameTag(target, target_living);
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("CLEAR on target") && can_act) {
+		if (ImGui::Button("CLEAR on test agent") && can_act) {
 			SetNameTagBit_Func(target, flag_value, 0);
 			if (also_refresh) GW::Agents::RefreshAgentNameTag(target);
 			if (also_full_dance) RecolorAndRefreshNameTag(target, target_living);
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Reset target (clear all known flags + refresh)") && can_act) {
+		if (ImGui::Button("Reset test agent (clear all known flags + refresh)") && target_living && SetNameTagBit_Func) {
 			for (uint32_t v : kFlagValues) {
+				if (v == 0x200) continue;
 				SetNameTagBit_Func(target, v, 0);
 			}
 			GW::Agents::RefreshAgentNameTag(target);
