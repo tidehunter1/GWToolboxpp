@@ -212,6 +212,8 @@ public:
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
 		GW::UI::RegisterUIMessageCallback(&preference_hook_entry_, GW::UI::UIMessage::kPreferenceFlagChanged, OnPreferenceFlagChanged);
+		GW::UI::RegisterUIMessageCallback(&debug_nametag_block_hook_entry_, GW::UI::UIMessage::kShowAgentNameTag, OnDebugNameTagMessage);
+		GW::UI::RegisterUIMessageCallback(&debug_nametag_block_hook_entry_, GW::UI::UIMessage::kSetAgentNameTagAttribs, OnDebugNameTagMessage);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
 	}
@@ -269,6 +271,7 @@ public:
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&debug_nametag_block_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_);
@@ -315,6 +318,7 @@ private:
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
 	GW::HookEntry preference_hook_entry_;
+	GW::HookEntry debug_nametag_block_hook_entry_;
 	GW::HookEntry reveal_hotkey_hook_entry_;
 
 	AgentNameCache name_cache_;
@@ -896,101 +900,82 @@ private:
 		}
 	}
 
-	void DrawDebugFlagTester() {
-		if (!ImGui::CollapsingHeader("DEBUG: NameTag Flag Tester")) return;
+	[[nodiscard]] static uint32_t PickNearestNonTargetLivingAgent() {
+		GW::AgentArray* agents = GW::Agents::GetAgentArray();
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (!agents || !agents->valid() || !me) return 0;
+		const uint32_t current_target_id = GW::Agents::GetTargetId();
+		uint32_t best_id = 0;
+		float best_dist_sq = -1.f;
+		for (GW::Agent* agent : *agents) {
+			if (!agent || !agent->GetIsLivingType()) continue;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) continue;
+			if (living->agent_id == me->agent_id) continue;
+			if (living->agent_id == current_target_id) continue;
+			const float dx = living->pos.x - me->pos.x;
+			const float dy = living->pos.y - me->pos.y;
+			const float dist_sq = dx * dx + dy * dy;
+			if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
+				best_dist_sq = dist_sq;
+				best_id = living->agent_id;
+			}
+		}
+		return best_id;
+	}
 
-		EnsureSetNameTagBitScanned();
-		EnsureQueueEventAllocatorScanned();
+	std::unordered_set<uint32_t> debug_blocked_nametag_ids_;
 
-		static const char* kFlagNames[] = {
-			"Picked (0x8)", "Highlighted (0x10)", "InRange (0x20)", "EvaluatedTarget (0x80)",
-			"ManualTarget (0x100)", "Suppressed (0x200) - CONFIRMED CRASH, DO NOT USE", "PassesFilter (0x400)",
-			"NotOwnedByPlayer (0x800)", "PassesTransientFilter (0x1000)", "Disabled (0x20000)"
-		};
-		static constexpr uint32_t kFlagValues[] = {
-			0x8, 0x10, 0x20, 0x80, 0x100, 0x200, 0x400, 0x800, 0x1000, 0x20000
-		};
-		static int selected_flag = 9;
-		static char custom_hex[16] = "";
-		static bool also_refresh = false;
-		static bool also_full_dance = false;
-		static bool override_known_crash = false;
+	static void OnDebugNameTagMessage(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
+		auto* msg = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
+		if (!msg) return;
+		if (g_plugin->debug_blocked_nametag_ids_.count(msg->agent_id)) {
+			status->blocked = true;
+		}
+	}
+
+	void DrawDebugNameTagBlockTester() {
+		if (!ImGui::CollapsingHeader("DEBUG: Hide via message block (experimental)")) return;
 
 		static uint32_t test_agent_id = 0;
 		if (ImGui::Button("Pick nearest non-target agent")) {
-			test_agent_id = 0;
-			GW::AgentArray* agents = GW::Agents::GetAgentArray();
-			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-			const uint32_t current_target_id = GW::Agents::GetTargetId();
-			if (agents && agents->valid() && me) {
-				float best_dist_sq = -1.f;
-				for (GW::Agent* agent : *agents) {
-					if (!agent || !agent->GetIsLivingType()) continue;
-					GW::AgentLiving* living = agent->GetAsAgentLiving();
-					if (!living || living->GetIsDead()) continue;
-					if (living->agent_id == me->agent_id) continue;
-					if (living->agent_id == current_target_id) continue;
-					const float dx = living->pos.x - me->pos.x;
-					const float dy = living->pos.y - me->pos.y;
-					const float dist_sq = dx * dx + dy * dy;
-					if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
-						best_dist_sq = dist_sq;
-						test_agent_id = living->agent_id;
-					}
-				}
-			}
+			test_agent_id = PickNearestNonTargetLivingAgent();
 		}
 		ImGui::SameLine();
-		ImGui::TextDisabled("(never picks your current target - avoids EvaluatedTarget/ManualTarget contamination)");
+		ImGui::TextDisabled("(never picks your current target)");
 
-		GW::Agent* target = test_agent_id ? GW::Agents::GetAgentByID(test_agent_id) : nullptr;
-		GW::AgentLiving* target_living = target ? target->GetAsAgentLiving() : nullptr;
-		if (target_living) {
-			ImGui::Text("Test agent: %u, current name_properties = 0x%X", target_living->agent_id, static_cast<uint32_t>(target->name_properties));
+		if (test_agent_id) {
+			ImGui::Text("Test agent: %u", test_agent_id);
+			if (debug_blocked_nametag_ids_.count(test_agent_id)) {
+				if (ImGui::Button("Unblock this agent's nametag")) {
+					debug_blocked_nametag_ids_.erase(test_agent_id);
+				}
+			} else {
+				if (ImGui::Button("Block this agent's nametag")) {
+					debug_blocked_nametag_ids_.insert(test_agent_id);
+				}
+			}
 		} else {
 			ImGui::TextDisabled("No test agent picked yet");
 		}
 
-		ImGui::Combo("Flag to test", &selected_flag, kFlagNames, IM_ARRAYSIZE(kFlagNames));
-		ImGui::InputText("Custom hex (overrides dropdown if non-empty)", custom_hex, sizeof(custom_hex));
-		ImGui::Checkbox("Also call RefreshAgentNameTag after", &also_refresh);
-		ImGui::Checkbox("Also run full toggle dance instead (matches RecolorAndRefreshNameTag)", &also_full_dance);
-
-		const uint32_t flag_value = custom_hex[0] != '\0'
-			? static_cast<uint32_t>(strtoul(custom_hex, nullptr, 16))
-			: kFlagValues[selected_flag];
-		ImGui::Text("Will apply: 0x%X", flag_value);
-
-		const bool is_known_crash = flag_value == 0x200;
-		if (is_known_crash) {
-			ImGui::TextColored(ImVec4(1.f, 0.3f, 0.3f, 1.f), "0x200 (Suppressed) confirmed to crash the client - refcounted global state, not a plain per-agent bit.");
-			ImGui::Checkbox("I understand this crashed before and want to try again anyway", &override_known_crash);
-		}
-
-		const bool can_act = target_living && SetNameTagBit_Func && (!is_known_crash || override_known_crash);
-		if (ImGui::Button("SET on test agent") && can_act) {
-			SetNameTagBit_Func(target, flag_value, 1);
-			if (also_refresh) GW::Agents::RefreshAgentNameTag(target);
-			if (also_full_dance) RecolorAndRefreshNameTag(target, target_living);
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("CLEAR on test agent") && can_act) {
-			SetNameTagBit_Func(target, flag_value, 0);
-			if (also_refresh) GW::Agents::RefreshAgentNameTag(target);
-			if (also_full_dance) RecolorAndRefreshNameTag(target, target_living);
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Reset test agent (clear all known flags + refresh)") && target_living && SetNameTagBit_Func) {
-			for (uint32_t v : kFlagValues) {
-				if (v == 0x200) continue;
-				SetNameTagBit_Func(target, v, 0);
+		if (!debug_blocked_nametag_ids_.empty()) {
+			ImGui::Text("Currently blocked (%zu):", debug_blocked_nametag_ids_.size());
+			uint32_t to_unblock = 0;
+			for (uint32_t id : debug_blocked_nametag_ids_) {
+				ImGui::PushID(static_cast<int>(id));
+				ImGui::BulletText("Agent %u", id);
+				ImGui::SameLine();
+				if (ImGui::SmallButton("Unblock")) to_unblock = id;
+				ImGui::PopID();
 			}
-			GW::Agents::RefreshAgentNameTag(target);
+			if (to_unblock) debug_blocked_nametag_ids_.erase(to_unblock);
+			if (ImGui::Button("Unblock all")) debug_blocked_nametag_ids_.clear();
 		}
 	}
 
 	void DrawSettingsInternal() {
-		DrawDebugFlagTester();
+		DrawDebugNameTagBlockTester();
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
