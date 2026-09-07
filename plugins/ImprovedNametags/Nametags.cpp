@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -893,7 +894,66 @@ private:
 		}
 	}
 
+	void DrawDebugFlagTester() {
+		if (!ImGui::CollapsingHeader("DEBUG: NameTag Flag Tester")) return;
+
+		EnsureSetNameTagBitScanned();
+		EnsureQueueEventAllocatorScanned();
+
+		static const char* kFlagNames[] = {
+			"Picked (0x8)", "Highlighted (0x10)", "InRange (0x20)", "EvaluatedTarget (0x80)",
+			"ManualTarget (0x100)", "Suppressed (0x200)", "PassesFilter (0x400)",
+			"NotOwnedByPlayer (0x800)", "PassesTransientFilter (0x1000)", "Disabled (0x20000)"
+		};
+		static constexpr uint32_t kFlagValues[] = {
+			0x8, 0x10, 0x20, 0x80, 0x100, 0x200, 0x400, 0x800, 0x1000, 0x20000
+		};
+		static int selected_flag = 9;
+		static char custom_hex[16] = "";
+		static bool also_refresh = false;
+		static bool also_full_dance = false;
+
+		GW::Agent* target = GW::Agents::GetTarget();
+		GW::AgentLiving* target_living = target ? target->GetAsAgentLiving() : nullptr;
+		if (target_living) {
+			ImGui::Text("Target: agent %u, current name_properties = 0x%X", target_living->agent_id, static_cast<uint32_t>(target->name_properties));
+		} else {
+			ImGui::TextDisabled("No living agent targeted");
+		}
+
+		ImGui::Combo("Flag to test", &selected_flag, kFlagNames, IM_ARRAYSIZE(kFlagNames));
+		ImGui::InputText("Custom hex (overrides dropdown if non-empty)", custom_hex, sizeof(custom_hex));
+		ImGui::Checkbox("Also call RefreshAgentNameTag after", &also_refresh);
+		ImGui::Checkbox("Also run full toggle dance instead (matches RecolorAndRefreshNameTag)", &also_full_dance);
+
+		const uint32_t flag_value = custom_hex[0] != '\0'
+			? static_cast<uint32_t>(strtoul(custom_hex, nullptr, 16))
+			: kFlagValues[selected_flag];
+		ImGui::Text("Will apply: 0x%X", flag_value);
+
+		const bool can_act = target_living && SetNameTagBit_Func;
+		if (ImGui::Button("SET on target") && can_act) {
+			SetNameTagBit_Func(target, flag_value, 1);
+			if (also_refresh) GW::Agents::RefreshAgentNameTag(target);
+			if (also_full_dance) RecolorAndRefreshNameTag(target, target_living);
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("CLEAR on target") && can_act) {
+			SetNameTagBit_Func(target, flag_value, 0);
+			if (also_refresh) GW::Agents::RefreshAgentNameTag(target);
+			if (also_full_dance) RecolorAndRefreshNameTag(target, target_living);
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Reset target (clear all known flags + refresh)") && can_act) {
+			for (uint32_t v : kFlagValues) {
+				SetNameTagBit_Func(target, v, 0);
+			}
+			GW::Agents::RefreshAgentNameTag(target);
+		}
+	}
+
 	void DrawSettingsInternal() {
+		DrawDebugFlagTester();
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
