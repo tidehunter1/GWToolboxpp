@@ -603,6 +603,9 @@ private:
 		if (want_hidden == state.tag_hidden) return;
 		state.tag_hidden = want_hidden;
 		if (SetNameTagBit_Func) {
+			if (want_hidden) {
+				GW::Chat::WriteChatF(GW::Chat::Channel::CHANNEL_GLOBAL, L"[Nametags DEBUG] hiding agent %u", agent->agent_id);
+			}
 			SetNameTagBit_Func(agent, GW::NameTagFlags_Disabled, want_hidden ? 1 : 0);
 		}
 	}
