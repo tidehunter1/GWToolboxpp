@@ -607,6 +607,10 @@ private:
 		state.tag_hidden = want_hidden;
 		if (SetNameTagBit_Func) {
 			SetNameTagBit_Func(agent, GW::NameTagFlags_Suppressed, want_hidden ? 1 : 0);
+			if (want_hidden && state.we_applied_flag) {
+				state.we_applied_flag = false;
+				SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, 0);
+			}
 		}
 	}
 
@@ -688,8 +692,8 @@ private:
 				if (!living) continue;
 
 				AgentState& state = GetOrCreateAgentState(living->agent_id);
-				ApplyHealthbarFlag(agent, state, want_flag);
 				const bool want_hidden = hide_active && ShouldApplyHideFilter(living, name_cache_.Get(living));
+				ApplyHealthbarFlag(agent, state, want_flag && !want_hidden);
 				ApplyHideFlag(agent, state, want_hidden);
 				RecolorAndRefreshNameTag(agent, living);
 			}
@@ -893,185 +897,7 @@ private:
 		}
 	}
 
-	[[nodiscard]] static uint32_t PickNearestNonTargetLivingAgent() {
-		GW::AgentArray* agents = GW::Agents::GetAgentArray();
-		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-		if (!agents || !agents->valid() || !me) return 0;
-		const uint32_t current_target_id = GW::Agents::GetTargetId();
-		uint32_t best_id = 0;
-		float best_dist_sq = -1.f;
-		for (GW::Agent* agent : *agents) {
-			if (!agent || !agent->GetIsLivingType()) continue;
-			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living || living->GetIsDead()) continue;
-			if (living->agent_id == me->agent_id) continue;
-			if (living->agent_id == current_target_id) continue;
-			const float dx = living->pos.x - me->pos.x;
-			const float dy = living->pos.y - me->pos.y;
-			const float dist_sq = dx * dx + dy * dy;
-			if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
-				best_dist_sq = dist_sq;
-				best_id = living->agent_id;
-			}
-		}
-		return best_id;
-	}
-
-	[[nodiscard]] static uint32_t PickNearestNonTargetEnemy() {
-		GW::AgentArray* agents = GW::Agents::GetAgentArray();
-		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-		if (!agents || !agents->valid() || !me) return 0;
-		const uint32_t current_target_id = GW::Agents::GetTargetId();
-		uint32_t best_id = 0;
-		float best_dist_sq = -1.f;
-		for (GW::Agent* agent : *agents) {
-			if (!agent || !agent->GetIsLivingType()) continue;
-			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living || living->GetIsDead()) continue;
-			if (living->allegiance != GW::Constants::Allegiance::Enemy) continue;
-			if (living->agent_id == current_target_id) continue;
-			const float dx = living->pos.x - me->pos.x;
-			const float dy = living->pos.y - me->pos.y;
-			const float dist_sq = dx * dx + dy * dy;
-			if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
-				best_dist_sq = dist_sq;
-				best_id = living->agent_id;
-			}
-		}
-		return best_id;
-	}
-
-	void DrawDebugFlagTester() {
-		if (!ImGui::CollapsingHeader("DEBUG: NameTag Flag Tester")) return;
-
-		EnsureSetNameTagBitScanned();
-
-		static const char* kFlagNames[] = {
-			"Picked (0x8)", "Highlighted (0x10)", "InRange (0x20)", "EvaluatedTarget (0x80)",
-			"ManualTarget (0x100)", "Suppressed (0x200) - crashed once on your TARGET, never yet retested on a non-target", "PassesFilter (0x400)",
-			"NotOwnedByPlayer (0x800)", "PassesTransientFilter (0x1000)", "Disabled (0x20000)"
-		};
-		static constexpr uint32_t kFlagValues[] = {
-			0x8, 0x10, 0x20, 0x80, 0x100, 0x200, 0x400, 0x800, 0x1000, 0x20000
-		};
-		static int selected_flag = 5;
-		static char custom_hex[16] = "";
-		static bool also_refresh = false;
-		static bool also_full_dance = false;
-		static bool override_known_crash = false;
-
-		static uint32_t test_agent_id = 0;
-		if (ImGui::Button("Pick nearest non-target agent")) {
-			test_agent_id = PickNearestNonTargetLivingAgent();
-		}
-		ImGui::SameLine();
-		ImGui::TextDisabled("(never picks your current target)");
-
-		GW::Agent* target = test_agent_id ? GW::Agents::GetAgentByID(test_agent_id) : nullptr;
-		GW::AgentLiving* target_living = target ? target->GetAsAgentLiving() : nullptr;
-		if (target_living) {
-			ImGui::Text("Test agent: %u, current name_properties = 0x%X", target_living->agent_id, static_cast<uint32_t>(target->name_properties));
-		} else {
-			ImGui::TextDisabled("No test agent picked yet");
-		}
-
-		ImGui::Combo("Flag to test", &selected_flag, kFlagNames, IM_ARRAYSIZE(kFlagNames));
-		ImGui::InputText("Custom hex (overrides dropdown if non-empty)", custom_hex, sizeof(custom_hex));
-		ImGui::Checkbox("Also call RefreshAgentNameTag after", &also_refresh);
-		ImGui::Checkbox("Also toggle PassesTransientFilter via SetNameTagBit_Func (forces a real kShowAgentNameTag/kSetAgentNameTagAttribs message)", &also_full_dance);
-
-		const uint32_t flag_value = custom_hex[0] != '\0'
-			? static_cast<uint32_t>(strtoul(custom_hex, nullptr, 16))
-			: kFlagValues[selected_flag];
-		ImGui::Text("Will apply: 0x%X", flag_value);
-
-		const bool is_known_crash_risk = flag_value == 0x200;
-		if (is_known_crash_risk) {
-			ImGui::TextColored(ImVec4(1.f, 0.6f, 0.1f, 1.f), "0x200 (Suppressed) crashed once - but that test was on your actual TARGET. This tool never picks your target. Proceed carefully.");
-			ImGui::Checkbox("I understand and want to test it on this non-target agent", &override_known_crash);
-		}
-
-		const bool can_act = target_living && SetNameTagBit_Func && (!is_known_crash_risk || override_known_crash);
-		if (ImGui::Button("SET on test agent") && can_act) {
-			const uint32_t agent_id = test_agent_id;
-			GW::GameThread::Enqueue([agent_id, flag_value] {
-				GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-				if (!agent || !SetNameTagBit_Func) return;
-				SetNameTagBit_Func(agent, flag_value, 1);
-				if (also_refresh) GW::Agents::RefreshAgentNameTag(agent);
-				if (also_full_dance) {
-					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 1);
-					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 0);
-				}
-			});
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("CLEAR on test agent") && can_act) {
-			const uint32_t agent_id = test_agent_id;
-			GW::GameThread::Enqueue([agent_id, flag_value] {
-				GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-				if (!agent || !SetNameTagBit_Func) return;
-				SetNameTagBit_Func(agent, flag_value, 0);
-				if (also_refresh) GW::Agents::RefreshAgentNameTag(agent);
-				if (also_full_dance) {
-					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 1);
-					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 0);
-				}
-			});
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Reset test agent (clear all known flags)") && target_living && SetNameTagBit_Func) {
-			const uint32_t agent_id = test_agent_id;
-			const bool allow_200 = override_known_crash;
-			GW::GameThread::Enqueue([agent_id, allow_200] {
-				GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-				if (!agent || !SetNameTagBit_Func) return;
-				for (uint32_t v : kFlagValues) {
-					if (v == 0x200 && !allow_200) continue;
-					SetNameTagBit_Func(agent, v, 0);
-				}
-				GW::Agents::RefreshAgentNameTag(agent);
-			});
-		}
-
-		ImGui::Separator();
-		if (ImGui::Button("SET Suppressed (0x200) ONLY on nearest foe - clears everything else first")) {
-			const uint32_t enemy_id = PickNearestNonTargetEnemy();
-			if (enemy_id) {
-				GW::GameThread::Enqueue([enemy_id] {
-					GW::Agent* agent = GW::Agents::GetAgentByID(enemy_id);
-					if (!agent || !SetNameTagBit_Func) return;
-					const uint32_t current = static_cast<uint32_t>(agent->name_properties);
-					if (current) SetNameTagBit_Func(agent, current, 0);
-					SetNameTagBit_Func(agent, 0x200, 1);
-				});
-			}
-		}
-
-		if (ImGui::Button("SEND kHideAgentNameTag directly via SendUIMessage (bypasses SetNameTagBit_Func entirely)")) {
-			const uint32_t enemy_id = PickNearestNonTargetEnemy();
-			if (enemy_id) {
-				GW::GameThread::Enqueue([enemy_id] {
-					GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag, reinterpret_cast<void*>(static_cast<uintptr_t>(enemy_id)));
-				});
-			}
-		}
-
-		if (ImGui::Button("SET Suppressed via RAW WRITE (no SetNameTagBit_Func call, no message fired)")) {
-			const uint32_t enemy_id = PickNearestNonTargetEnemy();
-			if (enemy_id) {
-				GW::GameThread::Enqueue([enemy_id] {
-					GW::Agent* agent = GW::Agents::GetAgentByID(enemy_id);
-					if (!agent) return;
-					const uint32_t current = static_cast<uint32_t>(agent->name_properties);
-					agent->name_properties = static_cast<GW::NameTagFlags>(current | GW::NameTagFlags_Suppressed);
-				});
-			}
-		}
-	}
-
 	void DrawSettingsInternal() {
-		DrawDebugFlagTester();
 		ImGui::SeparatorText("Nametags");
 
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
