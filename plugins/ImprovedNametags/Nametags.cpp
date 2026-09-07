@@ -87,6 +87,7 @@ public:
 		const std::wstring* lower;
 		const std::vector<std::wstring>* words;
 		GW::Constants::ProfessionByte profession;
+		bool resolved;
 	};
 
 	NameLookup Get(const GW::AgentLiving* living) {
@@ -110,7 +111,7 @@ public:
 			entry.profession = GetAgentProfession(living);
 			entry.profession_resolved = true;
 		}
-		return { &entry.decoded_lower, &entry.decoded_words_lower, entry.profession };
+		return { &entry.decoded_lower, &entry.decoded_words_lower, entry.profession, entry.converted };
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
@@ -186,6 +187,8 @@ struct NametagSettings {
 	}};
 
 	bool priority_enabled = false;
+	bool color_filtered = true;
+	bool hide_all_other = false;
 	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
 
 	bool escape_to_embark = false;
@@ -207,6 +210,7 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
 		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
+		GW::UI::RegisterUIMessageCallback(&preference_hook_entry_, GW::UI::UIMessage::kPreferenceFlagChanged, OnPreferenceFlagChanged);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
 	}
@@ -231,6 +235,8 @@ public:
 		fn("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
 		fn("visible", visible_);
 		fn("priority_enabled", settings_.priority_enabled);
+		fn("color_filtered", settings_.color_filtered);
+		fn("hide_all_other", settings_.hide_all_other);
 		fn("priority_raw", settings_.priority.raw);
 		fn("priority_color", settings_.priority.color);
 	}
@@ -261,6 +267,7 @@ public:
 	void Terminate() override {
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
+		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_);
@@ -289,6 +296,7 @@ public:
 		name_cache_.MaybePrune();
 		ProcessBossGlowRetries();
 		ProcessPendingAllegianceRefreshes();
+		ProcessPendingHideRefreshes();
 	}
 
 private:
@@ -305,6 +313,7 @@ private:
 	GW::HookEntry marker_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
+	GW::HookEntry preference_hook_entry_;
 	GW::HookEntry reveal_hotkey_hook_entry_;
 
 	AgentNameCache name_cache_;
@@ -347,6 +356,7 @@ private:
 	struct AgentState {
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
+		bool tag_hidden = false;
 	};
 	std::vector<AgentState> agent_state_;
 
@@ -372,14 +382,53 @@ private:
 		priority_state_.pending_parse_at_ms = 0;
 	}
 
-	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::vector<std::wstring>& words) const noexcept {
-		if (!settings_.priority_enabled) return std::nullopt;
+	[[nodiscard]] bool IsPriorityMatch(const std::vector<std::wstring>& words) const noexcept {
 		for (const auto& word : words) {
 			if (std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), word)) {
-				return settings_.priority.color;
+				return true;
 			}
 		}
-		return std::nullopt;
+		return false;
+	}
+
+	struct HideFrameCache {
+		uint64_t frame = UINT64_MAX;
+		bool pref_ally = false;
+		bool pref_foe = false;
+		bool in_outpost = false;
+	};
+	HideFrameCache hide_frame_cache_;
+
+	const HideFrameCache& GetHideFrameCache() {
+		if (hide_frame_cache_.frame != frame_counter_) {
+			hide_frame_cache_.frame = frame_counter_;
+			hide_frame_cache_.pref_ally = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
+			hide_frame_cache_.pref_foe = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
+			hide_frame_cache_.in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
+		}
+		return hide_frame_cache_;
+	}
+
+	[[nodiscard]] bool ShouldApplyHideFilter(const GW::AgentLiving* living, const AgentNameCache::NameLookup& lookup) {
+		if (living->GetIsDead()) return false;
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (me && living->agent_id == me->agent_id) return false;
+		if (priority_state_.names.empty()) return false;
+		if (!settings_.priority_enabled || !settings_.hide_all_other) return false;
+
+		const HideFrameCache& fc = GetHideFrameCache();
+		bool governing_pref;
+		if (living->IsPlayer()) {
+			governing_pref = fc.in_outpost ? fc.pref_foe : fc.pref_ally;
+		} else if (living->allegiance == GW::Constants::Allegiance::Enemy) {
+			governing_pref = fc.pref_foe;
+		} else {
+			governing_pref = fc.pref_ally;
+		}
+		if (!governing_pref) return false;
+
+		if (!lookup.resolved || !lookup.words) return false;
+		return !IsPriorityMatch(*lookup.words);
 	}
 
 	[[nodiscard]] std::optional<ImU32> TryGetProfessionColor(GW::Constants::ProfessionByte prof) const noexcept {
@@ -476,10 +525,7 @@ private:
 			auto* agent = static_cast<GW::Agent*>(ctx);
 			GW::AgentLiving* living = agent->GetAsAgentLiving();
 			if (living) {
-				auto* self = g_plugin;
-				if (const auto color = self->DecideAgentColor(living)) {
-					*result = static_cast<uint32_t>(*color);
-				}
+				g_plugin->EvaluateAgent(living, result);
 			}
 		}
 		GW::Hook::LeaveHook();
@@ -553,6 +599,14 @@ private:
 		}
 	}
 
+	static void ApplyHideFlag(GW::Agent* agent, AgentState& state, bool want_hidden) {
+		if (want_hidden == state.tag_hidden) return;
+		state.tag_hidden = want_hidden;
+		if (SetNameTagBit_Func) {
+			SetNameTagBit_Func(agent, GW::NameTagFlags_Disabled, want_hidden ? 1 : 0);
+		}
+	}
+
 	[[nodiscard]] static GW::AgentLiving* ValidateLivingAgent(GW::Agent* agent, GW::AgentLiving* me) {
 		if (!agent || !agent->GetIsLivingType()) return nullptr;
 		GW::AgentLiving* living = agent->GetAsAgentLiving();
@@ -621,7 +675,8 @@ private:
 		EnsureSetNameTagBitScanned();
 		EnsureQueueEventAllocatorScanned();
 		const bool want_flag = settings_.show_healthbar_all_agents;
-		GW::GameThread::Enqueue([this, want_flag] {
+		const bool hide_active = settings_.priority_enabled && settings_.hide_all_other;
+		GW::GameThread::Enqueue([this, want_flag, hide_active] {
 			GW::AgentArray* agents = GW::Agents::GetAgentArray();
 			if (!agents || !agents->valid()) return;
 			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
@@ -629,13 +684,17 @@ private:
 				GW::AgentLiving* living = ValidateLivingAgent(agent, me);
 				if (!living) continue;
 
-				ApplyHealthbarFlag(agent, GetOrCreateAgentState(living->agent_id), want_flag);
+				AgentState& state = GetOrCreateAgentState(living->agent_id);
+				ApplyHealthbarFlag(agent, state, want_flag);
+				const bool want_hidden = hide_active && ShouldApplyHideFilter(living, name_cache_.Get(living));
+				ApplyHideFlag(agent, state, want_hidden);
 				RecolorAndRefreshNameTag(agent, living);
 			}
 		});
 	}
 
 	std::unordered_set<uint32_t> pending_allegiance_refresh_ids_;
+	std::unordered_set<uint32_t> pending_hide_refresh_ids_;
 
 	void ProcessPendingAllegianceRefreshes() {
 		if (pending_allegiance_refresh_ids_.empty()) return;
@@ -650,6 +709,29 @@ private:
 				if (!living) continue;
 
 				RecolorAndRefreshNameTag(agent, living);
+			}
+		});
+	}
+
+	void CheckHidePriority(GW::AgentLiving* living, const AgentNameCache::NameLookup& lookup) {
+		if (ShouldApplyHideFilter(living, lookup) != GetOrCreateAgentState(living->agent_id).tag_hidden) {
+			pending_hide_refresh_ids_.insert(living->agent_id);
+		}
+	}
+
+	void ProcessPendingHideRefreshes() {
+		if (pending_hide_refresh_ids_.empty()) return;
+		std::vector<uint32_t> ids(pending_hide_refresh_ids_.begin(), pending_hide_refresh_ids_.end());
+		pending_hide_refresh_ids_.clear();
+		EnsureSetNameTagBitScanned();
+		GW::GameThread::Enqueue([this, ids] {
+			for (uint32_t agent_id : ids) {
+				GW::Agent* agent;
+				GW::AgentLiving* living = GetLivingAgentByID(agent_id, agent);
+				if (!living) continue;
+
+				AgentNameCache::NameLookup lookup = name_cache_.Get(living);
+				ApplyHideFlag(agent, GetOrCreateAgentState(agent_id), ShouldApplyHideFilter(living, lookup));
 			}
 		});
 	}
@@ -671,6 +753,7 @@ private:
 		self->boss_glow_retries_.clear();
 		self->boss_glow_pending_ids_.clear();
 		self->pending_allegiance_refresh_ids_.clear();
+		self->pending_hide_refresh_ids_.clear();
 		self->dirty_rescan_ = true;
 	}
 
@@ -719,24 +802,43 @@ private:
 		}
 	}
 
-	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living) {
-		if (!living) return std::nullopt;
+	static void OnPreferenceFlagChanged(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
+		auto* msg = static_cast<GW::UI::UIPacket::kPreferenceFlagChanged*>(wParam);
+		if (!msg) return;
+		if (msg->preference_id == GW::UI::FlagPreference::AlwaysShowAllyNames
+			|| msg->preference_id == GW::UI::FlagPreference::AlwaysShowFoeNames) {
+			g_plugin->dirty_rescan_ = true;
+		}
+	}
+
+	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
+		if (living->allegiance == GW::Constants::Allegiance::Npc_Minipet) return;
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
-		const bool need_names = settings_.priority_enabled;
 		const bool need_prof = is_enemy
 			? settings_.recolor_enemy_nametags_by_profession
 			: settings_.recolor_professions;
+		const bool need_names = settings_.priority_enabled
+			&& (settings_.color_filtered || settings_.hide_all_other);
 
 		AgentNameCache::NameLookup lookup{};
 		if (need_names || need_prof) {
 			lookup = name_cache_.Get(living);
 		}
 
-		if (need_names) {
-			if (const auto color = GetPriorityColor(*lookup.words)) {
-				return color;
-			}
+		if (const auto color = DecideAgentColor(living, is_enemy, need_prof, lookup)) {
+			*out_color = static_cast<uint32_t>(*color);
+		}
+
+		if (settings_.priority_enabled && settings_.hide_all_other) {
+			CheckHidePriority(living, lookup);
+		}
+	}
+
+	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living, bool is_enemy, bool need_prof, const AgentNameCache::NameLookup& lookup) {
+		if (settings_.priority_enabled && settings_.color_filtered
+			&& lookup.words && IsPriorityMatch(*lookup.words)) {
+			return settings_.priority.color;
 		}
 
 		if (is_enemy) {
@@ -794,24 +896,33 @@ private:
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
 		DrawCheckboxWithColorRightAligned("Color by quest", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
 
-		CheckboxDirty("##priority_enabled", settings_.priority_enabled);
-		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
-		ImGui::TextUnformatted("Priority coloring");
+		CheckboxDirty("Priority System", settings_.priority_enabled);
 		ShowHelpMarker("One name per line. Any single word (e.g. \"Monk\") matches any name containing that exact word.");
-		RightAlignNextItem(ImGui::GetFrameHeight());
+
 		ImGui::BeginDisabled(!settings_.priority_enabled);
+		ImGui::Indent();
+
+		CheckboxDirty("Color filtered", settings_.color_filtered);
+		RightAlignNextItem(ImGui::GetFrameHeight());
 		ImVec4 priority_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.priority.color);
 		if (ImGui::ColorEdit3("##priority_color", &priority_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.priority.color = ImGui::ColorConvertFloat4ToU32(priority_color_vec);
 		}
 		MarkDirtyOnEdit();
 
+		CheckboxDirty("Hide all other", settings_.hide_all_other);
+		ShowHelpMarker("Hides the nametag entirely for any agent that doesn't match the list below. Only takes effect while the game's own matching \"Always Show\" name-tag option is enabled.");
+
 		char priority_header_label[48];
 		snprintf(priority_header_label, sizeof(priority_header_label), "Priority Names (%zu)###priority_names", priority_state_.names.size());
+		ImGui::BeginDisabled(!settings_.color_filtered && !settings_.hide_all_other);
 		if (ImGui::TreeNodeEx(priority_header_label, ImGuiTreeNodeFlags_FramePadding)) {
 			DrawPriorityInput("##priority_input", priority_state_, settings_.priority.raw);
 			ImGui::TreePop();
 		}
+		ImGui::EndDisabled();
+
+		ImGui::Unindent();
 		ImGui::EndDisabled();
 
 		ImGui::Spacing();
