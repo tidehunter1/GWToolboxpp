@@ -924,25 +924,64 @@ private:
 		return best_id;
 	}
 
+	[[nodiscard]] static uint32_t PickNearestNonTargetEnemy() {
+		GW::AgentArray* agents = GW::Agents::GetAgentArray();
+		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
+		if (!agents || !agents->valid() || !me) return 0;
+		const uint32_t current_target_id = GW::Agents::GetTargetId();
+		uint32_t best_id = 0;
+		float best_dist_sq = -1.f;
+		for (GW::Agent* agent : *agents) {
+			if (!agent || !agent->GetIsLivingType()) continue;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || living->GetIsDead()) continue;
+			if (living->allegiance != GW::Constants::Allegiance::Enemy) continue;
+			if (living->agent_id == current_target_id) continue;
+			const float dx = living->pos.x - me->pos.x;
+			const float dy = living->pos.y - me->pos.y;
+			const float dist_sq = dx * dx + dy * dy;
+			if (best_dist_sq < 0.f || dist_sq < best_dist_sq) {
+				best_dist_sq = dist_sq;
+				best_id = living->agent_id;
+			}
+		}
+		return best_id;
+	}
+
 	std::unordered_set<uint32_t> debug_blocked_nametag_ids_;
+	bool debug_use_status_blocked_ = true;
+	bool debug_null_name_ = false;
+	bool debug_zero_bg_alpha_ = false;
+	bool debug_zero_text_alpha_ = false;
 
 	static void OnDebugNameTagMessage(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
 		auto* msg = static_cast<GW::UI::AgentNameTagInfo*>(wParam);
 		if (!msg) return;
-		if (g_plugin->debug_blocked_nametag_ids_.count(msg->agent_id)) {
-			status->blocked = true;
-		}
+		if (!g_plugin->debug_blocked_nametag_ids_.count(msg->agent_id)) return;
+		if (g_plugin->debug_use_status_blocked_ && status) status->blocked = true;
+		if (g_plugin->debug_null_name_) msg->name_enc = nullptr;
+		if (g_plugin->debug_zero_bg_alpha_) msg->background_alpha = 0;
+		if (g_plugin->debug_zero_text_alpha_) msg->text_color &= 0x00FFFFFF;
 	}
 
 	void DrawDebugNameTagBlockTester() {
 		if (!ImGui::CollapsingHeader("DEBUG: Hide via message block (experimental)")) return;
 
 		static uint32_t test_agent_id = 0;
-		if (ImGui::Button("Pick nearest non-target agent")) {
-			test_agent_id = PickNearestNonTargetLivingAgent();
+		if (ImGui::Button("Pick nearest non-target enemy")) {
+			test_agent_id = PickNearestNonTargetEnemy();
 		}
 		ImGui::SameLine();
+		if (ImGui::Button("Pick nearest non-target agent (any)")) {
+			test_agent_id = PickNearestNonTargetLivingAgent();
+		}
 		ImGui::TextDisabled("(never picks your current target)");
+
+		ImGui::Checkbox("Use status->blocked = true (proven Nameplates.cpp mechanism - enemies only)", &debug_use_status_blocked_);
+		ImGui::Checkbox("Null out name_enc", &debug_null_name_);
+		ImGui::Checkbox("Zero background_alpha", &debug_zero_bg_alpha_);
+		ImGui::Checkbox("Zero text_color alpha byte", &debug_zero_text_alpha_);
+		ImGui::TextDisabled("Toggle these off one at a time to isolate which one (if any) actually hides the tag.");
 
 		if (test_agent_id) {
 			ImGui::Text("Test agent: %u", test_agent_id);
