@@ -996,40 +996,58 @@ private:
 
 		const bool can_act = target_living && SetNameTagBit_Func && (!is_known_crash_risk || override_known_crash);
 		if (ImGui::Button("SET on test agent") && can_act) {
-			SetNameTagBit_Func(target, flag_value, 1);
-			if (also_refresh) GW::Agents::RefreshAgentNameTag(target);
-			if (also_full_dance) {
-				SetNameTagBit_Func(target, GW::NameTagFlags_PassesTransientFilter, 1);
-				SetNameTagBit_Func(target, GW::NameTagFlags_PassesTransientFilter, 0);
-			}
+			const uint32_t agent_id = test_agent_id;
+			GW::GameThread::Enqueue([agent_id, flag_value] {
+				GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+				if (!agent || !SetNameTagBit_Func) return;
+				SetNameTagBit_Func(agent, flag_value, 1);
+				if (also_refresh) GW::Agents::RefreshAgentNameTag(agent);
+				if (also_full_dance) {
+					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 1);
+					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 0);
+				}
+			});
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("CLEAR on test agent") && can_act) {
-			SetNameTagBit_Func(target, flag_value, 0);
-			if (also_refresh) GW::Agents::RefreshAgentNameTag(target);
-			if (also_full_dance) {
-				SetNameTagBit_Func(target, GW::NameTagFlags_PassesTransientFilter, 1);
-				SetNameTagBit_Func(target, GW::NameTagFlags_PassesTransientFilter, 0);
-			}
+			const uint32_t agent_id = test_agent_id;
+			GW::GameThread::Enqueue([agent_id, flag_value] {
+				GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+				if (!agent || !SetNameTagBit_Func) return;
+				SetNameTagBit_Func(agent, flag_value, 0);
+				if (also_refresh) GW::Agents::RefreshAgentNameTag(agent);
+				if (also_full_dance) {
+					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 1);
+					SetNameTagBit_Func(agent, GW::NameTagFlags_PassesTransientFilter, 0);
+				}
+			});
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Reset test agent (clear all known flags)") && target_living && SetNameTagBit_Func) {
-			for (uint32_t v : kFlagValues) {
-				if (v == 0x200 && !override_known_crash) continue;
-				SetNameTagBit_Func(target, v, 0);
-			}
-			GW::Agents::RefreshAgentNameTag(target);
+			const uint32_t agent_id = test_agent_id;
+			const bool allow_200 = override_known_crash;
+			GW::GameThread::Enqueue([agent_id, allow_200] {
+				GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+				if (!agent || !SetNameTagBit_Func) return;
+				for (uint32_t v : kFlagValues) {
+					if (v == 0x200 && !allow_200) continue;
+					SetNameTagBit_Func(agent, v, 0);
+				}
+				GW::Agents::RefreshAgentNameTag(agent);
+			});
 		}
 
 		ImGui::Separator();
 		if (ImGui::Button("SET Suppressed (0x200) ONLY on nearest foe - clears everything else first")) {
 			const uint32_t enemy_id = PickNearestNonTargetEnemy();
-			GW::Agent* enemy_agent = enemy_id ? GW::Agents::GetAgentByID(enemy_id) : nullptr;
-			GW::AgentLiving* enemy_living = enemy_agent ? enemy_agent->GetAsAgentLiving() : nullptr;
-			if (enemy_living && SetNameTagBit_Func) {
-				const uint32_t current = static_cast<uint32_t>(enemy_agent->name_properties);
-				if (current) SetNameTagBit_Func(enemy_agent, current, 0);
-				SetNameTagBit_Func(enemy_agent, 0x200, 1);
+			if (enemy_id) {
+				GW::GameThread::Enqueue([enemy_id] {
+					GW::Agent* agent = GW::Agents::GetAgentByID(enemy_id);
+					if (!agent || !SetNameTagBit_Func) return;
+					const uint32_t current = static_cast<uint32_t>(agent->name_properties);
+					if (current) SetNameTagBit_Func(agent, current, 0);
+					SetNameTagBit_Func(agent, 0x200, 1);
+				});
 			}
 		}
 
@@ -1044,10 +1062,13 @@ private:
 
 		if (ImGui::Button("SET Suppressed via RAW WRITE (no SetNameTagBit_Func call, no message fired)")) {
 			const uint32_t enemy_id = PickNearestNonTargetEnemy();
-			GW::Agent* enemy_agent = enemy_id ? GW::Agents::GetAgentByID(enemy_id) : nullptr;
-			if (enemy_agent) {
-				const uint32_t current = static_cast<uint32_t>(enemy_agent->name_properties);
-				enemy_agent->name_properties = static_cast<GW::NameTagFlags>(current | GW::NameTagFlags_Suppressed);
+			if (enemy_id) {
+				GW::GameThread::Enqueue([enemy_id] {
+					GW::Agent* agent = GW::Agents::GetAgentByID(enemy_id);
+					if (!agent) return;
+					const uint32_t current = static_cast<uint32_t>(agent->name_properties);
+					agent->name_properties = static_cast<GW::NameTagFlags>(current | GW::NameTagFlags_Suppressed);
+				});
 			}
 		}
 	}
