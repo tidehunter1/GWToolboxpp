@@ -537,8 +537,20 @@ private:
 
 	bool allegiance_hook_scan_failed_ = false;
 
+	static AllegianceColorFn_pt TryLocateAllegianceColorViaAssertion() {
+		const uintptr_t landing = GW::Scanner::FindAssertion("AvApi.cpp", "agent", 489, 0);
+		if (!landing) return nullptr;
+		const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
+		if (!func_start) return nullptr;
+		const uintptr_t call_site = func_start + 0x31;
+		return reinterpret_cast<AllegianceColorFn_pt>(GW::Scanner::FunctionFromNearCall(call_site, true));
+	}
+
 	void EnsureAllegianceColorHookInstalled() {
 		if (AllegianceColor_Func || allegiance_hook_scan_failed_) return;
+		if (!AllegianceColor_Func) {
+			AllegianceColor_Func = TryLocateAllegianceColorViaAssertion();
+		}
 		if (!EnsureScanned(AllegianceColor_Func, allegiance_hook_scan_failed_,
 			"\x55\x8b\xec\x51\x56\x57\x8b\xf9\xf6\x87\x5c\x01\x00\x00\x08\x74\x09\xc7\x45\xfc\xa0\xa0\xa0\xff\xeb\x25\x8a\x87\xb5\x01\x00\x00\x3c\x03\x75\x09\xc7\x45\xfc\x00\x00\xff\xff\xeb\x12\xc7\x45\xfc\x00\xff\xa0\xff\x3c\x06\x74\x07",
 			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
@@ -555,6 +567,16 @@ private:
 			AllegianceColor_Func = nullptr;
 			AllegianceColor_Ret = nullptr;
 		}
+	}
+
+	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
+	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
+
+	static bool EnsureSetNameTagBitScanned() {
+		static bool scan_failed = false;
+		return EnsureScanned(SetNameTagBit_Func, scan_failed,
+			"\x55\x8b\xec\x83\xec\x64\x83\x7d\x0c\x00\x53\x57\x8b\xf9\x8b\x57",
+			"xxxxxxxxxxxxxxxx");
 	}
 
 	using QueueEventAllocator_pt = void*(__thiscall*)(void*, uint32_t);
@@ -587,12 +609,7 @@ private:
 	static bool ApplyNameTagBit(GW::Agent* agent, bool& applied, GW::NameTagFlags flag, bool want) {
 		if (want == applied) return false;
 		applied = want;
-		const uint32_t current = static_cast<uint32_t>(agent->name_properties);
-		agent->name_properties = static_cast<GW::NameTagFlags>(
-			want ? (current | static_cast<uint32_t>(flag)) : (current & ~static_cast<uint32_t>(flag)));
-		if (GW::AgentLiving* living = agent->GetAsAgentLiving()) {
-			TriggerAllegianceRecolor(agent, static_cast<uint32_t>(living->allegiance));
-		}
+		if (SetNameTagBit_Func) SetNameTagBit_Func(agent, flag, want ? 1 : 0);
 		return true;
 	}
 
@@ -604,8 +621,6 @@ private:
 		if (!ApplyNameTagBit(agent, state.tag_hidden, GW::NameTagFlags_Suppressed, want_hidden)) return;
 		if (want_hidden) {
 			ApplyNameTagBit(agent, state.we_applied_flag, GW::NameTagFlags_ManualTarget, false);
-			GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag,
-				reinterpret_cast<void*>(static_cast<uintptr_t>(agent->agent_id)));
 		}
 	}
 
@@ -652,6 +667,7 @@ private:
 
 	void TouchAgent(uint32_t agent_id, bool recolor, bool retarget) {
 		if (retarget || recolor) {
+			EnsureSetNameTagBitScanned();
 			EnsureQueueEventAllocatorScanned();
 		}
 		GW::GameThread::Enqueue([this, agent_id, recolor, retarget] {
@@ -673,6 +689,7 @@ private:
 	}
 
 	void RescanAllAgentsForHealthbar() {
+		EnsureSetNameTagBitScanned();
 		EnsureQueueEventAllocatorScanned();
 		const bool want_flag = settings_.show_healthbar_all_agents;
 		const bool hide_active = settings_.priority_enabled && settings_.hide_all_other;
@@ -712,6 +729,7 @@ private:
 	}
 
 	void ProcessPendingAllegianceRefreshes() {
+		EnsureSetNameTagBitScanned();
 		EnsureQueueEventAllocatorScanned();
 		DrainPendingIds(pending_allegiance_refresh_ids_, [](GW::Agent* agent, GW::AgentLiving* living) {
 			RecolorAndRefreshNameTag(agent, living);
@@ -725,7 +743,7 @@ private:
 	}
 
 	void ProcessPendingHideRefreshes() {
-		EnsureQueueEventAllocatorScanned();
+		EnsureSetNameTagBitScanned();
 		DrainPendingIds(pending_hide_refresh_ids_, [this](GW::Agent* agent, GW::AgentLiving* living) {
 			ApplyHideFlag(agent, GetOrCreateAgentState(living->agent_id), ShouldApplyHideFilter(living, name_cache_.Get(living)));
 		});
