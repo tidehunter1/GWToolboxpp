@@ -39,6 +39,23 @@
 #include <algorithm>
 #include <array>
 
+template<typename FuncPtr>
+inline FuncPtr LocateViaAssertion(const char* file, const char* msg, uint32_t line, uintptr_t call_offset) {
+	const uintptr_t landing = GW::Scanner::FindAssertion(file, msg, line, 0);
+	if (!landing) return nullptr;
+	const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
+	if (!func_start) return nullptr;
+	return reinterpret_cast<FuncPtr>(GW::Scanner::FunctionFromNearCall(func_start + call_offset, true));
+}
+
+template<typename FuncPtr, typename Locator>
+inline bool EnsureLocated(FuncPtr& target, bool& scan_failed, Locator&& locator) {
+	if (target || scan_failed) return target != nullptr;
+	target = locator();
+	if (!target) scan_failed = true;
+	return target != nullptr;
+}
+
 template<typename CacheMap>
 inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, uint64_t interval) {
 	++tick;
@@ -528,21 +545,12 @@ private:
 	bool allegiance_hook_scan_failed_ = false;
 
 	static AllegianceColorFn_pt TryLocateAllegianceColorViaAssertion() {
-		const uintptr_t landing = GW::Scanner::FindAssertion("AvApi.cpp", "agent", 489, 0);
-		if (!landing) return nullptr;
-		const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
-		if (!func_start) return nullptr;
-		const uintptr_t call_site = func_start + 0x31;
-		return reinterpret_cast<AllegianceColorFn_pt>(GW::Scanner::FunctionFromNearCall(call_site, true));
+		return LocateViaAssertion<AllegianceColorFn_pt>("AvApi.cpp", "agent", 489, 0x31);
 	}
 
 	void EnsureAllegianceColorHookInstalled() {
 		if (AllegianceColor_Func || allegiance_hook_scan_failed_) return;
-		AllegianceColor_Func = TryLocateAllegianceColorViaAssertion();
-		if (!AllegianceColor_Func) {
-			allegiance_hook_scan_failed_ = true;
-			return;
-		}
+		if (!EnsureLocated(AllegianceColor_Func, allegiance_hook_scan_failed_, TryLocateAllegianceColorViaAssertion)) return;
 		GW::Hook::CreateHook(&AllegianceColor_Func, OnAllegianceColor, &AllegianceColor_Ret);
 		GW::Hook::EnableHooks(AllegianceColor_Func);
 	}
@@ -560,40 +568,24 @@ private:
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
 	static SetNameTagBit_pt TryLocateSetNameTagBitViaAssertion() {
-		const uintptr_t landing = GW::Scanner::FindAssertion("AvManager.cpp", "result", 1367, 0);
-		if (!landing) return nullptr;
-		const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
-		if (!func_start) return nullptr;
-		const uintptr_t call_site = func_start + 0x117;
-		return reinterpret_cast<SetNameTagBit_pt>(GW::Scanner::FunctionFromNearCall(call_site, true));
+		return LocateViaAssertion<SetNameTagBit_pt>("AvManager.cpp", "result", 1367, 0x117);
 	}
 
 	static bool EnsureSetNameTagBitScanned() {
 		static bool scan_failed = false;
-		if (SetNameTagBit_Func || scan_failed) return SetNameTagBit_Func != nullptr;
-		SetNameTagBit_Func = TryLocateSetNameTagBitViaAssertion();
-		if (!SetNameTagBit_Func) scan_failed = true;
-		return SetNameTagBit_Func != nullptr;
+		return EnsureLocated(SetNameTagBit_Func, scan_failed, TryLocateSetNameTagBitViaAssertion);
 	}
 
 	using QueueEventAllocator_pt = void*(__thiscall*)(void*, uint32_t);
 	static inline QueueEventAllocator_pt QueueEventAllocator_Func = nullptr;
 
 	static QueueEventAllocator_pt TryLocateQueueEventAllocatorViaAssertion() {
-		const uintptr_t landing = GW::Scanner::FindAssertion("AvChar.cpp", "stat == AV_CHAR_STAT_ENERGY", 4320, 0);
-		if (!landing) return nullptr;
-		const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
-		if (!func_start) return nullptr;
-		const uintptr_t call_site = func_start + 0x6f;
-		return reinterpret_cast<QueueEventAllocator_pt>(GW::Scanner::FunctionFromNearCall(call_site, true));
+		return LocateViaAssertion<QueueEventAllocator_pt>("AvChar.cpp", "stat == AV_CHAR_STAT_ENERGY", 4320, 0x6f);
 	}
 
 	static bool EnsureQueueEventAllocatorScanned() {
 		static bool scan_failed = false;
-		if (QueueEventAllocator_Func || scan_failed) return QueueEventAllocator_Func != nullptr;
-		QueueEventAllocator_Func = TryLocateQueueEventAllocatorViaAssertion();
-		if (!QueueEventAllocator_Func) scan_failed = true;
-		return QueueEventAllocator_Func != nullptr;
+		return EnsureLocated(QueueEventAllocator_Func, scan_failed, TryLocateQueueEventAllocatorViaAssertion);
 	}
 
 	static void TriggerAllegianceRecolor(GW::Agent* agent, uint32_t allegiance_value) {
