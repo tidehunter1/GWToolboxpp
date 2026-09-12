@@ -557,36 +557,7 @@ private:
 		}
 	}
 
-	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
-	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
-
-	static bool EnsureSetNameTagBitScanned() {
-		static bool scan_failed = false;
-		return EnsureScanned(SetNameTagBit_Func, scan_failed,
-			"\x55\x8b\xec\x83\xec\x64\x83\x7d\x0c\x00\x53\x57\x8b\xf9\x8b\x57",
-			"xxxxxxxxxxxxxxxx");
-	}
-
-	using QueueEventAllocator_pt = void*(__thiscall*)(void*, uint32_t);
-	static inline QueueEventAllocator_pt QueueEventAllocator_Func = nullptr;
-
-	static bool EnsureQueueEventAllocatorScanned() {
-		static bool scan_failed = false;
-		return EnsureScanned(QueueEventAllocator_Func, scan_failed,
-			"\x55\x8b\xec\x53\x56\x57\x8b\xf9\xe8\x23\x3b\xff\xff\x8b\x55\x08\x8b\xd8\x89\x13\x8b\x57\x2c\x89\x53\x04\xc7\x43\x08\x00\x00\x00\x00\x81\xbf\x40\x01\x00\x00\xdd\xdd\xdd\xdd\x75\x14\x68\x87\x01\x00\x00\xba\x38\xdf\x93\x00\xb9\xbc\xdf\x93\x00\xe8\xcf\x23\xc9\xff\x8b\xb7\x40\x01\x00\x00\x03\xf3\x8b\x16\x8b\x4e\x04\x8b\x06\x83\xe1\xfe\x8b\x40\x04\x83\xe0\xfe\x2b\xc8\x89\x14\x31\x8b\x4e\x04\x8b\x06\x89\x48\x04\x8b\x87\x44\x01\x00\x00\x89\x06\x8b\x06\x8b\x40\x04\x89\x46\x04\x8b\x87\x44\x01\x00\x00\x89\x58\x04\x89\xb7\x44\x01\x00\x00\xa1\x38\xa8\x08\x01\x85\xc0\x0f\x84\xc0\x00\x00\x00\x50",
-			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx");
-	}
-
-	static void TriggerAllegianceRecolor(GW::Agent* agent, uint32_t allegiance_value) {
-		if (!QueueEventAllocator_Func) return;
-		void* node = QueueEventAllocator_Func(agent, 8);
-		if (!node) return;
-		*reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(node) + 0x1c) = allegiance_value;
-	}
-
-	static void RecolorAndRefreshNameTag(GW::Agent* agent, GW::AgentLiving* living) {
-		TriggerAllegianceRecolor(agent, static_cast<uint32_t>(living->allegiance));
-
+	static void RecolorAndRefreshNameTag(GW::Agent* agent, [[maybe_unused]] GW::AgentLiving* living) {
 		const uint32_t current_properties = static_cast<uint32_t>(agent->name_properties);
 		agent->name_properties = static_cast<GW::NameTagFlags>(current_properties | GW::NameTagFlags_PassesTransientFilter);
 		GW::Agents::RefreshAgentNameTag(agent);
@@ -597,7 +568,10 @@ private:
 	static bool ApplyNameTagBit(GW::Agent* agent, bool& applied, GW::NameTagFlags flag, bool want) {
 		if (want == applied) return false;
 		applied = want;
-		if (SetNameTagBit_Func) SetNameTagBit_Func(agent, flag, want ? 1 : 0);
+		const uint32_t current = static_cast<uint32_t>(agent->name_properties);
+		agent->name_properties = static_cast<GW::NameTagFlags>(
+			want ? (current | static_cast<uint32_t>(flag)) : (current & ~static_cast<uint32_t>(flag)));
+		GW::Agents::RefreshAgentNameTag(agent);
 		return true;
 	}
 
@@ -609,6 +583,8 @@ private:
 		if (!ApplyNameTagBit(agent, state.tag_hidden, GW::NameTagFlags_Suppressed, want_hidden)) return;
 		if (want_hidden) {
 			ApplyNameTagBit(agent, state.we_applied_flag, GW::NameTagFlags_ManualTarget, false);
+			GW::UI::SendUIMessage(GW::UI::UIMessage::kHideAgentNameTag,
+				reinterpret_cast<void*>(static_cast<uintptr_t>(agent->agent_id)));
 		}
 	}
 
@@ -654,10 +630,6 @@ private:
 	}
 
 	void TouchAgent(uint32_t agent_id, bool recolor, bool retarget) {
-		if (retarget || recolor) {
-			EnsureSetNameTagBitScanned();
-			EnsureQueueEventAllocatorScanned();
-		}
 		GW::GameThread::Enqueue([this, agent_id, recolor, retarget] {
 			GW::Agent* agent;
 			GW::AgentLiving* living = GetLivingAgentByID(agent_id, agent);
@@ -677,8 +649,6 @@ private:
 	}
 
 	void RescanAllAgentsForHealthbar() {
-		EnsureSetNameTagBitScanned();
-		EnsureQueueEventAllocatorScanned();
 		const bool want_flag = settings_.show_healthbar_all_agents;
 		const bool hide_active = settings_.priority_enabled && settings_.hide_all_other;
 		GW::GameThread::Enqueue([this, want_flag, hide_active] {
@@ -717,8 +687,6 @@ private:
 	}
 
 	void ProcessPendingAllegianceRefreshes() {
-		EnsureSetNameTagBitScanned();
-		EnsureQueueEventAllocatorScanned();
 		DrainPendingIds(pending_allegiance_refresh_ids_, [](GW::Agent* agent, GW::AgentLiving* living) {
 			RecolorAndRefreshNameTag(agent, living);
 		});
@@ -731,7 +699,6 @@ private:
 	}
 
 	void ProcessPendingHideRefreshes() {
-		EnsureSetNameTagBitScanned();
 		DrainPendingIds(pending_hide_refresh_ids_, [this](GW::Agent* agent, GW::AgentLiving* living) {
 			ApplyHideFlag(agent, GetOrCreateAgentState(living->agent_id), ShouldApplyHideFilter(living, name_cache_.Get(living)));
 		});
