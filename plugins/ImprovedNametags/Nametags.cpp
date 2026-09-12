@@ -16,7 +16,6 @@
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/AgentMgr.h>
-#include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Utilities/Hooker.h>
 #include <GWCA/Utilities/Scanner.h>
@@ -329,29 +328,37 @@ private:
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
 		uint32_t agent_id;
-		uint64_t scheduled_frame;
+		int attempts_left;
 	};
+	static constexpr int kBossGlowMaxAttempts = 60;
 	std::vector<BossGlowRetry> boss_glow_retries_;
 	std::unordered_set<uint32_t> boss_glow_pending_ids_;
 
 	void ScheduleBossGlowRetry(uint32_t agent_id) {
 		if (!boss_glow_pending_ids_.insert(agent_id).second) return;
-		boss_glow_retries_.push_back({agent_id, frame_counter_});
+		boss_glow_retries_.push_back({agent_id, kBossGlowMaxAttempts});
 	}
 
 	void ProcessBossGlowRetries() {
 		size_t write = 0;
 		for (size_t read = 0; read < boss_glow_retries_.size(); ++read) {
-			const BossGlowRetry entry = boss_glow_retries_[read];
-			if (frame_counter_ <= entry.scheduled_frame) {
-				boss_glow_retries_[write++] = entry;
-				continue;
-			}
-			boss_glow_pending_ids_.erase(entry.agent_id);
+			BossGlowRetry entry = boss_glow_retries_[read];
 
 			GW::Agent* agent = GW::Agents::GetAgentByID(entry.agent_id);
 			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
-			if (living && living->GetHasBossGlow()) {
+			if (!living) {
+				boss_glow_pending_ids_.erase(entry.agent_id);
+				continue;
+			}
+
+			const bool state_ready = (static_cast<uint32_t>(agent->name_properties) & 0x2) != 0;
+			if (!state_ready && --entry.attempts_left > 0) {
+				boss_glow_retries_[write++] = entry;
+				continue;
+			}
+
+			boss_glow_pending_ids_.erase(entry.agent_id);
+			if (living->GetHasBossGlow()) {
 				TouchAgent(entry.agent_id, true, true);
 			}
 		}
@@ -793,7 +800,7 @@ private:
 	bool chat_suppress_hook_detached_ = false;
 
 	[[nodiscard]] static bool ShouldSuppressWarning(uint32_t channel, const wchar_t* message) {
-		if (channel != GW::Chat::Channel::CHANNEL_GWCA2 && channel != GW::Chat::Channel::CHANNEL_WARNING) return false;
+		if (channel != 4 && channel != 7) return false;
 		if (!message) return false;
 		return wcsstr(message, L"Plugins") != nullptr;
 	}
