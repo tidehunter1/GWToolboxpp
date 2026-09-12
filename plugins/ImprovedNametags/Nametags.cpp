@@ -215,8 +215,8 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_, OnAgentRemove, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_, OnAgentMarkerChanged, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
-		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
-		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
+		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite<GW::UI::UIPacket::kWriteToChatLog>);
+		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWrite<GW::UI::UIPacket::kWriteToChatLogWithSender>);
 		GW::UI::RegisterUIMessageCallback(&preference_hook_entry_, GW::UI::UIMessage::kPreferenceFlagChanged, OnPreferenceFlagChanged);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
@@ -809,18 +809,11 @@ private:
 		return wcsstr(message, L"Plugins") != nullptr;
 	}
 
+	template<typename PacketT>
 	static void OnChatLogWrite(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
-		auto* msg = static_cast<GW::UI::UIPacket::kWriteToChatLog*>(wParam);
+		auto* msg = static_cast<PacketT*>(wParam);
 		if (!msg) return;
 		if (ShouldSuppressWarning(static_cast<uint32_t>(msg->channel), msg->message)) {
-			status->blocked = true;
-		}
-	}
-
-	static void OnChatLogWriteWithSender(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
-		auto* msg = static_cast<GW::UI::UIPacket::kWriteToChatLogWithSender*>(wParam);
-		if (!msg) return;
-		if (ShouldSuppressWarning(msg->channel, msg->message)) {
 			status->blocked = true;
 		}
 	}
