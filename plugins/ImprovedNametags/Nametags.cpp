@@ -72,16 +72,6 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
 	return npc ? static_cast<GW::Constants::ProfessionByte>(npc->primary) : GW::Constants::ProfessionByte::None;
 }
 
-template<typename FuncPtr>
-inline bool EnsureScanned(FuncPtr& cached, bool& failed, const char* pattern, const char* mask) {
-	if (cached) return true;
-	if (failed) return false;
-	const uintptr_t addr = GW::Scanner::Find(pattern, mask);
-	if (addr) cached = reinterpret_cast<FuncPtr>(addr);
-	if (!cached) failed = true;
-	return cached != nullptr;
-}
-
 class AgentNameCache {
 public:
 	struct NameLookup {
@@ -548,12 +538,9 @@ private:
 
 	void EnsureAllegianceColorHookInstalled() {
 		if (AllegianceColor_Func || allegiance_hook_scan_failed_) return;
+		AllegianceColor_Func = TryLocateAllegianceColorViaAssertion();
 		if (!AllegianceColor_Func) {
-			AllegianceColor_Func = TryLocateAllegianceColorViaAssertion();
-		}
-		if (!EnsureScanned(AllegianceColor_Func, allegiance_hook_scan_failed_,
-			"\x55\x8b\xec\x51\x56\x57\x8b\xf9\xf6\x87\x5c\x01\x00\x00\x08\x74\x09\xc7\x45\xfc\xa0\xa0\xa0\xff\xeb\x25\x8a\x87\xb5\x01\x00\x00\x3c\x03\x75\x09\xc7\x45\xfc\x00\x00\xff\xff\xeb\x12\xc7\x45\xfc\x00\xff\xa0\xff\x3c\x06\x74\x07",
-			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
+			allegiance_hook_scan_failed_ = true;
 			return;
 		}
 		GW::Hook::CreateHook(&AllegianceColor_Func, OnAllegianceColor, &AllegianceColor_Ret);
@@ -572,21 +559,41 @@ private:
 	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
+	static SetNameTagBit_pt TryLocateSetNameTagBitViaAssertion() {
+		const uintptr_t landing = GW::Scanner::FindAssertion("AvManager.cpp", "result", 1367, 0);
+		if (!landing) return nullptr;
+		const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
+		if (!func_start) return nullptr;
+		const uintptr_t call_site = func_start + 0x117;
+		return reinterpret_cast<SetNameTagBit_pt>(GW::Scanner::FunctionFromNearCall(call_site, true));
+	}
+
 	static bool EnsureSetNameTagBitScanned() {
 		static bool scan_failed = false;
-		return EnsureScanned(SetNameTagBit_Func, scan_failed,
-			"\x55\x8b\xec\x83\xec\x64\x83\x7d\x0c\x00\x53\x57\x8b\xf9\x8b\x57",
-			"xxxxxxxxxxxxxxxx");
+		if (SetNameTagBit_Func || scan_failed) return SetNameTagBit_Func != nullptr;
+		SetNameTagBit_Func = TryLocateSetNameTagBitViaAssertion();
+		if (!SetNameTagBit_Func) scan_failed = true;
+		return SetNameTagBit_Func != nullptr;
 	}
 
 	using QueueEventAllocator_pt = void*(__thiscall*)(void*, uint32_t);
 	static inline QueueEventAllocator_pt QueueEventAllocator_Func = nullptr;
 
+	static QueueEventAllocator_pt TryLocateQueueEventAllocatorViaAssertion() {
+		const uintptr_t landing = GW::Scanner::FindAssertion("AvChar.cpp", "stat == AV_CHAR_STAT_ENERGY", 4320, 0);
+		if (!landing) return nullptr;
+		const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
+		if (!func_start) return nullptr;
+		const uintptr_t call_site = func_start + 0x6f;
+		return reinterpret_cast<QueueEventAllocator_pt>(GW::Scanner::FunctionFromNearCall(call_site, true));
+	}
+
 	static bool EnsureQueueEventAllocatorScanned() {
 		static bool scan_failed = false;
-		return EnsureScanned(QueueEventAllocator_Func, scan_failed,
-			"\x55\x8b\xec\x53\x56\x57\x8b\xf9\xe8\x23\x3b\xff\xff\x8b\x55\x08\x8b\xd8\x89\x13\x8b\x57\x2c\x89\x53\x04\xc7\x43\x08\x00\x00\x00\x00\x81\xbf\x40\x01\x00\x00\xdd\xdd\xdd\xdd\x75\x14\x68\x87\x01\x00\x00\xba\x38\xdf\x93\x00\xb9\xbc\xdf\x93\x00\xe8\xcf\x23\xc9\xff\x8b\xb7\x40\x01\x00\x00\x03\xf3\x8b\x16\x8b\x4e\x04\x8b\x06\x83\xe1\xfe\x8b\x40\x04\x83\xe0\xfe\x2b\xc8\x89\x14\x31\x8b\x4e\x04\x8b\x06\x89\x48\x04\x8b\x87\x44\x01\x00\x00\x89\x06\x8b\x06\x8b\x40\x04\x89\x46\x04\x8b\x87\x44\x01\x00\x00\x89\x58\x04\x89\xb7\x44\x01\x00\x00\xa1\x38\xa8\x08\x01\x85\xc0\x0f\x84\xc0\x00\x00\x00\x50",
-			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx");
+		if (QueueEventAllocator_Func || scan_failed) return QueueEventAllocator_Func != nullptr;
+		QueueEventAllocator_Func = TryLocateQueueEventAllocatorViaAssertion();
+		if (!QueueEventAllocator_Func) scan_failed = true;
+		return QueueEventAllocator_Func != nullptr;
 	}
 
 	static void TriggerAllegianceRecolor(GW::Agent* agent, uint32_t allegiance_value) {
