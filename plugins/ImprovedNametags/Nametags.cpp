@@ -857,6 +857,8 @@ private:
 	}
 
 	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living, bool is_enemy, bool need_prof, const AgentNameCache::NameLookup& lookup) {
+		if (living->GetIsDeadByTypeMap()) return std::nullopt;
+
 		if (settings_.priority_enabled && settings_.color_filtered
 			&& lookup.words && IsPriorityMatch(*lookup.words)) {
 			return settings_.priority.color;
