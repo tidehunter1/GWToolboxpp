@@ -378,7 +378,6 @@ private:
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
 		bool tag_hidden = false;
-		bool was_dead = false;
 	};
 	std::vector<AgentState> agent_state_;
 
@@ -829,15 +828,6 @@ private:
 	}
 
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
-		AgentState& state = GetOrCreateAgentState(living->agent_id);
-		const bool is_dead = living->GetIsDeadByTypeMap();
-		if (state.was_dead && !is_dead) {
-			state.we_applied_flag = false;
-			state.tag_hidden = false;
-			TouchAgent(living->agent_id, true, true);
-		}
-		state.was_dead = is_dead;
-
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
 		const bool need_prof = is_enemy
 			? settings_.recolor_enemy_nametags_by_profession
