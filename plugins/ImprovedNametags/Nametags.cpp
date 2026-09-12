@@ -1,7 +1,6 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstdio>
-#include <cstdlib>
 #include <functional>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -16,6 +15,7 @@
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/AgentMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Utilities/Hooker.h>
 #include <GWCA/Utilities/Scanner.h>
@@ -37,23 +37,6 @@
 #include <optional>
 #include <algorithm>
 #include <array>
-
-template<typename FuncPtr>
-inline FuncPtr LocateViaAssertion(const char* file, const char* msg, uint32_t line, uintptr_t call_offset) {
-	const uintptr_t landing = GW::Scanner::FindAssertion(file, msg, line, 0);
-	if (!landing) return nullptr;
-	const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
-	if (!func_start) return nullptr;
-	return reinterpret_cast<FuncPtr>(GW::Scanner::FunctionFromNearCall(func_start + call_offset, true));
-}
-
-template<typename FuncPtr, typename Locator>
-inline bool EnsureLocated(FuncPtr& target, bool& scan_failed, Locator&& locator) {
-	if (target || scan_failed) return target != nullptr;
-	target = locator();
-	if (!target) scan_failed = true;
-	return target != nullptr;
-}
 
 template<typename CacheMap>
 inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, uint64_t interval) {
@@ -88,13 +71,22 @@ inline void PruneCache(CacheMap& cache, uint64_t& tick, uint64_t& last_prune, ui
 	return npc ? static_cast<GW::Constants::ProfessionByte>(npc->primary) : GW::Constants::ProfessionByte::None;
 }
 
+template<typename FuncPtr>
+inline bool EnsureScanned(FuncPtr& cached, bool& failed, const char* pattern, const char* mask) {
+	if (cached) return true;
+	if (failed) return false;
+	const uintptr_t addr = GW::Scanner::Find(pattern, mask);
+	if (addr) cached = reinterpret_cast<FuncPtr>(addr);
+	if (!cached) failed = true;
+	return cached != nullptr;
+}
+
 class AgentNameCache {
 public:
 	struct NameLookup {
 		const std::wstring* lower;
 		const std::vector<std::wstring>* words;
 		GW::Constants::ProfessionByte profession;
-		bool resolved;
 	};
 
 	NameLookup Get(const GW::AgentLiving* living) {
@@ -118,7 +110,7 @@ public:
 			entry.profession = GetAgentProfession(living);
 			entry.profession_resolved = true;
 		}
-		return { &entry.decoded_lower, &entry.decoded_words_lower, entry.profession, entry.converted };
+		return { &entry.decoded_lower, &entry.decoded_words_lower, entry.profession };
 	}
 
 	void MaybePrune() { PruneCache(cache_, tick_, last_prune_tick_, kPruneIntervalTicks); }
@@ -146,15 +138,15 @@ private:
 [[nodiscard]] inline std::vector<std::wstring> ParseNameList(const std::string& raw) {
 	std::vector<std::wstring> out;
 	std::istringstream stream(raw);
-	for (std::string token; std::getline(stream, token, '\n'); ) {
+	std::string token;
+	while (std::getline(stream, token, '\n')) {
 		const size_t start = token.find_first_not_of(" \t\r\n");
-		if (start == std::string::npos) continue;
-		token.erase(0, start);
-		token.erase(token.find_last_not_of(" \t\r\n") + 1);
+		const size_t end = token.find_last_not_of(" \t\r\n");
+		if (start == std::string::npos || end == std::string::npos) continue;
 
-		std::wstring w = PluginUtils::StringToWString(token);
+		std::wstring w = PluginUtils::StringToWString(token.substr(start, end - start + 1));
 		std::transform(w.begin(), w.end(), w.begin(), ::towlower);
-		out.push_back(std::move(w));
+		if (!w.empty()) out.push_back(std::move(w));
 	}
 	std::sort(out.begin(), out.end());
 	out.erase(std::unique(out.begin(), out.end()), out.end());
@@ -194,8 +186,6 @@ struct NametagSettings {
 	}};
 
 	bool priority_enabled = false;
-	bool color_filtered = true;
-	bool hide_all_other = false;
 	PriorityConfig priority = {"", IM_COL32(135, 206, 250, 255)};
 
 	bool escape_to_embark = false;
@@ -215,9 +205,8 @@ public:
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_, OnAgentRemove, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::GenericValue>(&marker_hook_entry_, OnAgentMarkerChanged, 1);
 		GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MapLoaded>(&map_loaded_hook_entry_, OnMapLoaded, 1);
-		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite<GW::UI::UIPacket::kWriteToChatLog>);
-		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWrite<GW::UI::UIPacket::kWriteToChatLogWithSender>);
-		GW::UI::RegisterUIMessageCallback(&preference_hook_entry_, GW::UI::UIMessage::kPreferenceFlagChanged, OnPreferenceFlagChanged);
+		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLog, OnChatLogWrite);
+		GW::UI::RegisterUIMessageCallback(&chat_suppress_hook_entry_, GW::UI::UIMessage::kWriteToChatLogWithSender, OnChatLogWriteWithSender);
 		GW::UI::RegisterKeydownCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyDown);
 		GW::UI::RegisterKeyupCallback(&reveal_hotkey_hook_entry_, OnRevealHotkeyUp);
 	}
@@ -242,36 +231,28 @@ public:
 		fn("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
 		fn("visible", visible_);
 		fn("priority_enabled", settings_.priority_enabled);
-		fn("color_filtered", settings_.color_filtered);
-		fn("hide_all_other", settings_.hide_all_other);
 		fn("priority_raw", settings_.priority.raw);
 		fn("priority_color", settings_.priority.color);
-	}
-
-	template<typename Fn>
-	void ForEachProfessionSetting(Fn&& fn) {
-		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
-			const std::string prefix = "profession" + std::to_string(i);
-			fn(prefix, settings_.profession_colors[i]);
-		}
 	}
 
 	void LoadSettings(const wchar_t* folder) override {
 		ToolboxPlugin::LoadSettings(folder);
 		ForEachFlatSetting([this](const char* name, auto& value) { LoadSetting(name, value); });
-		ForEachProfessionSetting([this](const std::string& prefix, ProfessionColorConfig& cfg) {
-			LoadSetting((prefix + "_enabled").c_str(), cfg.enabled);
-			LoadSetting((prefix + "_color").c_str(), cfg.color);
-		});
+		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
+			const std::string prefix = "profession" + std::to_string(i);
+			LoadSetting((prefix + "_enabled").c_str(), settings_.profession_colors[i].enabled);
+			LoadSetting((prefix + "_color").c_str(), settings_.profession_colors[i].color);
+		}
 		RefreshPriorityBuffersAndLists();
 	}
 
 	void SaveSettings(const wchar_t* folder) override {
 		ForEachFlatSetting([this](const char* name, auto& value) { SaveSetting(name, value); });
-		ForEachProfessionSetting([this](const std::string& prefix, ProfessionColorConfig& cfg) {
-			SaveSetting((prefix + "_enabled").c_str(), cfg.enabled);
-			SaveSetting((prefix + "_color").c_str(), cfg.color);
-		});
+		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
+			const std::string prefix = "profession" + std::to_string(i);
+			SaveSetting((prefix + "_enabled").c_str(), settings_.profession_colors[i].enabled);
+			SaveSetting((prefix + "_color").c_str(), settings_.profession_colors[i].color);
+		}
 		ToolboxPlugin::SaveSettings(folder);
 	}
 
@@ -280,7 +261,6 @@ public:
 	void Terminate() override {
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
-		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentAdd>(&agent_add_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentRemove>(&agent_remove_hook_entry_);
@@ -309,7 +289,6 @@ public:
 		name_cache_.MaybePrune();
 		ProcessBossGlowRetries();
 		ProcessPendingAllegianceRefreshes();
-		ProcessPendingHideRefreshes();
 	}
 
 private:
@@ -326,7 +305,6 @@ private:
 	GW::HookEntry marker_hook_entry_;
 	GW::HookEntry map_loaded_hook_entry_;
 	GW::HookEntry chat_suppress_hook_entry_;
-	GW::HookEntry preference_hook_entry_;
 	GW::HookEntry reveal_hotkey_hook_entry_;
 
 	AgentNameCache name_cache_;
@@ -334,37 +312,29 @@ private:
 	uint64_t frame_counter_ = 0;
 	struct BossGlowRetry {
 		uint32_t agent_id;
-		int attempts_left;
+		uint64_t scheduled_frame;
 	};
-	static constexpr int kBossGlowMaxAttempts = 60;
 	std::vector<BossGlowRetry> boss_glow_retries_;
 	std::unordered_set<uint32_t> boss_glow_pending_ids_;
 
 	void ScheduleBossGlowRetry(uint32_t agent_id) {
 		if (!boss_glow_pending_ids_.insert(agent_id).second) return;
-		boss_glow_retries_.push_back({agent_id, kBossGlowMaxAttempts});
+		boss_glow_retries_.push_back({agent_id, frame_counter_});
 	}
 
 	void ProcessBossGlowRetries() {
 		size_t write = 0;
 		for (size_t read = 0; read < boss_glow_retries_.size(); ++read) {
-			BossGlowRetry entry = boss_glow_retries_[read];
-
-			GW::Agent* agent = GW::Agents::GetAgentByID(entry.agent_id);
-			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
-			if (!living) {
-				boss_glow_pending_ids_.erase(entry.agent_id);
-				continue;
-			}
-
-			const bool state_ready = (static_cast<uint32_t>(agent->name_properties) & 0x2) != 0;
-			if (!state_ready && --entry.attempts_left > 0) {
+			const BossGlowRetry entry = boss_glow_retries_[read];
+			if (frame_counter_ <= entry.scheduled_frame) {
 				boss_glow_retries_[write++] = entry;
 				continue;
 			}
-
 			boss_glow_pending_ids_.erase(entry.agent_id);
-			if (living->GetHasBossGlow()) {
+
+			GW::Agent* agent = GW::Agents::GetAgentByID(entry.agent_id);
+			GW::AgentLiving* living = agent ? agent->GetAsAgentLiving() : nullptr;
+			if (living && living->GetHasBossGlow()) {
 				TouchAgent(entry.agent_id, true, true);
 			}
 		}
@@ -377,7 +347,6 @@ private:
 	struct AgentState {
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
-		bool tag_hidden = false;
 	};
 	std::vector<AgentState> agent_state_;
 
@@ -403,55 +372,14 @@ private:
 		priority_state_.pending_parse_at_ms = 0;
 	}
 
-	[[nodiscard]] bool IsPriorityMatch(const std::vector<std::wstring>& words) const noexcept {
+	[[nodiscard]] std::optional<ImU32> GetPriorityColor(const std::vector<std::wstring>& words) const noexcept {
+		if (!settings_.priority_enabled) return std::nullopt;
 		for (const auto& word : words) {
 			if (std::binary_search(priority_state_.names.begin(), priority_state_.names.end(), word)) {
-				return true;
+				return settings_.priority.color;
 			}
 		}
-		return false;
-	}
-
-	struct HideFrameCache {
-		uint64_t frame = UINT64_MAX;
-		bool pref_ally = false;
-		bool pref_foe = false;
-		bool in_outpost = false;
-	};
-	HideFrameCache hide_frame_cache_;
-
-	const HideFrameCache& GetHideFrameCache() {
-		if (hide_frame_cache_.frame != frame_counter_) {
-			hide_frame_cache_.frame = frame_counter_;
-			hide_frame_cache_.pref_ally = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowAllyNames);
-			hide_frame_cache_.pref_foe = GW::UI::GetPreference(GW::UI::FlagPreference::AlwaysShowFoeNames);
-			hide_frame_cache_.in_outpost = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost;
-		}
-		return hide_frame_cache_;
-	}
-
-	[[nodiscard]] bool ShouldApplyHideFilter(const GW::AgentLiving* living, const AgentNameCache::NameLookup& lookup) {
-		if (living->GetIsDead()) return false;
-		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
-		if (me && living->agent_id == me->agent_id) return false;
-		if (living->agent_id == GW::Agents::GetTargetId()) return false;
-		if ((static_cast<uint32_t>(living->name_properties) & GW::NameTagFlags_Highlighted) != 0) return false;
-		if (priority_state_.names.empty()) return false;
-		if (!settings_.priority_enabled || !settings_.hide_all_other) return false;
-
-		const HideFrameCache& fc = GetHideFrameCache();
-		bool governing_pref;
-		if (living->IsPlayer()) {
-			governing_pref = fc.in_outpost ? fc.pref_foe : fc.pref_ally;
-		} else if (living->allegiance == GW::Constants::Allegiance::Enemy) {
-			governing_pref = fc.pref_foe;
-		} else {
-			governing_pref = fc.pref_ally;
-		}
-		if (!governing_pref) return false;
-
-		if (!lookup.resolved || !lookup.words) return false;
-		return !IsPriorityMatch(*lookup.words);
+		return std::nullopt;
 	}
 
 	[[nodiscard]] std::optional<ImU32> TryGetProfessionColor(GW::Constants::ProfessionByte prof) const noexcept {
@@ -517,9 +445,11 @@ private:
 			return;
 		}
 
-		if (!GW::Map::GetIsMapLoaded() || GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable || GW::Map::GetMapID() == GW::Constants::MapID::Embark_Beach) return;
 		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
 		if (!me || me->GetIsDead()) return;
+		if (!GW::Map::GetIsMapLoaded()) return;
+		if (GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable) return;
+		if (GW::Map::GetMapID() == GW::Constants::MapID::Embark_Beach) return;
 
 		const float hp_pct = std::clamp(me->hp, 0.f, 1.f) * 100.f;
 		const float threshold = static_cast<float>(settings_.escape_to_embark_threshold_pct);
@@ -546,7 +476,10 @@ private:
 			auto* agent = static_cast<GW::Agent*>(ctx);
 			GW::AgentLiving* living = agent->GetAsAgentLiving();
 			if (living) {
-				g_plugin->EvaluateAgent(living, result);
+				auto* self = g_plugin;
+				if (const auto color = self->DecideAgentColor(living)) {
+					*result = static_cast<uint32_t>(*color);
+				}
 			}
 		}
 		GW::Hook::LeaveHook();
@@ -555,13 +488,13 @@ private:
 
 	bool allegiance_hook_scan_failed_ = false;
 
-	static AllegianceColorFn_pt TryLocateAllegianceColorViaAssertion() {
-		return LocateViaAssertion<AllegianceColorFn_pt>("AvApi.cpp", "agent", 489, 0x31);
-	}
-
 	void EnsureAllegianceColorHookInstalled() {
 		if (AllegianceColor_Func || allegiance_hook_scan_failed_) return;
-		if (!EnsureLocated(AllegianceColor_Func, allegiance_hook_scan_failed_, TryLocateAllegianceColorViaAssertion)) return;
+		if (!EnsureScanned(AllegianceColor_Func, allegiance_hook_scan_failed_,
+			"\x55\x8b\xec\x51\x56\x57\x8b\xf9\xf6\x87\x5c\x01\x00\x00\x08\x74\x09\xc7\x45\xfc\xa0\xa0\xa0\xff\xeb\x25\x8a\x87\xb5\x01\x00\x00\x3c\x03\x75\x09\xc7\x45\xfc\x00\x00\xff\xff\xeb\x12\xc7\x45\xfc\x00\xff\xa0\xff\x3c\x06\x74\x07",
+			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
+			return;
+		}
 		GW::Hook::CreateHook(&AllegianceColor_Func, OnAllegianceColor, &AllegianceColor_Ret);
 		GW::Hook::EnableHooks(AllegianceColor_Func);
 	}
@@ -578,25 +511,21 @@ private:
 	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
-	static SetNameTagBit_pt TryLocateSetNameTagBitViaAssertion() {
-		return LocateViaAssertion<SetNameTagBit_pt>("AvManager.cpp", "result", 1367, 0x117);
-	}
-
 	static bool EnsureSetNameTagBitScanned() {
 		static bool scan_failed = false;
-		return EnsureLocated(SetNameTagBit_Func, scan_failed, TryLocateSetNameTagBitViaAssertion);
+		return EnsureScanned(SetNameTagBit_Func, scan_failed,
+			"\x55\x8b\xec\x83\xec\x64\x83\x7d\x0c\x00\x53\x57\x8b\xf9\x8b\x57",
+			"xxxxxxxxxxxxxxxx");
 	}
 
 	using QueueEventAllocator_pt = void*(__thiscall*)(void*, uint32_t);
 	static inline QueueEventAllocator_pt QueueEventAllocator_Func = nullptr;
 
-	static QueueEventAllocator_pt TryLocateQueueEventAllocatorViaAssertion() {
-		return LocateViaAssertion<QueueEventAllocator_pt>("AvChar.cpp", "stat == AV_CHAR_STAT_ENERGY", 4320, 0x6f);
-	}
-
 	static bool EnsureQueueEventAllocatorScanned() {
 		static bool scan_failed = false;
-		return EnsureLocated(QueueEventAllocator_Func, scan_failed, TryLocateQueueEventAllocatorViaAssertion);
+		return EnsureScanned(QueueEventAllocator_Func, scan_failed,
+			"\x55\x8b\xec\x53\x56\x57\x8b\xf9\xe8\x23\x3b\xff\xff\x8b\x55\x08\x8b\xd8\x89\x13\x8b\x57\x2c\x89\x53\x04\xc7\x43\x08\x00\x00\x00\x00\x81\xbf\x40\x01\x00\x00\xdd\xdd\xdd\xdd\x75\x14\x68\x87\x01\x00\x00\xba\x38\xdf\x93\x00\xb9\xbc\xdf\x93\x00\xe8\xcf\x23\xc9\xff\x8b\xb7\x40\x01\x00\x00\x03\xf3\x8b\x16\x8b\x4e\x04\x8b\x06\x83\xe1\xfe\x8b\x40\x04\x83\xe0\xfe\x2b\xc8\x89\x14\x31\x8b\x4e\x04\x8b\x06\x89\x48\x04\x8b\x87\x44\x01\x00\x00\x89\x06\x8b\x06\x8b\x40\x04\x89\x46\x04\x8b\x87\x44\x01\x00\x00\x89\x58\x04\x89\xb7\x44\x01\x00\x00\xa1\x38\xa8\x08\x01\x85\xc0\x0f\x84\xc0\x00\x00\x00\x50",
+			"xxxxxxxxx????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????x????x????xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxx");
 	}
 
 	static void TriggerAllegianceRecolor(GW::Agent* agent, uint32_t allegiance_value) {
@@ -616,21 +545,11 @@ private:
 		GW::Agents::RefreshAgentNameTag(agent);
 	}
 
-	static bool ApplyNameTagBit(GW::Agent* agent, bool& applied, GW::NameTagFlags flag, bool want) {
-		if (want == applied) return false;
-		applied = want;
-		if (SetNameTagBit_Func) SetNameTagBit_Func(agent, flag, want ? 1 : 0);
-		return true;
-	}
-
 	static void ApplyHealthbarFlag(GW::Agent* agent, AgentState& state, bool want_flag) {
-		ApplyNameTagBit(agent, state.we_applied_flag, GW::NameTagFlags_ManualTarget, want_flag);
-	}
-
-	static void ApplyHideFlag(GW::Agent* agent, AgentState& state, bool want_hidden) {
-		if (!ApplyNameTagBit(agent, state.tag_hidden, GW::NameTagFlags_Suppressed, want_hidden)) return;
-		if (want_hidden) {
-			ApplyNameTagBit(agent, state.we_applied_flag, GW::NameTagFlags_ManualTarget, false);
+		if (want_flag == state.we_applied_flag) return;
+		state.we_applied_flag = want_flag;
+		if (SetNameTagBit_Func) {
+			SetNameTagBit_Func(agent, GW::NameTagFlags_ManualTarget, want_flag ? 1 : 0);
 		}
 	}
 
@@ -702,8 +621,7 @@ private:
 		EnsureSetNameTagBitScanned();
 		EnsureQueueEventAllocatorScanned();
 		const bool want_flag = settings_.show_healthbar_all_agents;
-		const bool hide_active = settings_.priority_enabled && settings_.hide_all_other;
-		GW::GameThread::Enqueue([this, want_flag, hide_active] {
+		GW::GameThread::Enqueue([this, want_flag] {
 			GW::AgentArray* agents = GW::Agents::GetAgentArray();
 			if (!agents || !agents->valid()) return;
 			GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
@@ -711,51 +629,28 @@ private:
 				GW::AgentLiving* living = ValidateLivingAgent(agent, me);
 				if (!living) continue;
 
-				AgentState& state = GetOrCreateAgentState(living->agent_id);
-				const bool want_hidden = hide_active && ShouldApplyHideFilter(living, name_cache_.Get(living));
-				ApplyHealthbarFlag(agent, state, want_flag && !want_hidden);
-				ApplyHideFlag(agent, state, want_hidden);
+				ApplyHealthbarFlag(agent, GetOrCreateAgentState(living->agent_id), want_flag);
 				RecolorAndRefreshNameTag(agent, living);
 			}
 		});
 	}
 
 	std::unordered_set<uint32_t> pending_allegiance_refresh_ids_;
-	std::unordered_set<uint32_t> pending_hide_refresh_ids_;
 
-	template<typename Fn>
-	static void DrainPendingIds(std::unordered_set<uint32_t>& ids_set, Fn&& action) {
-		if (ids_set.empty()) return;
-		std::vector<uint32_t> ids(ids_set.begin(), ids_set.end());
-		ids_set.clear();
-		GW::GameThread::Enqueue([ids, action] {
+	void ProcessPendingAllegianceRefreshes() {
+		if (pending_allegiance_refresh_ids_.empty()) return;
+		std::vector<uint32_t> ids(pending_allegiance_refresh_ids_.begin(), pending_allegiance_refresh_ids_.end());
+		pending_allegiance_refresh_ids_.clear();
+		EnsureSetNameTagBitScanned();
+		EnsureQueueEventAllocatorScanned();
+		GW::GameThread::Enqueue([ids] {
 			for (uint32_t agent_id : ids) {
 				GW::Agent* agent;
 				GW::AgentLiving* living = GetLivingAgentByID(agent_id, agent);
 				if (!living) continue;
-				action(agent, living);
+
+				RecolorAndRefreshNameTag(agent, living);
 			}
-		});
-	}
-
-	void ProcessPendingAllegianceRefreshes() {
-		EnsureSetNameTagBitScanned();
-		EnsureQueueEventAllocatorScanned();
-		DrainPendingIds(pending_allegiance_refresh_ids_, [](GW::Agent* agent, GW::AgentLiving* living) {
-			RecolorAndRefreshNameTag(agent, living);
-		});
-	}
-
-	void CheckHidePriority(GW::AgentLiving* living, const AgentNameCache::NameLookup& lookup) {
-		if (ShouldApplyHideFilter(living, lookup) != GetOrCreateAgentState(living->agent_id).tag_hidden) {
-			pending_hide_refresh_ids_.insert(living->agent_id);
-		}
-	}
-
-	void ProcessPendingHideRefreshes() {
-		EnsureSetNameTagBitScanned();
-		DrainPendingIds(pending_hide_refresh_ids_, [this](GW::Agent* agent, GW::AgentLiving* living) {
-			ApplyHideFlag(agent, GetOrCreateAgentState(living->agent_id), ShouldApplyHideFilter(living, name_cache_.Get(living)));
 		});
 	}
 
@@ -776,7 +671,6 @@ private:
 		self->boss_glow_retries_.clear();
 		self->boss_glow_pending_ids_.clear();
 		self->pending_allegiance_refresh_ids_.clear();
-		self->pending_hide_refresh_ids_.clear();
 		self->dirty_rescan_ = true;
 	}
 
@@ -804,57 +698,45 @@ private:
 	bool chat_suppress_hook_detached_ = false;
 
 	[[nodiscard]] static bool ShouldSuppressWarning(uint32_t channel, const wchar_t* message) {
-		if (channel != 4 && channel != 7) return false;
+		if (channel != GW::Chat::Channel::CHANNEL_GWCA2 && channel != GW::Chat::Channel::CHANNEL_WARNING) return false;
 		if (!message) return false;
 		return wcsstr(message, L"Plugins") != nullptr;
 	}
 
-	template<typename PacketT>
 	static void OnChatLogWrite(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
-		auto* msg = static_cast<PacketT*>(wParam);
+		auto* msg = static_cast<GW::UI::UIPacket::kWriteToChatLog*>(wParam);
 		if (!msg) return;
 		if (ShouldSuppressWarning(static_cast<uint32_t>(msg->channel), msg->message)) {
 			status->blocked = true;
 		}
 	}
 
-	static void OnPreferenceFlagChanged(GW::HookStatus*, GW::UI::UIMessage, void* wParam, void*) {
-		auto* msg = static_cast<GW::UI::UIPacket::kPreferenceFlagChanged*>(wParam);
+	static void OnChatLogWriteWithSender(GW::HookStatus* status, GW::UI::UIMessage, void* wParam, void*) {
+		auto* msg = static_cast<GW::UI::UIPacket::kWriteToChatLogWithSender*>(wParam);
 		if (!msg) return;
-		if (msg->preference_id == GW::UI::FlagPreference::AlwaysShowAllyNames
-			|| msg->preference_id == GW::UI::FlagPreference::AlwaysShowFoeNames) {
-			g_plugin->dirty_rescan_ = true;
+		if (ShouldSuppressWarning(msg->channel, msg->message)) {
+			status->blocked = true;
 		}
 	}
 
-	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
+	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living) {
+		if (!living) return std::nullopt;
+
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
+		const bool need_names = settings_.priority_enabled;
 		const bool need_prof = is_enemy
 			? settings_.recolor_enemy_nametags_by_profession
 			: settings_.recolor_professions;
-		const bool need_names = settings_.priority_enabled
-			&& (settings_.color_filtered || settings_.hide_all_other);
 
 		AgentNameCache::NameLookup lookup{};
 		if (need_names || need_prof) {
 			lookup = name_cache_.Get(living);
 		}
 
-		if (const auto color = DecideAgentColor(living, is_enemy, need_prof, lookup)) {
-			*out_color = static_cast<uint32_t>(*color);
-		}
-
-		if (settings_.priority_enabled && settings_.hide_all_other) {
-			CheckHidePriority(living, lookup);
-		}
-	}
-
-	[[nodiscard]] std::optional<ImU32> DecideAgentColor(const GW::AgentLiving* living, bool is_enemy, bool need_prof, const AgentNameCache::NameLookup& lookup) {
-		if (living->GetIsDeadByTypeMap()) return std::nullopt;
-
-		if (settings_.priority_enabled && settings_.color_filtered
-			&& lookup.words && IsPriorityMatch(*lookup.words)) {
-			return settings_.priority.color;
+		if (need_names) {
+			if (const auto color = GetPriorityColor(*lookup.words)) {
+				return color;
+			}
 		}
 
 		if (is_enemy) {
@@ -912,33 +794,24 @@ private:
 		DrawCheckboxWithColorRightAligned("Color by boss", settings_.color_by_boss, settings_.boss_color, "##color_by_boss", "Overrides other nametag coloring (except Priority) for agents with the boss glow");
 		DrawCheckboxWithColorRightAligned("Color by quest", settings_.recolor_quest_nametags, settings_.quest_color, "##color_quest");
 
-		CheckboxDirty("Priority System", settings_.priority_enabled);
+		CheckboxDirty("##priority_enabled", settings_.priority_enabled);
+		ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+		ImGui::TextUnformatted("Priority coloring");
 		ShowHelpMarker("One name per line. Any single word (e.g. \"Monk\") matches any name containing that exact word.");
-
-		ImGui::BeginDisabled(!settings_.priority_enabled);
-		ImGui::Indent();
-
-		CheckboxDirty("Color filtered", settings_.color_filtered);
 		RightAlignNextItem(ImGui::GetFrameHeight());
+		ImGui::BeginDisabled(!settings_.priority_enabled);
 		ImVec4 priority_color_vec = ImGui::ColorConvertU32ToFloat4(settings_.priority.color);
 		if (ImGui::ColorEdit3("##priority_color", &priority_color_vec.x, ImGuiColorEditFlags_NoInputs)) {
 			settings_.priority.color = ImGui::ColorConvertFloat4ToU32(priority_color_vec);
 		}
 		MarkDirtyOnEdit();
 
-		CheckboxDirty("Hide all other", settings_.hide_all_other);
-		ShowHelpMarker("Hides the nametag entirely for any agent that doesn't match the list below. Only takes effect while the game's own matching \"Always Show\" name-tag option is enabled.");
-
 		char priority_header_label[48];
 		snprintf(priority_header_label, sizeof(priority_header_label), "Priority Names (%zu)###priority_names", priority_state_.names.size());
-		ImGui::BeginDisabled(!settings_.color_filtered && !settings_.hide_all_other);
 		if (ImGui::TreeNodeEx(priority_header_label, ImGuiTreeNodeFlags_FramePadding)) {
 			DrawPriorityInput("##priority_input", priority_state_, settings_.priority.raw);
 			ImGui::TreePop();
 		}
-		ImGui::EndDisabled();
-
-		ImGui::Unindent();
 		ImGui::EndDisabled();
 
 		ImGui::Spacing();
@@ -962,10 +835,7 @@ private:
 					ImGui::TableNextRow();
 					for (size_t col = 0; col < 5; ++col) {
 						ImGui::TableNextColumn();
-						size_t index = row * 5 + col + 1;
-						if (index < settings_.profession_colors.size()) {
-							DrawProfessionCell(index);
-						}
+						DrawProfessionCell(row * 5 + col + 1);
 					}
 				}
 				ImGui::EndTable();
