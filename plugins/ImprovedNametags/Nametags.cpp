@@ -146,15 +146,15 @@ private:
 [[nodiscard]] inline std::vector<std::wstring> ParseNameList(const std::string& raw) {
 	std::vector<std::wstring> out;
 	std::istringstream stream(raw);
-	std::string token;
-	while (std::getline(stream, token, '\n')) {
+	for (std::string token; std::getline(stream, token, '\n'); ) {
 		const size_t start = token.find_first_not_of(" \t\r\n");
-		const size_t end = token.find_last_not_of(" \t\r\n");
-		if (start == std::string::npos || end == std::string::npos) continue;
+		if (start == std::string::npos) continue;
+		token.erase(0, start);
+		token.erase(token.find_last_not_of(" \t\r\n") + 1);
 
-		std::wstring w = PluginUtils::StringToWString(token.substr(start, end - start + 1));
+		std::wstring w = PluginUtils::StringToWString(token);
 		std::transform(w.begin(), w.end(), w.begin(), ::towlower);
-		if (!w.empty()) out.push_back(std::move(w));
+		out.push_back(std::move(w));
 	}
 	std::sort(out.begin(), out.end());
 	out.erase(std::unique(out.begin(), out.end()), out.end());
@@ -248,24 +248,30 @@ public:
 		fn("priority_color", settings_.priority.color);
 	}
 
+	template<typename Fn>
+	void ForEachProfessionSetting(Fn&& fn) {
+		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
+			const std::string prefix = "profession" + std::to_string(i);
+			fn(prefix, settings_.profession_colors[i]);
+		}
+	}
+
 	void LoadSettings(const wchar_t* folder) override {
 		ToolboxPlugin::LoadSettings(folder);
 		ForEachFlatSetting([this](const char* name, auto& value) { LoadSetting(name, value); });
-		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
-			const std::string prefix = "profession" + std::to_string(i);
-			LoadSetting((prefix + "_enabled").c_str(), settings_.profession_colors[i].enabled);
-			LoadSetting((prefix + "_color").c_str(), settings_.profession_colors[i].color);
-		}
+		ForEachProfessionSetting([this](const std::string& prefix, ProfessionColorConfig& cfg) {
+			LoadSetting((prefix + "_enabled").c_str(), cfg.enabled);
+			LoadSetting((prefix + "_color").c_str(), cfg.color);
+		});
 		RefreshPriorityBuffersAndLists();
 	}
 
 	void SaveSettings(const wchar_t* folder) override {
 		ForEachFlatSetting([this](const char* name, auto& value) { SaveSetting(name, value); });
-		for (size_t i = 1; i < settings_.profession_colors.size(); ++i) {
-			const std::string prefix = "profession" + std::to_string(i);
-			SaveSetting((prefix + "_enabled").c_str(), settings_.profession_colors[i].enabled);
-			SaveSetting((prefix + "_color").c_str(), settings_.profession_colors[i].color);
-		}
+		ForEachProfessionSetting([this](const std::string& prefix, ProfessionColorConfig& cfg) {
+			SaveSetting((prefix + "_enabled").c_str(), cfg.enabled);
+			SaveSetting((prefix + "_color").c_str(), cfg.color);
+		});
 		ToolboxPlugin::SaveSettings(folder);
 	}
 
@@ -511,11 +517,9 @@ private:
 			return;
 		}
 
+		if (!GW::Map::GetIsMapLoaded() || GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable || GW::Map::GetMapID() == GW::Constants::MapID::Embark_Beach) return;
 		GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
 		if (!me || me->GetIsDead()) return;
-		if (!GW::Map::GetIsMapLoaded()) return;
-		if (GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable) return;
-		if (GW::Map::GetMapID() == GW::Constants::MapID::Embark_Beach) return;
 
 		const float hp_pct = std::clamp(me->hp, 0.f, 1.f) * 100.f;
 		const float threshold = static_cast<float>(settings_.escape_to_embark_threshold_pct);
@@ -963,7 +967,10 @@ private:
 					ImGui::TableNextRow();
 					for (size_t col = 0; col < 5; ++col) {
 						ImGui::TableNextColumn();
-						DrawProfessionCell(row * 5 + col + 1);
+						size_t index = row * 5 + col + 1;
+						if (index < settings_.profession_colors.size()) {
+							DrawProfessionCell(index);
+						}
 					}
 				}
 				ImGui::EndTable();
