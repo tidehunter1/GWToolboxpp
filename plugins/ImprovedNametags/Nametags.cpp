@@ -590,7 +590,9 @@ private:
 		const uint32_t current = static_cast<uint32_t>(agent->name_properties);
 		agent->name_properties = static_cast<GW::NameTagFlags>(
 			want ? (current | static_cast<uint32_t>(flag)) : (current & ~static_cast<uint32_t>(flag)));
-		GW::Agents::RefreshAgentNameTag(agent);
+		if (GW::AgentLiving* living = agent->GetAsAgentLiving()) {
+			TriggerAllegianceRecolor(agent, static_cast<uint32_t>(living->allegiance));
+		}
 		return true;
 	}
 
@@ -649,7 +651,7 @@ private:
 	}
 
 	void TouchAgent(uint32_t agent_id, bool recolor, bool retarget) {
-		if (recolor) {
+		if (retarget || recolor) {
 			EnsureQueueEventAllocatorScanned();
 		}
 		GW::GameThread::Enqueue([this, agent_id, recolor, retarget] {
@@ -723,6 +725,7 @@ private:
 	}
 
 	void ProcessPendingHideRefreshes() {
+		EnsureQueueEventAllocatorScanned();
 		DrainPendingIds(pending_hide_refresh_ids_, [this](GW::Agent* agent, GW::AgentLiving* living) {
 			ApplyHideFlag(agent, GetOrCreateAgentState(living->agent_id), ShouldApplyHideFilter(living, name_cache_.Get(living)));
 		});
