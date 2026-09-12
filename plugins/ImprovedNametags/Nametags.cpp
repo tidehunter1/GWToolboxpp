@@ -537,20 +537,8 @@ private:
 
 	bool allegiance_hook_scan_failed_ = false;
 
-	static AllegianceColorFn_pt TryLocateAllegianceColorViaAssertion() {
-		const uintptr_t landing = GW::Scanner::FindAssertion("AvApi.cpp", "agent", 489, 0);
-		if (!landing) return nullptr;
-		const uintptr_t func_start = GW::Scanner::ToFunctionStart(landing);
-		if (!func_start) return nullptr;
-		const uintptr_t call_site = func_start + 0x31;
-		return reinterpret_cast<AllegianceColorFn_pt>(GW::Scanner::FunctionFromNearCall(call_site, true));
-	}
-
 	void EnsureAllegianceColorHookInstalled() {
 		if (AllegianceColor_Func || allegiance_hook_scan_failed_) return;
-		if (!AllegianceColor_Func) {
-			AllegianceColor_Func = TryLocateAllegianceColorViaAssertion();
-		}
 		if (!EnsureScanned(AllegianceColor_Func, allegiance_hook_scan_failed_,
 			"\x55\x8b\xec\x51\x56\x57\x8b\xf9\xf6\x87\x5c\x01\x00\x00\x08\x74\x09\xc7\x45\xfc\xa0\xa0\xa0\xff\xeb\x25\x8a\x87\xb5\x01\x00\x00\x3c\x03\x75\x09\xc7\x45\xfc\x00\x00\xff\xff\xeb\x12\xc7\x45\xfc\x00\xff\xa0\xff\x3c\x06\x74\x07",
 			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")) {
