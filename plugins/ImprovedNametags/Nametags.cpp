@@ -16,7 +16,6 @@
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/AgentMgr.h>
-#include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Utilities/Hooker.h>
 #include <GWCA/Utilities/Scanner.h>
@@ -830,24 +829,6 @@ private:
 	}
 
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
-		{
-			static uint32_t last_dumped_id = 0;
-			GW::Agent* target = GW::Agents::GetTarget();
-			if (target && target->agent_id == living->agent_id && last_dumped_id != living->agent_id) {
-				last_dumped_id = living->agent_id;
-				const wchar_t* enc_name = GW::Agents::GetAgentEncName(living->agent_id);
-				if (enc_name) {
-					wchar_t hexbuf[600] = {};
-					size_t pos = 0;
-					for (int i = 0; i < 60 && enc_name[i] != 0 && pos < 590; ++i) {
-						int written = swprintf(hexbuf + pos, 600 - pos, L"%04X ", enc_name[i]);
-						if (written > 0) pos += static_cast<size_t>(written);
-					}
-					GW::Chat::WriteChatF(static_cast<GW::Chat::Channel>(4), L"[RawEnc %u] %s", living->agent_id, hexbuf);
-				}
-			}
-		}
-
 		AgentState& state = GetOrCreateAgentState(living->agent_id);
 		const bool is_dead = living->GetIsDeadByTypeMap();
 		if (is_dead || state.was_dead) {
