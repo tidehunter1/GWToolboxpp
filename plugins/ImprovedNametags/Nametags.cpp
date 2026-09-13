@@ -16,6 +16,7 @@
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/AgentMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Utilities/Hooker.h>
 #include <GWCA/Utilities/Scanner.h>
@@ -279,7 +280,6 @@ public:
 
 	void Terminate() override {
 		RemoveAllegianceColorHook();
-		RemoveStringTokenizerHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
@@ -294,7 +294,6 @@ public:
 	void Draw(IDirect3DDevice9*) override {
 		++frame_counter_;
 		EnsureAllegianceColorHookInstalled();
-		EnsureStringTokenizerHookInstalled();
 
 		if (!chat_suppress_hook_detached_ && frame_counter_ >= kStartupSuppressionFrames) {
 			chat_suppress_hook_detached_ = true;
@@ -578,70 +577,6 @@ private:
 		}
 	}
 
-	using StringTokenizer_pt = void(__thiscall*)(void*, wchar_t*, int);
-	static inline StringTokenizer_pt StringTokenizer_Func = nullptr;
-	static inline StringTokenizer_pt StringTokenizer_Ret = nullptr;
-	bool string_tokenizer_hook_installed_ = false;
-	bool string_tokenizer_hook_scan_failed_ = false;
-
-	static void StripBracketedSegments(wchar_t* text) {
-		wchar_t* read = text;
-		wchar_t* write = text;
-		bool in_brackets = false;
-		while (*read) {
-			if (!in_brackets && *read == L'[') {
-				in_brackets = true;
-				++read;
-				continue;
-			}
-			if (in_brackets) {
-				if (*read == L']') {
-					in_brackets = false;
-				}
-				++read;
-				continue;
-			}
-			*write++ = *read++;
-		}
-		*write = L'\0';
-	}
-
-	static void __thiscall OnStringTokenize(void* ctx, wchar_t* text, int param_3) {
-		GW::Hook::EnterHook();
-		if (text) {
-			StripBracketedSegments(text);
-		}
-		StringTokenizer_Ret(ctx, text, param_3);
-		GW::Hook::LeaveHook();
-	}
-
-	void EnsureStringTokenizerHookInstalled() {
-		if (string_tokenizer_hook_installed_ || string_tokenizer_hook_scan_failed_) return;
-		if (!StringTokenizer_Func) {
-			const uintptr_t addr = GW::Scanner::Find(
-				"\x55\x8b\xec\x83\xec\x50\xa1\x80\x74\xbf\x00\x33\xc5\x89\x45\xfc\x8b\x45\x08\x53\x56\x57\x8b\xf9\x89\x45\xb8\x8b\x45\x0c\x89\x45\xc0\x83\x7f\x08\x00\x74\x11\x6a",
-				"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-			if (addr) StringTokenizer_Func = reinterpret_cast<StringTokenizer_pt>(addr);
-		}
-		if (!StringTokenizer_Func) {
-			string_tokenizer_hook_scan_failed_ = true;
-			return;
-		}
-		GW::Hook::CreateHook(&StringTokenizer_Func, OnStringTokenize, &StringTokenizer_Ret);
-		GW::Hook::EnableHooks(StringTokenizer_Func);
-		string_tokenizer_hook_installed_ = true;
-	}
-
-	void RemoveStringTokenizerHook() {
-		if (string_tokenizer_hook_installed_) {
-			GW::Hook::DisableHooks(StringTokenizer_Func);
-			GW::Hook::RemoveHook(StringTokenizer_Func);
-			StringTokenizer_Func = nullptr;
-			StringTokenizer_Ret = nullptr;
-			string_tokenizer_hook_installed_ = false;
-		}
-	}
-
 	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
@@ -895,6 +830,24 @@ private:
 	}
 
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
+		{
+			static uint32_t last_dumped_id = 0;
+			GW::Agent* target = GW::Agents::GetTarget();
+			if (target && target->agent_id == living->agent_id && last_dumped_id != living->agent_id) {
+				last_dumped_id = living->agent_id;
+				const wchar_t* enc_name = GW::Agents::GetAgentEncName(living->agent_id);
+				if (enc_name) {
+					wchar_t hexbuf[600] = {};
+					size_t pos = 0;
+					for (int i = 0; i < 60 && enc_name[i] != 0 && pos < 590; ++i) {
+						int written = swprintf(hexbuf + pos, 600 - pos, L"%04X ", enc_name[i]);
+						if (written > 0) pos += static_cast<size_t>(written);
+					}
+					GW::Chat::WriteChatF(static_cast<GW::Chat::Channel>(4), L"[RawEnc %u] %s", living->agent_id, hexbuf);
+				}
+			}
+		}
+
 		AgentState& state = GetOrCreateAgentState(living->agent_id);
 		const bool is_dead = living->GetIsDeadByTypeMap();
 		if (is_dead || state.was_dead) {
