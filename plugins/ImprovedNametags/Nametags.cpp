@@ -18,6 +18,7 @@
 #include <GWCA/GameEntities/NPC.h>
 #include <GWCA/GameEntities/Player.h>
 #include <GWCA/Managers/PlayerMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Utilities/Hooker.h>
@@ -329,8 +330,6 @@ public:
 		ProcessBossGlowRetries();
 		ProcessPendingAllegianceRefreshes();
 		ProcessPendingHideRefreshes();
-		SuppressGuildTagsOnAgents();
-		SuppressBadgesOnPlayers();
 	}
 
 private:
@@ -783,81 +782,17 @@ private:
 		});
 	}
 
-	void SuppressGuildTagsOnAgents() {
-		if (!settings_.hide_guild_tags && saved_player_guild_ids_.empty()) return;
-
-		EnsureSetNameTagBitScanned();
-		EnsureQueueEventAllocatorScanned();
-
-		const bool hide = settings_.hide_guild_tags;
-		GW::GameThread::Enqueue([this, hide] {
-			GW::AgentArray* agents = GW::Agents::GetAgentArray();
-			if (!agents || !agents->valid()) return;
-
-			for (GW::Agent* agent : *agents) {
-				if (!agent || !agent->GetIsLivingType()) continue;
-				GW::AgentLiving* living = agent->GetAsAgentLiving();
-				if (!living || !living->IsPlayer() || !living->tags) continue;
-
-				SavedPlayerGuildId& saved = saved_player_guild_ids_[living->agent_id];
-
-				if (hide) {
-					if (living->tags->guild_id != 0) {
-						if (!saved.have_saved) saved.guild_id = living->tags->guild_id;
-						living->tags->guild_id = 0;
-						RecolorAndRefreshNameTag(agent, living);
-					}
-				}
-				else if (saved.have_saved && living->tags->guild_id == 0 && saved.guild_id != 0) {
-					living->tags->guild_id = saved.guild_id;
-					RecolorAndRefreshNameTag(agent, living);
-				}
-
-				saved.have_saved = true;
-			}
-		});
-	}
-
-	void SuppressBadgesOnPlayers() {
-		if (!settings_.hide_badges && saved_badge_flags_.empty()) return;
-
-		EnsureSetNameTagBitScanned();
-		EnsureQueueEventAllocatorScanned();
-
-		const bool hide = settings_.hide_badges;
-		GW::GameThread::Enqueue([this, hide] {
+	static void DumpPlayerBadgeFlagsToChat() {
+		GW::GameThread::Enqueue([] {
 			GW::PlayerArray* players = GW::PlayerMgr::GetPlayerArray();
 			if (!players || !players->valid()) return;
-
 			for (uint32_t i = 0; i < players->size(); ++i) {
 				GW::Player& p = players->at(i);
 				if (!p.agent_id) continue;
-
-				SavedBadgeFlags& saved = saved_badge_flags_[p.agent_id];
-
-				if (hide) {
-					if (p.reforged_or_dhuums_flags != 0) {
-						if (!saved.have_saved) saved.flags = p.reforged_or_dhuums_flags;
-						p.reforged_or_dhuums_flags = 0;
-						RefreshAgentNameTagForID(p.agent_id);
-					}
-				}
-				else if (saved.have_saved && p.reforged_or_dhuums_flags == 0 && saved.flags != 0) {
-					p.reforged_or_dhuums_flags = saved.flags;
-					RefreshAgentNameTagForID(p.agent_id);
-				}
-
-				saved.have_saved = true;
+				const wchar_t* name = p.name ? p.name : L"?";
+				GW::Chat::WriteChatF(GW::Chat::CHANNEL_EMOTE, L"%s (id %u): flags=0x%08X", name, p.agent_id, p.reforged_or_dhuums_flags);
 			}
 		});
-	}
-
-	static void RefreshAgentNameTagForID(uint32_t agent_id) {
-		GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
-		if (!agent) return;
-		GW::AgentLiving* living = agent->GetAsAgentLiving();
-		if (!living) return;
-		RecolorAndRefreshNameTag(agent, living);
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
@@ -936,6 +871,34 @@ private:
 			ApplyHealthbarFlag(static_cast<GW::Agent*>(living), state, !is_dead && settings_.show_healthbar_all_agents);
 		}
 		state.was_dead = is_dead;
+
+		if (living->IsPlayer() && living->tags) {
+			SavedPlayerGuildId& gsaved = saved_player_guild_ids_[living->agent_id];
+			if (settings_.hide_guild_tags) {
+				if (living->tags->guild_id != 0) {
+					if (!gsaved.have_saved) gsaved.guild_id = living->tags->guild_id;
+					living->tags->guild_id = 0;
+				}
+			}
+			else if (gsaved.have_saved && living->tags->guild_id == 0 && gsaved.guild_id != 0) {
+				living->tags->guild_id = gsaved.guild_id;
+			}
+			gsaved.have_saved = true;
+
+			if (GW::Player* player = GW::PlayerMgr::GetPlayerByID(living->player_number)) {
+				SavedBadgeFlags& bsaved = saved_badge_flags_[living->agent_id];
+				if (settings_.hide_badges) {
+					if (player->reforged_or_dhuums_flags != 0) {
+						if (!bsaved.have_saved) bsaved.flags = player->reforged_or_dhuums_flags;
+						player->reforged_or_dhuums_flags = 0;
+					}
+				}
+				else if (bsaved.have_saved && player->reforged_or_dhuums_flags == 0 && bsaved.flags != 0) {
+					player->reforged_or_dhuums_flags = bsaved.flags;
+				}
+				bsaved.have_saved = true;
+			}
+		}
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
 		const bool need_prof = is_enemy
@@ -1104,6 +1067,8 @@ private:
 		CheckboxDirty("Hide mode badges (experimental)", settings_.hide_badges);
 		ShowHelpMarker("Targets Player::reforged_or_dhuums_flags. Only the Melandru's Accord bit is confirmed; "
 			"Reforged and Dhuum's Covenant are assumed to share the same field but are unverified.");
+		if (ImGui::Button("Dump player badge flags to chat")) DumpPlayerBadgeFlagsToChat();
+		ShowHelpMarker("Read-only. Prints every player's reforged_or_dhuums_flags value to your local chat log so it can be matched against a visible badge.");
 	}
 };
 
