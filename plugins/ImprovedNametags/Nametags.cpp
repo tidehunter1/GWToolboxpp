@@ -24,6 +24,7 @@
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
+#include <algorithm>
 #include <GWCA/GameContainers/Array.h>
 #include <GWCA/GameEntities/Guild.h>
 #include <GWCA/Context/GuildContext.h>
@@ -211,12 +212,6 @@ struct NametagSettings {
 	bool hide_guild_tags = false;
 };
 
-// Snapshot of a guild's tag as last seen from the server, taken the first time we
-// overwrite it, so it can be put back if the setting is turned off again.
-// GW::GuildMgr::GetGuildArray() is the client's own shared cache of every guild it
-// has seen data for (not just the local player's guild), so writing into it affects
-// the tag shown for ALL players whose guild appears there - this is the mechanism,
-// not a per-agent nametag hook.
 struct SavedGuildVisuals {
 	wchar_t tag[8]{};
 	bool have_saved = false;
@@ -298,7 +293,7 @@ public:
 
 	void Terminate() override {
 		settings_.hide_guild_tags = false;
-		SuppressAllGuildVisuals(); // put back any tags we blanked before unloading
+		SuppressAllGuildVisuals();
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
@@ -783,25 +778,6 @@ private:
 		});
 	}
 
-	// Guild tag suppression.
-	//
-	// The bracketed guild tag (e.g. "[OCD]") is plain data the client keeps in its own
-	// shared guild cache (GW::GuildMgr::GetGuildArray()) - one entry per guild the client
-	// has seen, covering every player, not just the local one. Every consumer that shows
-	// a guild tag - native nametag rendering included - resolves it the same way: an
-	// agent's TagInfo::guild_id is used as an index straight into this same array (this
-	// exact resolution is also done by GWToolboxpp's own InfoWindow.cpp, which corroborates
-	// it). There's no separate nametag-only copy of the tag anywhere to intercept - blanking
-	// the array entry removes it at the one place everything reads it from, with no need to
-	// hook rendering code at all.
-	//
-	// Caveat: this is a shared, global cache - it is *not* scoped to nametags specifically.
-	// Anything else that reads the same Guild struct (guild roster window, alliance chat
-	// headers, etc.) will also see the blanked tag while this is on.
-	//
-	// Re-applied every frame (like NameObfuscator does for the player's own tag) because the
-	// server periodically resyncs guild data and would otherwise overwrite our blanking back
-	// to the real value within a few seconds.
 	void SuppressAllGuildVisuals() {
 		const bool hide_tags = settings_.hide_guild_tags;
 		if (!hide_tags && saved_guild_visuals_.empty()) return;
