@@ -279,6 +279,7 @@ public:
 
 	void Terminate() override {
 		RemoveAllegianceColorHook();
+		RemoveStringTokenizerHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
@@ -293,6 +294,7 @@ public:
 	void Draw(IDirect3DDevice9*) override {
 		++frame_counter_;
 		EnsureAllegianceColorHookInstalled();
+		EnsureStringTokenizerHookInstalled();
 
 		if (!chat_suppress_hook_detached_ && frame_counter_ >= kStartupSuppressionFrames) {
 			chat_suppress_hook_detached_ = true;
@@ -573,6 +575,70 @@ private:
 			GW::Hook::RemoveHook(AllegianceColor_Func);
 			AllegianceColor_Func = nullptr;
 			AllegianceColor_Ret = nullptr;
+		}
+	}
+
+	using StringTokenizer_pt = void(__thiscall*)(void*, wchar_t*, int);
+	static inline StringTokenizer_pt StringTokenizer_Func = nullptr;
+	static inline StringTokenizer_pt StringTokenizer_Ret = nullptr;
+	bool string_tokenizer_hook_installed_ = false;
+	bool string_tokenizer_hook_scan_failed_ = false;
+
+	static void StripBracketedSegments(wchar_t* text) {
+		wchar_t* read = text;
+		wchar_t* write = text;
+		bool in_brackets = false;
+		while (*read) {
+			if (!in_brackets && *read == L'[') {
+				in_brackets = true;
+				++read;
+				continue;
+			}
+			if (in_brackets) {
+				if (*read == L']') {
+					in_brackets = false;
+				}
+				++read;
+				continue;
+			}
+			*write++ = *read++;
+		}
+		*write = L'\0';
+	}
+
+	static void __thiscall OnStringTokenize(void* ctx, wchar_t* text, int param_3) {
+		GW::Hook::EnterHook();
+		if (text) {
+			StripBracketedSegments(text);
+		}
+		StringTokenizer_Ret(ctx, text, param_3);
+		GW::Hook::LeaveHook();
+	}
+
+	void EnsureStringTokenizerHookInstalled() {
+		if (string_tokenizer_hook_installed_ || string_tokenizer_hook_scan_failed_) return;
+		if (!StringTokenizer_Func) {
+			const uintptr_t addr = GW::Scanner::Find(
+				"\x55\x8b\xec\x83\xec\x50\xa1\x80\x74\xbf\x00\x33\xc5\x89\x45\xfc\x8b\x45\x08\x53\x56\x57\x8b\xf9\x89\x45\xb8\x8b\x45\x0c\x89\x45\xc0\x83\x7f\x08\x00\x74\x11\x6a",
+				"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+			if (addr) StringTokenizer_Func = reinterpret_cast<StringTokenizer_pt>(addr);
+		}
+		if (!StringTokenizer_Func) {
+			string_tokenizer_hook_scan_failed_ = true;
+			return;
+		}
+		GW::Hook::CreateHook(&StringTokenizer_Func, OnStringTokenize, &StringTokenizer_Ret);
+		GW::Hook::EnableHooks(StringTokenizer_Func);
+		string_tokenizer_hook_installed_ = true;
+	}
+
+	void RemoveStringTokenizerHook() {
+		if (string_tokenizer_hook_installed_) {
+			GW::Hook::DisableHooks(StringTokenizer_Func);
+			GW::Hook::RemoveHook(StringTokenizer_Func);
+			StringTokenizer_Func = nullptr;
+			StringTokenizer_Ret = nullptr;
+			string_tokenizer_hook_installed_ = false;
 		}
 	}
 
