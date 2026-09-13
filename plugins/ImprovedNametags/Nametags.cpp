@@ -378,6 +378,7 @@ private:
 		bool we_applied_flag = false;
 		bool has_quest_marker = false;
 		bool tag_hidden = false;
+		bool was_dead = false;
 	};
 	std::vector<AgentState> agent_state_;
 
@@ -828,10 +829,13 @@ private:
 	}
 
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
-		if (living->GetIsDeadByTypeMap()) {
+		AgentState& state = GetOrCreateAgentState(living->agent_id);
+		const bool is_dead = living->GetIsDeadByTypeMap();
+		if (is_dead || state.was_dead) {
 			EnsureSetNameTagBitScanned();
-			ApplyHealthbarFlag(static_cast<GW::Agent*>(living), GetOrCreateAgentState(living->agent_id), false);
+			ApplyHealthbarFlag(static_cast<GW::Agent*>(living), state, !is_dead && settings_.show_healthbar_all_agents);
 		}
+		state.was_dead = is_dead;
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
 		const bool need_prof = is_enemy
