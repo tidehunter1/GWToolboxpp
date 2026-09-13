@@ -777,30 +777,36 @@ private:
 	void SuppressGuildTagsOnAgents() {
 		if (!settings_.hide_guild_tags && saved_player_guild_ids_.empty()) return;
 
-		GW::AgentArray* agents = GW::Agents::GetAgentArray();
-		if (!agents || !agents->valid()) return;
+		EnsureSetNameTagBitScanned();
+		EnsureQueueEventAllocatorScanned();
 
-		for (GW::Agent* agent : *agents) {
-			if (!agent || !agent->GetIsLivingType()) continue;
-			GW::AgentLiving* living = agent->GetAsAgentLiving();
-			if (!living || !living->IsPlayer() || !living->tags) continue;
+		const bool hide = settings_.hide_guild_tags;
+		GW::GameThread::Enqueue([this, hide] {
+			GW::AgentArray* agents = GW::Agents::GetAgentArray();
+			if (!agents || !agents->valid()) return;
 
-			SavedPlayerGuildId& saved = saved_player_guild_ids_[living->agent_id];
+			for (GW::Agent* agent : *agents) {
+				if (!agent || !agent->GetIsLivingType()) continue;
+				GW::AgentLiving* living = agent->GetAsAgentLiving();
+				if (!living || !living->IsPlayer() || !living->tags) continue;
 
-			if (settings_.hide_guild_tags) {
-				if (living->tags->guild_id != 0) {
-					if (!saved.have_saved) saved.guild_id = living->tags->guild_id;
-					living->tags->guild_id = 0;
+				SavedPlayerGuildId& saved = saved_player_guild_ids_[living->agent_id];
+
+				if (hide) {
+					if (living->tags->guild_id != 0) {
+						if (!saved.have_saved) saved.guild_id = living->tags->guild_id;
+						living->tags->guild_id = 0;
+						RecolorAndRefreshNameTag(agent, living);
+					}
+				}
+				else if (saved.have_saved && living->tags->guild_id == 0 && saved.guild_id != 0) {
+					living->tags->guild_id = saved.guild_id;
 					RecolorAndRefreshNameTag(agent, living);
 				}
-			}
-			else if (saved.have_saved && living->tags->guild_id == 0 && saved.guild_id != 0) {
-				living->tags->guild_id = saved.guild_id;
-				RecolorAndRefreshNameTag(agent, living);
-			}
 
-			saved.have_saved = true;
-		}
+				saved.have_saved = true;
+			}
+		});
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
