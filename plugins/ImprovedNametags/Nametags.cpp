@@ -16,6 +16,8 @@
 #include <GWCA/Constants/Constants.h>
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/NPC.h>
+#include <GWCA/GameEntities/Player.h>
+#include <GWCA/Managers/PlayerMgr.h>
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Utilities/Hooker.h>
@@ -206,10 +208,16 @@ struct NametagSettings {
 	bool show_healthbar_all_agents = false;
 
 	bool hide_guild_tags = false;
+	bool hide_badges = false;
 };
 
 struct SavedPlayerGuildId {
 	uint16_t guild_id = 0;
+	bool have_saved = false;
+};
+
+struct SavedBadgeFlags {
+	uint32_t flags = 0;
 	bool have_saved = false;
 };
 
@@ -250,6 +258,7 @@ public:
 		fn("escape_to_embark_threshold_pct", settings_.escape_to_embark_threshold_pct);
 		fn("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
 		fn("hide_guild_tags", settings_.hide_guild_tags);
+		fn("hide_badges", settings_.hide_badges);
 		fn("visible", visible_);
 		fn("priority_enabled", settings_.priority_enabled);
 		fn("color_filtered", settings_.color_filtered);
@@ -290,6 +299,8 @@ public:
 	void Terminate() override {
 		settings_.hide_guild_tags = false;
 		SuppressGuildTagsOnAgents();
+		settings_.hide_badges = false;
+		SuppressBadgesOnPlayers();
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
@@ -323,6 +334,7 @@ public:
 		ProcessPendingAllegianceRefreshes();
 		ProcessPendingHideRefreshes();
 		SuppressGuildTagsOnAgents();
+		SuppressBadgesOnPlayers();
 	}
 
 private:
@@ -346,6 +358,7 @@ private:
 
 	uint64_t frame_counter_ = 0;
 	std::unordered_map<uint32_t, SavedPlayerGuildId> saved_player_guild_ids_;
+	std::unordered_map<uint32_t, SavedBadgeFlags> saved_badge_flags_;
 	struct BossGlowRetry {
 		uint32_t agent_id;
 		int attempts_left;
@@ -809,6 +822,48 @@ private:
 		});
 	}
 
+	void SuppressBadgesOnPlayers() {
+		if (!settings_.hide_badges && saved_badge_flags_.empty()) return;
+
+		EnsureSetNameTagBitScanned();
+		EnsureQueueEventAllocatorScanned();
+
+		const bool hide = settings_.hide_badges;
+		GW::GameThread::Enqueue([this, hide] {
+			GW::PlayerArray* players = GW::PlayerMgr::GetPlayerArray();
+			if (!players || !players->valid()) return;
+
+			for (uint32_t i = 0; i < players->size(); ++i) {
+				GW::Player& p = players->at(i);
+				if (!p.agent_id) continue;
+
+				SavedBadgeFlags& saved = saved_badge_flags_[p.agent_id];
+
+				if (hide) {
+					if (p.reforged_or_dhuums_flags != 0) {
+						if (!saved.have_saved) saved.flags = p.reforged_or_dhuums_flags;
+						p.reforged_or_dhuums_flags = 0;
+						RefreshAgentNameTagForID(p.agent_id);
+					}
+				}
+				else if (saved.have_saved && p.reforged_or_dhuums_flags == 0 && saved.flags != 0) {
+					p.reforged_or_dhuums_flags = saved.flags;
+					RefreshAgentNameTagForID(p.agent_id);
+				}
+
+				saved.have_saved = true;
+			}
+		});
+	}
+
+	static void RefreshAgentNameTagForID(uint32_t agent_id) {
+		GW::Agent* agent = GW::Agents::GetAgentByID(agent_id);
+		if (!agent) return;
+		GW::AgentLiving* living = agent->GetAsAgentLiving();
+		if (!living) return;
+		RecolorAndRefreshNameTag(agent, living);
+	}
+
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
 		g_plugin->pending_allegiance_refresh_ids_.insert(pak->agent_id);
@@ -1049,9 +1104,10 @@ private:
 		ImGui::Spacing();
 		ImGui::SeparatorText("Guild Tags");
 		CheckboxDirty("Hide guild tags (all players)", settings_.hide_guild_tags);
-		ShowHelpMarker("Blanks the bracketed guild tag, e.g. [OCD], for every player, not just yourself. "
-			"This edits the client's shared guild-info cache, so it also affects other UI that shows "
-			"guild tags (guild roster, alliance chat, etc.) while enabled.");
+		ShowHelpMarker("Removes the bracketed guild tag, e.g. [OCD], from nametags for every player, not just yourself.");
+		CheckboxDirty("Hide mode badges (experimental)", settings_.hide_badges);
+		ShowHelpMarker("Targets Player::reforged_or_dhuums_flags. Only the Melandru's Accord bit is confirmed; "
+			"Reforged and Dhuum's Covenant are assumed to share the same field but are unverified.");
 	}
 };
 
