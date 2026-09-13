@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -23,6 +24,10 @@
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
+#include <GWCA/GameContainers/Array.h>
+#include <GWCA/GameEntities/Guild.h>
+#include <GWCA/Context/GuildContext.h>
+#include <GWCA/Managers/GuildMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <PluginUtils.h>
@@ -202,6 +207,19 @@ struct NametagSettings {
 	int escape_to_embark_threshold_pct = 10;
 
 	bool show_healthbar_all_agents = false;
+
+	bool hide_guild_tags = false;
+};
+
+// Snapshot of a guild's tag as last seen from the server, taken the first time we
+// overwrite it, so it can be put back if the setting is turned off again.
+// GW::GuildMgr::GetGuildArray() is the client's own shared cache of every guild it
+// has seen data for (not just the local player's guild), so writing into it affects
+// the tag shown for ALL players whose guild appears there - this is the mechanism,
+// not a per-agent nametag hook.
+struct SavedGuildVisuals {
+	wchar_t tag[8]{};
+	bool have_saved = false;
 };
 
 class ImprovedNametagsPlugin : public ToolboxPlugin {
@@ -240,6 +258,7 @@ public:
 		fn("escape_to_embark", settings_.escape_to_embark);
 		fn("escape_to_embark_threshold_pct", settings_.escape_to_embark_threshold_pct);
 		fn("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
+		fn("hide_guild_tags", settings_.hide_guild_tags);
 		fn("visible", visible_);
 		fn("priority_enabled", settings_.priority_enabled);
 		fn("color_filtered", settings_.color_filtered);
@@ -278,6 +297,8 @@ public:
 	bool CanTerminate() override { return true; }
 
 	void Terminate() override {
+		settings_.hide_guild_tags = false;
+		SuppressAllGuildVisuals(); // put back any tags we blanked before unloading
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
@@ -310,6 +331,7 @@ public:
 		ProcessBossGlowRetries();
 		ProcessPendingAllegianceRefreshes();
 		ProcessPendingHideRefreshes();
+		SuppressAllGuildVisuals();
 	}
 
 private:
@@ -332,6 +354,7 @@ private:
 	AgentNameCache name_cache_;
 
 	uint64_t frame_counter_ = 0;
+	std::unordered_map<uint32_t, SavedGuildVisuals> saved_guild_visuals_;
 	struct BossGlowRetry {
 		uint32_t agent_id;
 		int attempts_left;
@@ -760,6 +783,59 @@ private:
 		});
 	}
 
+	// Guild tag suppression.
+	//
+	// The bracketed guild tag (e.g. "[OCD]") is plain data the client keeps in its own
+	// shared guild cache (GW::GuildMgr::GetGuildArray()) - one entry per guild the client
+	// has seen, covering every player, not just the local one. Every consumer that shows
+	// a guild tag - native nametag rendering included - resolves it the same way: an
+	// agent's TagInfo::guild_id is used as an index straight into this same array (this
+	// exact resolution is also done by GWToolboxpp's own InfoWindow.cpp, which corroborates
+	// it). There's no separate nametag-only copy of the tag anywhere to intercept - blanking
+	// the array entry removes it at the one place everything reads it from, with no need to
+	// hook rendering code at all.
+	//
+	// Caveat: this is a shared, global cache - it is *not* scoped to nametags specifically.
+	// Anything else that reads the same Guild struct (guild roster window, alliance chat
+	// headers, etc.) will also see the blanked tag while this is on.
+	//
+	// Re-applied every frame (like NameObfuscator does for the player's own tag) because the
+	// server periodically resyncs guild data and would otherwise overwrite our blanking back
+	// to the real value within a few seconds.
+	void SuppressAllGuildVisuals() {
+		const bool hide_tags = settings_.hide_guild_tags;
+		if (!hide_tags && saved_guild_visuals_.empty()) return;
+
+		GW::GuildArray* guilds = GW::GuildMgr::GetGuildArray();
+		if (!guilds || !guilds->valid()) return;
+
+		for (uint32_t i = 0; i < guilds->size(); ++i) {
+			GW::Guild* guild = guilds->at(i);
+			if (!guild) continue;
+
+			SavedGuildVisuals& saved = saved_guild_visuals_[guild->index];
+
+			if (hide_tags) {
+				if (!IsZeroTag(guild->tag)) {
+					if (!saved.have_saved) memcpy(saved.tag, guild->tag, sizeof(saved.tag));
+					memset(guild->tag, 0, sizeof(guild->tag));
+				}
+			}
+			else if (saved.have_saved && IsZeroTag(guild->tag)) {
+				memcpy(guild->tag, saved.tag, sizeof(guild->tag));
+			}
+
+			saved.have_saved = true;
+		}
+	}
+
+	static bool IsZeroTag(const wchar_t* tag) {
+		for (size_t i = 0; i < 8; ++i) {
+			if (tag[i] != 0) return false;
+		}
+		return true;
+	}
+
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
 		if (!pak) return;
 		g_plugin->pending_allegiance_refresh_ids_.insert(pak->agent_id);
@@ -996,6 +1072,13 @@ private:
 		ImGui::SeparatorText("Health Bars");
 		CheckboxDirty("Show health bar on all agents", settings_.show_healthbar_all_agents);
 		ShowHelpMarker("Shows the same floating health bar you get from hovering over a unit, on all nearby agents at once.");
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Guild Tags");
+		ImGui::Checkbox("Hide guild tags (all players)", &settings_.hide_guild_tags);
+		ShowHelpMarker("Blanks the bracketed guild tag, e.g. [OCD], for every player, not just yourself. "
+			"This edits the client's shared guild-info cache, so it also affects other UI that shows "
+			"guild tags (guild roster, alliance chat, etc.) while enabled.");
 	}
 };
 
