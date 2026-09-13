@@ -25,10 +25,6 @@
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Packets/StoC.h>
 #include <algorithm>
-#include <GWCA/GameContainers/Array.h>
-#include <GWCA/GameEntities/Guild.h>
-#include <GWCA/Context/GuildContext.h>
-#include <GWCA/Managers/GuildMgr.h>
 
 #include <ToolboxPlugin.h>
 #include <PluginUtils.h>
@@ -212,8 +208,8 @@ struct NametagSettings {
 	bool hide_guild_tags = false;
 };
 
-struct SavedGuildVisuals {
-	wchar_t tag[8]{};
+struct SavedPlayerGuildId {
+	uint16_t guild_id = 0;
 	bool have_saved = false;
 };
 
@@ -293,7 +289,7 @@ public:
 
 	void Terminate() override {
 		settings_.hide_guild_tags = false;
-		SuppressAllGuildVisuals();
+		SuppressGuildTagsOnAgents();
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
@@ -326,7 +322,7 @@ public:
 		ProcessBossGlowRetries();
 		ProcessPendingAllegianceRefreshes();
 		ProcessPendingHideRefreshes();
-		SuppressAllGuildVisuals();
+		SuppressGuildTagsOnAgents();
 	}
 
 private:
@@ -349,7 +345,7 @@ private:
 	AgentNameCache name_cache_;
 
 	uint64_t frame_counter_ = 0;
-	std::unordered_map<uint32_t, SavedGuildVisuals> saved_guild_visuals_;
+	std::unordered_map<uint32_t, SavedPlayerGuildId> saved_player_guild_ids_;
 	struct BossGlowRetry {
 		uint32_t agent_id;
 		int attempts_left;
@@ -778,38 +774,33 @@ private:
 		});
 	}
 
-	void SuppressAllGuildVisuals() {
-		const bool hide_tags = settings_.hide_guild_tags;
-		if (!hide_tags && saved_guild_visuals_.empty()) return;
+	void SuppressGuildTagsOnAgents() {
+		if (!settings_.hide_guild_tags && saved_player_guild_ids_.empty()) return;
 
-		GW::GuildArray* guilds = GW::GuildMgr::GetGuildArray();
-		if (!guilds || !guilds->valid()) return;
+		GW::AgentArray* agents = GW::Agents::GetAgentArray();
+		if (!agents || !agents->valid()) return;
 
-		for (uint32_t i = 0; i < guilds->size(); ++i) {
-			GW::Guild* guild = guilds->at(i);
-			if (!guild) continue;
+		for (GW::Agent* agent : *agents) {
+			if (!agent || !agent->GetIsLivingType()) continue;
+			GW::AgentLiving* living = agent->GetAsAgentLiving();
+			if (!living || !living->IsPlayer() || !living->tags) continue;
 
-			SavedGuildVisuals& saved = saved_guild_visuals_[guild->index];
+			SavedPlayerGuildId& saved = saved_player_guild_ids_[living->agent_id];
 
-			if (hide_tags) {
-				if (!IsZeroTag(guild->tag)) {
-					if (!saved.have_saved) memcpy(saved.tag, guild->tag, sizeof(saved.tag));
-					memset(guild->tag, 0, sizeof(guild->tag));
+			if (settings_.hide_guild_tags) {
+				if (living->tags->guild_id != 0) {
+					if (!saved.have_saved) saved.guild_id = living->tags->guild_id;
+					living->tags->guild_id = 0;
+					RecolorAndRefreshNameTag(agent, living);
 				}
 			}
-			else if (saved.have_saved && IsZeroTag(guild->tag)) {
-				memcpy(guild->tag, saved.tag, sizeof(guild->tag));
+			else if (saved.have_saved && living->tags->guild_id == 0 && saved.guild_id != 0) {
+				living->tags->guild_id = saved.guild_id;
+				RecolorAndRefreshNameTag(agent, living);
 			}
 
 			saved.have_saved = true;
 		}
-	}
-
-	static bool IsZeroTag(const wchar_t* tag) {
-		for (size_t i = 0; i < 8; ++i) {
-			if (tag[i] != 0) return false;
-		}
-		return true;
 	}
 
 	static void OnAgentAllegianceChanged(GW::HookStatus*, GW::Packet::StoC::AgentUpdateAllegiance* pak) {
@@ -1051,7 +1042,7 @@ private:
 
 		ImGui::Spacing();
 		ImGui::SeparatorText("Guild Tags");
-		ImGui::Checkbox("Hide guild tags (all players)", &settings_.hide_guild_tags);
+		CheckboxDirty("Hide guild tags (all players)", settings_.hide_guild_tags);
 		ShowHelpMarker("Blanks the bracketed guild tag, e.g. [OCD], for every player, not just yourself. "
 			"This edits the client's shared guild-info cache, so it also affects other UI that shows "
 			"guild tags (guild roster, alliance chat, etc.) while enabled.");
