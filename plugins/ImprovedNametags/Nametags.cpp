@@ -297,10 +297,6 @@ public:
 	bool CanTerminate() override { return true; }
 
 	void Terminate() override {
-		settings_.hide_guild_tags = false;
-		SuppressGuildTagsOnAgents();
-		settings_.hide_badges = false;
-		SuppressBadgesOnPlayers();
 		RemoveAllegianceColorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
