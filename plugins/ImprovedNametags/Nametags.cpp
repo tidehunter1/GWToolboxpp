@@ -109,7 +109,7 @@ public:
 			GW::UI::AsyncDecodeStr(enc_name, entry.buffer, kBufferLen);
 		}
 		if (!entry.converted && entry.buffer[0] != L'\0') {
-			entry.decoded_lower = entry.buffer;
+			entry.decoded_lower = PluginUtils::RemoveDiacritics(entry.buffer);
 			std::transform(entry.decoded_lower.begin(), entry.decoded_lower.end(), entry.decoded_lower.begin(), ::towlower);
 			entry.decoded_words_lower = SplitWords(entry.decoded_lower);
 			entry.converted = true;
@@ -152,7 +152,7 @@ private:
 		token.erase(0, start);
 		token.erase(token.find_last_not_of(" \t\r\n") + 1);
 
-		std::wstring w = PluginUtils::StringToWString(token);
+		std::wstring w = PluginUtils::RemoveDiacritics(PluginUtils::StringToWString(token));
 		std::transform(w.begin(), w.end(), w.begin(), ::towlower);
 		out.push_back(std::move(w));
 	}
