@@ -942,41 +942,16 @@ private:
 		});
 	}
 
-	struct BadgeCallPatch {
-		uintptr_t rva;
-		uint8_t original[5];
-		bool patched = false;
-	};
-	BadgeCallPatch badge_call_patches_[2] = {
-		{0x117ca9, {0xE8, 0x92, 0xC3, 0x11, 0x00}, false},
-		{0x138746, {0xE8, 0xF5, 0xB8, 0x0F, 0x00}, false},
-	};
-
-	void SetBadgeCallsPatched(bool patch) {
-		GW::GameThread::Enqueue([this, patch] {
-			HMODULE mod = GetModuleHandleW(nullptr);
-			if (!mod) return;
-			for (auto& p : badge_call_patches_) {
-				uint8_t* addr = reinterpret_cast<uint8_t*>(mod) + p.rva;
-				if (patch) {
-					if (p.patched) continue;
-					if (memcmp(addr, p.original, 5) != 0) continue;
-					DWORD old_protect = 0;
-					if (VirtualProtect(addr, 5, PAGE_EXECUTE_READWRITE, &old_protect)) {
-						memset(addr, 0x90, 5);
-						VirtualProtect(addr, 5, old_protect, &old_protect);
-						p.patched = true;
-					}
-				}
-				else {
-					if (!p.patched) continue;
-					DWORD old_protect = 0;
-					if (VirtualProtect(addr, 5, PAGE_EXECUTE_READWRITE, &old_protect)) {
-						memcpy(addr, p.original, 5);
-						VirtualProtect(addr, 5, old_protect, &old_protect);
-						p.patched = false;
-					}
-				}
+	void ForceBadgeUIRefresh() {
+		GW::GameThread::Enqueue([this] {
+			GW::AgentArray* agents = GW::Agents::GetAgentArray();
+			if (!agents || !agents->valid()) return;
+			for (GW::Agent* agent : *agents) {
+				if (!agent || !agent->GetIsLivingType()) continue;
+				GW::AgentLiving* living = agent->GetAsAgentLiving();
+				if (!living || !living->IsPlayer()) continue;
+				GW::UI::SendUIMessage(GW::UI::UIMessage::kAgentUpdate,
+					reinterpret_cast<void*>(static_cast<uintptr_t>(living->agent_id)), nullptr);
 			}
 		});
 	}
@@ -1176,10 +1151,10 @@ private:
 		ImGui::SeparatorText("Badges");
 		if (ImGui::Checkbox("Hide mode badges (all players)", &settings_.hide_badges)) {
 			SuppressBadgesOnAllPlayers();
-			SetBadgeCallsPatched(settings_.hide_badges);
+			ForceBadgeUIRefresh();
 		}
-		ShowHelpMarker("Clears the shared per-player badge table and disables the two GmAgentDoll call sites "
-			"that push badge data into the native UI, for every player at once.");
+		ShowHelpMarker("Clears the shared per-player badge table, then broadcasts kAgentUpdate to force the "
+			"native GmAgentDoll UI to re-sync and reflect the cleared data.");
 	}
 };
 
