@@ -909,6 +909,8 @@ private:
 	void SuppressBadgesOnAllPlayers() {
 		EnsureGetWorldContextLocated();
 		if (!GetWorldContext_Func) return;
+		EnsureSetNameTagBitScanned();
+		EnsureQueueEventAllocatorScanned();
 		const bool hide = settings_.hide_badges;
 		GW::GameThread::Enqueue([this, hide] {
 			last_badge_run_attempted_ = true;
@@ -960,6 +962,18 @@ private:
 					for (int s = 0; s < 5; ++s) type_ids[s] = saved.types[s];
 					saved.have_saved = false;
 					++last_badge_changed_records_;
+				}
+			}
+
+			if (last_badge_changed_records_ > 0) {
+				GW::AgentArray* agents = GW::Agents::GetAgentArray();
+				if (agents && agents->valid()) {
+					for (GW::Agent* agent : *agents) {
+						if (!agent || !agent->GetIsLivingType()) continue;
+						GW::AgentLiving* living = agent->GetAsAgentLiving();
+						if (!living || !living->IsPlayer()) continue;
+						RecolorAndRefreshNameTag(agent, living);
+					}
 				}
 			}
 		});
