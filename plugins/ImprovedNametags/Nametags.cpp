@@ -885,6 +885,13 @@ private:
 	using GetWorldContext_pt = void*(__cdecl*)();
 	static inline GetWorldContext_pt GetWorldContext_Func = nullptr;
 	bool get_world_context_scan_failed_ = false;
+	bool last_badge_run_attempted_ = false;
+	bool last_badge_ctx_null_ = false;
+	bool last_badge_table_ctrl_null_ = false;
+	bool last_badge_records_null_ = false;
+	uint32_t last_badge_count_ = 0;
+	uint32_t last_badge_nonzero_records_ = 0;
+	uint32_t last_badge_changed_records_ = 0;
 
 	static GetWorldContext_pt TryLocateGetWorldContext() {
 		HMODULE mod = GetModuleHandleW(nullptr);
@@ -904,13 +911,31 @@ private:
 		if (!GetWorldContext_Func) return;
 		const bool hide = settings_.hide_badges;
 		GW::GameThread::Enqueue([this, hide] {
+			last_badge_run_attempted_ = true;
+			last_badge_ctx_null_ = false;
+			last_badge_table_ctrl_null_ = false;
+			last_badge_records_null_ = false;
+			last_badge_count_ = 0;
+			last_badge_nonzero_records_ = 0;
+			last_badge_changed_records_ = 0;
+
 			void* ctx = GetWorldContext_Func();
-			if (!ctx) return;
+			if (!ctx) {
+				last_badge_ctx_null_ = true;
+				return;
+			}
 			auto* table_ctrl = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(ctx) + 0x2c);
-			if (!table_ctrl) return;
+			if (!table_ctrl) {
+				last_badge_table_ctrl_null_ = true;
+				return;
+			}
 			const uint32_t count = *reinterpret_cast<uint32_t*>(table_ctrl + 0x7d4);
 			auto* records = *reinterpret_cast<uint8_t**>(table_ctrl + 0x7cc);
-			if (!records) return;
+			if (!records) {
+				last_badge_records_null_ = true;
+				return;
+			}
+			last_badge_count_ = count;
 
 			for (uint32_t i = 0; i < count; ++i) {
 				uint8_t* rec = records + static_cast<size_t>(i) * 0x38;
@@ -920,6 +945,7 @@ private:
 				for (int s = 0; s < 5; ++s) {
 					if (type_ids[s] != 0) any_nonzero = true;
 				}
+				if (any_nonzero) ++last_badge_nonzero_records_;
 
 				SavedBadgeTypes& saved = saved_badge_types_[i];
 				if (hide) {
@@ -927,11 +953,13 @@ private:
 						for (int s = 0; s < 5; ++s) saved.types[s] = type_ids[s];
 						saved.have_saved = true;
 						for (int s = 0; s < 5; ++s) type_ids[s] = 0;
+						++last_badge_changed_records_;
 					}
 				}
 				else if (saved.have_saved && !any_nonzero) {
 					for (int s = 0; s < 5; ++s) type_ids[s] = saved.types[s];
 					saved.have_saved = false;
+					++last_badge_changed_records_;
 				}
 			}
 		});
@@ -1135,6 +1163,28 @@ private:
 		}
 		ShowHelpMarker("Clears the 5 badge-type slots (Reforged, Dhuum's Covenant, Melandru's Accord, and others) "
 			"in the client's shared per-player badge table, for every player at once.");
+		if (get_world_context_scan_failed_) {
+			ImGui::TextUnformatted("Status: FAILED to locate context accessor (build mismatch)");
+		}
+		else if (!GetWorldContext_Func) {
+			ImGui::TextUnformatted("Status: not yet attempted");
+		}
+		else if (!last_badge_run_attempted_) {
+			ImGui::TextUnformatted("Status: located, waiting for first run");
+		}
+		else if (last_badge_ctx_null_) {
+			ImGui::TextUnformatted("Status: context pointer was null");
+		}
+		else if (last_badge_table_ctrl_null_) {
+			ImGui::TextUnformatted("Status: table_ctrl pointer was null");
+		}
+		else if (last_badge_records_null_) {
+			ImGui::TextUnformatted("Status: records pointer was null");
+		}
+		else {
+			ImGui::Text("Status: table ok, count=%u, records with a badge=%u, changed this run=%u",
+				last_badge_count_, last_badge_nonzero_records_, last_badge_changed_records_);
+		}
 	}
 };
 
