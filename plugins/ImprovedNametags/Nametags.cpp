@@ -209,14 +209,14 @@ struct NametagSettings {
 	bool hide_badges = false;
 };
 
-struct SavedPlayerGuildId {
-	uint16_t guild_id = 0;
-	bool have_saved = false;
-};
-
 struct SavedBadgeTypes {
 	uint32_t header = 0;
 	uint32_t types[5]{};
+	bool have_saved = false;
+};
+
+struct SavedPlayerGuildId {
+	uint16_t guild_id = 0;
 	bool have_saved = false;
 };
 
@@ -900,39 +900,18 @@ private:
 		EnsureLocated(GetWorldContext_Func, get_world_context_scan_failed_, TryLocateGetWorldContext);
 	}
 
-	bool last_badge_data_ctx_null_ = false;
-	bool last_badge_data_table_ctrl_null_ = false;
-	bool last_badge_data_records_null_ = false;
-	uint32_t last_badge_data_count_ = 0;
-	uint32_t last_badge_data_nonzero_ = 0;
-	uint32_t last_badge_data_changed_ = 0;
-	bool last_badge_data_ran_ = false;
-
 	void SuppressBadgesOnAllPlayers() {
 		EnsureGetWorldContextLocated();
 		if (!GetWorldContext_Func) return;
-		EnsureSetNameTagBitScanned();
-		EnsureQueueEventAllocatorScanned();
 		const bool hide = settings_.hide_badges;
 		GW::GameThread::Enqueue([this, hide] {
-			last_badge_data_ran_ = true;
-			last_badge_data_ctx_null_ = false;
-			last_badge_data_table_ctrl_null_ = false;
-			last_badge_data_records_null_ = false;
-			last_badge_data_count_ = 0;
-			last_badge_data_nonzero_ = 0;
-			last_badge_data_changed_ = 0;
-
 			void* ctx = GetWorldContext_Func();
-			if (!ctx) { last_badge_data_ctx_null_ = true; return; }
+			if (!ctx) return;
 			auto* table_ctrl = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(ctx) + 0x2c);
-			if (!table_ctrl) { last_badge_data_table_ctrl_null_ = true; return; }
+			if (!table_ctrl) return;
 			const uint32_t count = *reinterpret_cast<uint32_t*>(table_ctrl + 0x7d4);
 			auto* records = *reinterpret_cast<uint8_t**>(table_ctrl + 0x7cc);
-			if (!records) { last_badge_data_records_null_ = true; return; }
-			last_badge_data_count_ = count;
-
-			bool any_changed = false;
+			if (!records) return;
 
 			for (uint32_t i = 0; i < count; ++i) {
 				uint8_t* rec = records + static_cast<size_t>(i) * 0x38;
@@ -943,7 +922,6 @@ private:
 				for (int s = 0; s < 5; ++s) {
 					if (type_ids[s] != 0) any_nonzero = true;
 				}
-				if (any_nonzero) ++last_badge_data_nonzero_;
 
 				SavedBadgeTypes& saved = saved_badge_types_[i];
 				if (hide) {
@@ -953,28 +931,12 @@ private:
 						saved.have_saved = true;
 						*header = 0;
 						for (int s = 0; s < 5; ++s) type_ids[s] = 0;
-						any_changed = true;
-						++last_badge_data_changed_;
 					}
 				}
 				else if (saved.have_saved && !any_nonzero) {
 					*header = saved.header;
 					for (int s = 0; s < 5; ++s) type_ids[s] = saved.types[s];
 					saved.have_saved = false;
-					any_changed = true;
-					++last_badge_data_changed_;
-				}
-			}
-
-			if (any_changed) {
-				GW::AgentArray* agents = GW::Agents::GetAgentArray();
-				if (agents && agents->valid()) {
-					for (GW::Agent* agent : *agents) {
-						if (!agent || !agent->GetIsLivingType()) continue;
-						GW::AgentLiving* living = agent->GetAsAgentLiving();
-						if (!living || !living->IsPlayer()) continue;
-						RecolorAndRefreshNameTag(agent, living);
-					}
 				}
 			}
 		});
@@ -984,11 +946,10 @@ private:
 		uintptr_t rva;
 		uint8_t original[5];
 		bool patched = false;
-		bool last_verify_failed = false;
 	};
 	BadgeCallPatch badge_call_patches_[2] = {
-		{0x3fc3ae, {0xE8, 0xBD, 0x15, 0x03, 0x00}, false, false},
-		{0x3fc478, {0xE8, 0xF3, 0x14, 0x03, 0x00}, false, false},
+		{0x117ca9, {0xE8, 0x92, 0xC3, 0x11, 0x00}, false},
+		{0x138746, {0xE8, 0xF5, 0xB8, 0x0F, 0x00}, false},
 	};
 
 	void SetBadgeCallsPatched(bool patch) {
@@ -999,11 +960,7 @@ private:
 				uint8_t* addr = reinterpret_cast<uint8_t*>(mod) + p.rva;
 				if (patch) {
 					if (p.patched) continue;
-					if (memcmp(addr, p.original, 5) != 0) {
-						p.last_verify_failed = true;
-						continue;
-					}
-					p.last_verify_failed = false;
+					if (memcmp(addr, p.original, 5) != 0) continue;
 					DWORD old_protect = 0;
 					if (VirtualProtect(addr, 5, PAGE_EXECUTE_READWRITE, &old_protect)) {
 						memset(addr, 0x90, 5);
@@ -1022,15 +979,6 @@ private:
 				}
 			}
 		});
-	}
-
-	bool ReadCurrentBadgePatchBytes(int index, uint8_t out[5]) {
-		if (index < 0 || index > 1) return false;
-		HMODULE mod = GetModuleHandleW(nullptr);
-		if (!mod) return false;
-		const uint8_t* addr = reinterpret_cast<const uint8_t*>(mod) + badge_call_patches_[index].rva;
-		memcpy(out, addr, 5);
-		return true;
 	}
 
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
@@ -1230,38 +1178,8 @@ private:
 			SuppressBadgesOnAllPlayers();
 			SetBadgeCallsPatched(settings_.hide_badges);
 		}
-		ShowHelpMarker("Clears the 5 badge-type slots (Reforged, Dhuum's Covenant, Melandru's Accord, and others) "
-			"in the client's shared per-player badge table, and disables the two native call sites that draw them.");
-
-		if (!last_badge_data_ran_) {
-			ImGui::TextUnformatted("Data: not yet attempted");
-		}
-		else if (last_badge_data_ctx_null_) {
-			ImGui::TextUnformatted("Data: context pointer was null");
-		}
-		else if (last_badge_data_table_ctrl_null_) {
-			ImGui::TextUnformatted("Data: table_ctrl pointer was null");
-		}
-		else if (last_badge_data_records_null_) {
-			ImGui::TextUnformatted("Data: records pointer was null");
-		}
-		else {
-			ImGui::Text("Data: count=%u, records with a badge=%u, changed this run=%u",
-				last_badge_data_count_, last_badge_data_nonzero_, last_badge_data_changed_);
-		}
-
-		for (int i = 0; i < 2; ++i) {
-			uint8_t live[5]{};
-			if (ReadCurrentBadgePatchBytes(i, live)) {
-				const BadgeCallPatch& p = badge_call_patches_[i];
-				const bool is_nop = live[0] == 0x90 && live[1] == 0x90 && live[2] == 0x90 && live[3] == 0x90 && live[4] == 0x90;
-				const bool is_original = memcmp(live, p.original, 5) == 0;
-				ImGui::Text("Patch %d live bytes: %02X %02X %02X %02X %02X (%s)%s",
-					i, live[0], live[1], live[2], live[3], live[4],
-					is_nop ? "NOPPED" : (is_original ? "original" : "UNEXPECTED"),
-					p.last_verify_failed ? "  [verify failed on last attempt]" : "");
-			}
-		}
+		ShowHelpMarker("Clears the shared per-player badge table and disables the two GmAgentDoll call sites "
+			"that push badge data into the native UI, for every player at once.");
 	}
 };
 
