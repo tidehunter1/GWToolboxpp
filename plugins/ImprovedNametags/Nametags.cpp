@@ -17,6 +17,7 @@
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/AgentMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Utilities/Hooker.h>
 #include <GWCA/Utilities/Scanner.h>
@@ -206,13 +207,6 @@ struct NametagSettings {
 	bool show_healthbar_all_agents = false;
 
 	bool hide_guild_tags = false;
-	bool hide_badges = false;
-};
-
-struct SavedBadgeTypes {
-	uint32_t header = 0;
-	uint32_t types[5]{};
-	bool have_saved = false;
 };
 
 struct SavedPlayerGuildId {
@@ -257,7 +251,6 @@ public:
 		fn("escape_to_embark_threshold_pct", settings_.escape_to_embark_threshold_pct);
 		fn("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
 		fn("hide_guild_tags", settings_.hide_guild_tags);
-		fn("hide_badges", settings_.hide_badges);
 		fn("visible", visible_);
 		fn("priority_enabled", settings_.priority_enabled);
 		fn("color_filtered", settings_.color_filtered);
@@ -297,6 +290,7 @@ public:
 
 	void Terminate() override {
 		RemoveAllegianceColorHook();
+		RemoveNameTagCtorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
@@ -351,7 +345,6 @@ private:
 
 	uint64_t frame_counter_ = 0;
 	std::unordered_map<uint32_t, SavedPlayerGuildId> saved_player_guild_ids_;
-	std::unordered_map<uint32_t, SavedBadgeTypes> saved_badge_types_;
 	struct BossGlowRetry {
 		uint32_t agent_id;
 		int attempts_left;
@@ -883,77 +876,90 @@ private:
 		});
 	}
 
-	using GetWorldContext_pt = void*(__cdecl*)();
-	static inline GetWorldContext_pt GetWorldContext_Func = nullptr;
-	bool get_world_context_scan_failed_ = false;
+	using NameTagCtor_pt = void*(__thiscall*)(void*, uint32_t, uint32_t, uint32_t, uint8_t, uint32_t);
+	static inline NameTagCtor_pt NameTagCtor_Func = nullptr;
+	static inline NameTagCtor_pt NameTagCtor_Ret = nullptr;
+	bool nametag_ctor_hook_scan_failed_ = false;
 
-	static GetWorldContext_pt TryLocateGetWorldContext() {
+	struct NameTagCtorCapture {
+		void* this_ptr = nullptr;
+	};
+	std::vector<NameTagCtorCapture> nametag_ctor_captures_;
+	bool debug_capture_nametag_ctor_ = false;
+
+	static void* __thiscall OnNameTagCtor(void* this_ptr, uint32_t p2, uint32_t p3, uint32_t p4, uint8_t p5, uint32_t p6) {
+		GW::Hook::EnterHook();
+		void* result = NameTagCtor_Ret(this_ptr, p2, p3, p4, p5, p6);
+		if (result && g_plugin->debug_capture_nametag_ctor_) {
+			auto& v = g_plugin->nametag_ctor_captures_;
+			if (v.size() >= 20) v.erase(v.begin());
+			v.push_back({result});
+		}
+		GW::Hook::LeaveHook();
+		return result;
+	}
+
+	static NameTagCtor_pt TryLocateNameTagCtor() {
+		if (!AllegianceColor_Func) return nullptr;
 		HMODULE mod = GetModuleHandleW(nullptr);
 		if (!mod) return nullptr;
-		const auto* candidate = reinterpret_cast<const uint8_t*>(mod) + 0x7f660;
-		if (candidate[0] != 0x8B || candidate[1] != 0x0D) return nullptr;
-		if (candidate[6] != 0x64 || candidate[7] != 0xA1) return nullptr;
-		return reinterpret_cast<GetWorldContext_pt>(const_cast<uint8_t*>(candidate));
-	}
+		const auto* candidate = reinterpret_cast<const uint8_t*>(mod) + 0x3f23f0;
+		if (candidate[0] != 0x55 || candidate[1] != 0x8B || candidate[2] != 0xEC) return nullptr;
 
-	void EnsureGetWorldContextLocated() {
-		EnsureLocated(GetWorldContext_Func, get_world_context_scan_failed_, TryLocateGetWorldContext);
-	}
-
-	void SuppressBadgesOnAllPlayers() {
-		EnsureGetWorldContextLocated();
-		if (!GetWorldContext_Func) return;
-		const bool hide = settings_.hide_badges;
-		GW::GameThread::Enqueue([this, hide] {
-			void* ctx = GetWorldContext_Func();
-			if (!ctx) return;
-			auto* table_ctrl = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(ctx) + 0x2c);
-			if (!table_ctrl) return;
-			const uint32_t count = *reinterpret_cast<uint32_t*>(table_ctrl + 0x7d4);
-			auto* records = *reinterpret_cast<uint8_t**>(table_ctrl + 0x7cc);
-			if (!records) return;
-
-			for (uint32_t i = 0; i < count; ++i) {
-				uint8_t* rec = records + static_cast<size_t>(i) * 0x38;
-				auto* header = reinterpret_cast<uint32_t*>(rec);
-				auto* type_ids = reinterpret_cast<uint32_t*>(rec + 4);
-
-				bool any_nonzero = *header != 0;
-				for (int s = 0; s < 5; ++s) {
-					if (type_ids[s] != 0) any_nonzero = true;
-				}
-
-				SavedBadgeTypes& saved = saved_badge_types_[i];
-				if (hide) {
-					if (any_nonzero) {
-						saved.header = *header;
-						for (int s = 0; s < 5; ++s) saved.types[s] = type_ids[s];
-						saved.have_saved = true;
-						*header = 0;
-						for (int s = 0; s < 5; ++s) type_ids[s] = 0;
-					}
-				}
-				else if (saved.have_saved && !any_nonzero) {
-					*header = saved.header;
-					for (int s = 0; s < 5; ++s) type_ids[s] = saved.types[s];
-					saved.have_saved = false;
+		const auto allegiance_target = reinterpret_cast<uintptr_t>(AllegianceColor_Func);
+		for (uintptr_t p = reinterpret_cast<uintptr_t>(candidate); p < reinterpret_cast<uintptr_t>(candidate) + 0x600; ++p) {
+			if (*reinterpret_cast<const uint8_t*>(p) == 0xE8) {
+				const int32_t rel = *reinterpret_cast<const int32_t*>(p + 1);
+				if (p + 5 + static_cast<uintptr_t>(rel) == allegiance_target) {
+					return reinterpret_cast<NameTagCtor_pt>(const_cast<uint8_t*>(candidate));
 				}
 			}
-		});
+		}
+		return nullptr;
 	}
 
-	void ForceBadgeUIRefresh() {
-		GW::GameThread::Enqueue([this] {
-			GW::AgentArray* agents = GW::Agents::GetAgentArray();
-			if (!agents || !agents->valid()) return;
-			for (GW::Agent* agent : *agents) {
-				if (!agent || !agent->GetIsLivingType()) continue;
-				GW::AgentLiving* living = agent->GetAsAgentLiving();
-				if (!living || !living->IsPlayer()) continue;
-				GW::UI::SendUIMessage(GW::UI::UIMessage::kAgentUpdate,
-					reinterpret_cast<void*>(static_cast<uintptr_t>(living->agent_id)), nullptr);
+	void EnsureNameTagCtorHookInstalled() {
+		if (NameTagCtor_Func || nametag_ctor_hook_scan_failed_) return;
+		EnsureAllegianceColorHookInstalled();
+		if (!EnsureLocated(NameTagCtor_Func, nametag_ctor_hook_scan_failed_, TryLocateNameTagCtor)) return;
+		GW::Hook::CreateHook(&NameTagCtor_Func, OnNameTagCtor, &NameTagCtor_Ret);
+		GW::Hook::EnableHooks(NameTagCtor_Func);
+	}
+
+	void RemoveNameTagCtorHook() {
+		if (NameTagCtor_Func) {
+			GW::Hook::DisableHooks(NameTagCtor_Func);
+			GW::Hook::RemoveHook(NameTagCtor_Func);
+			NameTagCtor_Func = nullptr;
+			NameTagCtor_Ret = nullptr;
+		}
+	}
+
+	static void DumpNameTagBadgeListsToChat() {
+		for (size_t i = 0; i < g_plugin->nametag_ctor_captures_.size(); ++i) {
+			auto* base = reinterpret_cast<uint8_t*>(g_plugin->nametag_ctor_captures_[i].this_ptr);
+			const uint32_t raw_head = *reinterpret_cast<uint32_t*>(base + 0x1a0);
+			const uint32_t single = *reinterpret_cast<uint32_t*>(base + 0x1a4);
+			const bool has_list = (raw_head & 1) == 0;
+
+			uint32_t count = 0;
+			uint32_t first_handle = 0;
+			if (has_list && raw_head != 0) {
+				auto* node = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(raw_head));
+				while (node && count < 20) {
+					if (count == 0) first_handle = node[0];
+					++count;
+					const uint32_t next_raw = node[2];
+					if (next_raw & 1) break;
+					node = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(next_raw));
+				}
 			}
-		});
+
+			GW::Chat::WriteChatF(GW::Chat::CHANNEL_EMOTE,
+				L"[%d] this=0x%08X raw_head=0x%08X list_nodes=%u first_handle=0x%08X single=0x%08X",
+				static_cast<int>(i), static_cast<unsigned>(reinterpret_cast<uintptr_t>(base)),
+				raw_head, count, first_handle, single);
+		}
 	}
 
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
@@ -1148,13 +1154,15 @@ private:
 		ShowHelpMarker("Removes the bracketed guild tag, e.g. [OCD], from nametags for every player, not just yourself.");
 
 		ImGui::Spacing();
-		ImGui::SeparatorText("Badges");
-		if (ImGui::Checkbox("Hide mode badges (all players)", &settings_.hide_badges)) {
-			SuppressBadgesOnAllPlayers();
-			ForceBadgeUIRefresh();
+		ImGui::SeparatorText("Badges (investigation)");
+		if (ImGui::Checkbox("Capture nametag constructions", &debug_capture_nametag_ctor_)) {
+			if (debug_capture_nametag_ctor_) EnsureNameTagCtorHookInstalled();
+			else RemoveNameTagCtorHook();
 		}
-		ShowHelpMarker("Clears the shared per-player badge table, then broadcasts kAgentUpdate to force the "
-			"native GmAgentDoll UI to re-sync and reflect the cleared data.");
+		ShowHelpMarker("Read-only. Records the object pointer each time a nametag is constructed. No data is modified.");
+		if (ImGui::Button("Dump badge list state to chat")) DumpNameTagBadgeListsToChat();
+		ImGui::SameLine();
+		if (ImGui::Button("Clear captures")) nametag_ctor_captures_.clear();
 	}
 };
 
