@@ -17,7 +17,6 @@
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/NPC.h>
 #include <GWCA/Managers/AgentMgr.h>
-#include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Utilities/Hooker.h>
 #include <GWCA/Utilities/Scanner.h>
@@ -290,7 +289,6 @@ public:
 
 	void Terminate() override {
 		RemoveAllegianceColorHook();
-		RemoveNameTagCtorHook();
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
@@ -589,97 +587,6 @@ private:
 		}
 	}
 
-	using NameTagCtor_pt = void*(__thiscall*)(void*, uint32_t, uint32_t, uint32_t, uint8_t, uint32_t);
-	static inline NameTagCtor_pt NameTagCtor_Func = nullptr;
-	static inline NameTagCtor_pt NameTagCtor_Ret = nullptr;
-	bool nametag_ctor_hook_scan_failed_ = false;
-
-	struct NameTagCtorCapture {
-		void* this_ptr = nullptr;
-		uint32_t p2 = 0;
-		uint32_t p3 = 0;
-		uint32_t p4 = 0;
-		uint8_t p5 = 0;
-		uint32_t p6 = 0;
-	};
-	std::vector<NameTagCtorCapture> nametag_ctor_captures_;
-	bool debug_capture_nametag_ctor_ = false;
-
-	static void* __thiscall OnNameTagCtor(void* this_ptr, uint32_t p2, uint32_t p3, uint32_t p4, uint8_t p5, uint32_t p6) {
-		GW::Hook::EnterHook();
-		void* result = NameTagCtor_Ret(this_ptr, p2, p3, p4, p5, p6);
-		if (result && g_plugin->debug_capture_nametag_ctor_) {
-			auto& v = g_plugin->nametag_ctor_captures_;
-			if (v.size() >= 20) v.erase(v.begin());
-			v.push_back({result, p2, p3, p4, p5, p6});
-		}
-		GW::Hook::LeaveHook();
-		return result;
-	}
-
-	static NameTagCtor_pt TryLocateNameTagCtor() {
-		if (!AllegianceColor_Func) return nullptr;
-		HMODULE mod = GetModuleHandleW(nullptr);
-		if (!mod) return nullptr;
-		const auto* candidate = reinterpret_cast<const uint8_t*>(mod) + 0x3f23f0;
-		if (candidate[0] != 0x55 || candidate[1] != 0x8B || candidate[2] != 0xEC) return nullptr;
-
-		const auto allegiance_target = reinterpret_cast<uintptr_t>(AllegianceColor_Func);
-		for (uintptr_t p = reinterpret_cast<uintptr_t>(candidate); p < reinterpret_cast<uintptr_t>(candidate) + 0x600; ++p) {
-			if (*reinterpret_cast<const uint8_t*>(p) == 0xE8) {
-				const int32_t rel = *reinterpret_cast<const int32_t*>(p + 1);
-				if (p + 5 + static_cast<uintptr_t>(rel) == allegiance_target) {
-					return reinterpret_cast<NameTagCtor_pt>(const_cast<uint8_t*>(candidate));
-				}
-			}
-		}
-		return nullptr;
-	}
-
-	void EnsureNameTagCtorHookInstalled() {
-		if (NameTagCtor_Func || nametag_ctor_hook_scan_failed_) return;
-		EnsureAllegianceColorHookInstalled();
-		if (!EnsureLocated(NameTagCtor_Func, nametag_ctor_hook_scan_failed_, TryLocateNameTagCtor)) return;
-		GW::Hook::CreateHook(&NameTagCtor_Func, OnNameTagCtor, &NameTagCtor_Ret);
-		GW::Hook::EnableHooks(NameTagCtor_Func);
-	}
-
-	void RemoveNameTagCtorHook() {
-		if (NameTagCtor_Func) {
-			GW::Hook::DisableHooks(NameTagCtor_Func);
-			GW::Hook::RemoveHook(NameTagCtor_Func);
-			NameTagCtor_Func = nullptr;
-			NameTagCtor_Ret = nullptr;
-		}
-	}
-
-	static uint32_t CountCircularList(void* head_slot_addr) {
-		void* head = head_slot_addr;
-		void* node = *reinterpret_cast<void**>(head);
-		uint32_t count = 0;
-		while (node != head && node != nullptr && (reinterpret_cast<uintptr_t>(node) & 1) == 0 && count < 50) {
-			node = *reinterpret_cast<void**>(node);
-			++count;
-		}
-		return count;
-	}
-
-	void DumpNameTagCtorCapturesToChat() {
-		for (size_t i = 0; i < nametag_ctor_captures_.size(); ++i) {
-			const NameTagCtorCapture& c = nametag_ctor_captures_[i];
-			auto* base = reinterpret_cast<uint8_t*>(c.this_ptr);
-			const uint32_t count0 = CountCircularList(base + 0x144);
-			const uint32_t count1 = CountCircularList(base + 0x178);
-			const uint32_t count2 = CountCircularList(base + 0x19c);
-			const uint32_t count3 = CountCircularList(base + 0x1ac);
-			GW::Chat::WriteChatF(GW::Chat::CHANNEL_EMOTE,
-				L"[%d] this=0x%08X list0=%u list1=%u list2=%u list3=%u",
-				static_cast<int>(i), static_cast<unsigned>(reinterpret_cast<uintptr_t>(c.this_ptr)),
-				count0, count1, count2, count3);
-		}
-	}
-
-
 	using SetNameTagBit_pt = void(__thiscall*)(void*, uint32_t, int);
 	static inline SetNameTagBit_pt SetNameTagBit_Func = nullptr;
 
@@ -950,16 +857,17 @@ private:
 
 				if (hide) {
 					if (living->tags->guild_id != 0) {
-						if (!saved.have_saved) saved.guild_id = living->tags->guild_id;
+						saved.guild_id = living->tags->guild_id;
+						saved.have_saved = true;
 						living->tags->guild_id = 0;
 						changed = true;
 					}
 				}
-				else if (saved.have_saved && living->tags->guild_id == 0 && saved.guild_id != 0) {
+				else if (saved.have_saved && living->tags->guild_id == 0) {
 					living->tags->guild_id = saved.guild_id;
+					saved.have_saved = false;
 					changed = true;
 				}
-				saved.have_saved = true;
 
 				if (changed) RecolorAndRefreshNameTag(agent, living);
 			}
@@ -979,14 +887,15 @@ private:
 			SavedPlayerGuildId& gsaved = saved_player_guild_ids_[living->agent_id];
 			if (settings_.hide_guild_tags) {
 				if (living->tags->guild_id != 0) {
-					if (!gsaved.have_saved) gsaved.guild_id = living->tags->guild_id;
+					gsaved.guild_id = living->tags->guild_id;
+					gsaved.have_saved = true;
 					living->tags->guild_id = 0;
 				}
 			}
-			else if (gsaved.have_saved && living->tags->guild_id == 0 && gsaved.guild_id != 0) {
+			else if (gsaved.have_saved && living->tags->guild_id == 0) {
 				living->tags->guild_id = gsaved.guild_id;
+				gsaved.have_saved = false;
 			}
-			gsaved.have_saved = true;
 		}
 
 		const bool is_enemy = living->allegiance == GW::Constants::Allegiance::Enemy;
@@ -1155,18 +1064,6 @@ private:
 			ForceGuildTagRefreshAll();
 		}
 		ShowHelpMarker("Removes the bracketed guild tag, e.g. [OCD], from nametags for every player, not just yourself.");
-
-		ImGui::Spacing();
-		ImGui::SeparatorText("Badge Investigation (experimental)");
-		if (ImGui::Checkbox("Capture nametag constructions", &debug_capture_nametag_ctor_)) {
-			if (debug_capture_nametag_ctor_) EnsureNameTagCtorHookInstalled();
-			else RemoveNameTagCtorHook();
-		}
-		ShowHelpMarker("Installs a hook on the native nametag constructor to record its object pointer and raw parameters, "
-			"purely for read-only inspection. Located via a verified caller relationship, not a hardcoded address alone.");
-		if (ImGui::Button("Dump captures to chat")) DumpNameTagCtorCapturesToChat();
-		ImGui::SameLine();
-		if (ImGui::Button("Clear captures")) nametag_ctor_captures_.clear();
 	}
 };
 
