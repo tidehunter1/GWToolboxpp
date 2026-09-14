@@ -215,6 +215,7 @@ struct SavedPlayerGuildId {
 };
 
 struct SavedBadgeTypes {
+	uint32_t header = 0;
 	uint32_t types[5]{};
 	bool have_saved = false;
 };
@@ -941,9 +942,10 @@ private:
 
 			for (uint32_t i = 0; i < count; ++i) {
 				uint8_t* rec = records + static_cast<size_t>(i) * 0x38;
+				auto* header = reinterpret_cast<uint32_t*>(rec);
 				auto* type_ids = reinterpret_cast<uint32_t*>(rec + 4);
 
-				bool any_nonzero = false;
+				bool any_nonzero = *header != 0;
 				for (int s = 0; s < 5; ++s) {
 					if (type_ids[s] != 0) any_nonzero = true;
 				}
@@ -952,13 +954,16 @@ private:
 				SavedBadgeTypes& saved = saved_badge_types_[i];
 				if (hide) {
 					if (any_nonzero) {
+						saved.header = *header;
 						for (int s = 0; s < 5; ++s) saved.types[s] = type_ids[s];
 						saved.have_saved = true;
+						*header = 0;
 						for (int s = 0; s < 5; ++s) type_ids[s] = 0;
 						++last_badge_changed_records_;
 					}
 				}
 				else if (saved.have_saved && !any_nonzero) {
+					*header = saved.header;
 					for (int s = 0; s < 5; ++s) type_ids[s] = saved.types[s];
 					saved.have_saved = false;
 					++last_badge_changed_records_;
