@@ -206,10 +206,16 @@ struct NametagSettings {
 	bool show_healthbar_all_agents = false;
 
 	bool hide_guild_tags = false;
+	bool hide_badges = false;
 };
 
 struct SavedPlayerGuildId {
 	uint16_t guild_id = 0;
+	bool have_saved = false;
+};
+
+struct SavedBadgeTypes {
+	uint32_t types[5]{};
 	bool have_saved = false;
 };
 
@@ -250,6 +256,7 @@ public:
 		fn("escape_to_embark_threshold_pct", settings_.escape_to_embark_threshold_pct);
 		fn("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
 		fn("hide_guild_tags", settings_.hide_guild_tags);
+		fn("hide_badges", settings_.hide_badges);
 		fn("visible", visible_);
 		fn("priority_enabled", settings_.priority_enabled);
 		fn("color_filtered", settings_.color_filtered);
@@ -343,6 +350,7 @@ private:
 
 	uint64_t frame_counter_ = 0;
 	std::unordered_map<uint32_t, SavedPlayerGuildId> saved_player_guild_ids_;
+	std::unordered_map<uint32_t, SavedBadgeTypes> saved_badge_types_;
 	struct BossGlowRetry {
 		uint32_t agent_id;
 		int attempts_left;
@@ -874,6 +882,61 @@ private:
 		});
 	}
 
+	using GetWorldContext_pt = void*(__cdecl*)();
+	static inline GetWorldContext_pt GetWorldContext_Func = nullptr;
+	bool get_world_context_scan_failed_ = false;
+
+	static GetWorldContext_pt TryLocateGetWorldContext() {
+		HMODULE mod = GetModuleHandleW(nullptr);
+		if (!mod) return nullptr;
+		const auto* candidate = reinterpret_cast<const uint8_t*>(mod) + 0x7f660;
+		if (candidate[0] != 0x8B || candidate[1] != 0x0D) return nullptr;
+		if (candidate[6] != 0x64 || candidate[7] != 0xA1) return nullptr;
+		return reinterpret_cast<GetWorldContext_pt>(const_cast<uint8_t*>(candidate));
+	}
+
+	void EnsureGetWorldContextLocated() {
+		EnsureLocated(GetWorldContext_Func, get_world_context_scan_failed_, TryLocateGetWorldContext);
+	}
+
+	void SuppressBadgesOnAllPlayers() {
+		EnsureGetWorldContextLocated();
+		if (!GetWorldContext_Func) return;
+		const bool hide = settings_.hide_badges;
+		GW::GameThread::Enqueue([this, hide] {
+			void* ctx = GetWorldContext_Func();
+			if (!ctx) return;
+			auto* table_ctrl = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(ctx) + 0x2c);
+			if (!table_ctrl) return;
+			const uint32_t count = *reinterpret_cast<uint32_t*>(table_ctrl + 0x7d4);
+			auto* records = *reinterpret_cast<uint8_t**>(table_ctrl + 0x7cc);
+			if (!records) return;
+
+			for (uint32_t i = 0; i < count; ++i) {
+				uint8_t* rec = records + static_cast<size_t>(i) * 0x38;
+				auto* type_ids = reinterpret_cast<uint32_t*>(rec + 4);
+
+				bool any_nonzero = false;
+				for (int s = 0; s < 5; ++s) {
+					if (type_ids[s] != 0) any_nonzero = true;
+				}
+
+				SavedBadgeTypes& saved = saved_badge_types_[i];
+				if (hide) {
+					if (any_nonzero) {
+						for (int s = 0; s < 5; ++s) saved.types[s] = type_ids[s];
+						saved.have_saved = true;
+						for (int s = 0; s < 5; ++s) type_ids[s] = 0;
+					}
+				}
+				else if (saved.have_saved && !any_nonzero) {
+					for (int s = 0; s < 5; ++s) type_ids[s] = saved.types[s];
+					saved.have_saved = false;
+				}
+			}
+		});
+	}
+
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
 		AgentState& state = GetOrCreateAgentState(living->agent_id);
 		const bool is_dead = living->GetIsDeadByTypeMap();
@@ -1064,6 +1127,14 @@ private:
 			ForceGuildTagRefreshAll();
 		}
 		ShowHelpMarker("Removes the bracketed guild tag, e.g. [OCD], from nametags for every player, not just yourself.");
+
+		ImGui::Spacing();
+		ImGui::SeparatorText("Badges");
+		if (ImGui::Checkbox("Hide mode badges (all players)", &settings_.hide_badges)) {
+			SuppressBadgesOnAllPlayers();
+		}
+		ShowHelpMarker("Clears the 5 badge-type slots (Reforged, Dhuum's Covenant, Melandru's Accord, and others) "
+			"in the client's shared per-player badge table, for every player at once.");
 	}
 };
 
