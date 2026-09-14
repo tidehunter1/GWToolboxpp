@@ -207,6 +207,7 @@ struct NametagSettings {
 	bool show_healthbar_all_agents = false;
 
 	bool hide_guild_tags = false;
+	bool hide_badges = false;
 };
 
 struct SavedPlayerGuildId {
@@ -251,6 +252,7 @@ public:
 		fn("escape_to_embark_threshold_pct", settings_.escape_to_embark_threshold_pct);
 		fn("show_healthbar_all_agents", settings_.show_healthbar_all_agents);
 		fn("hide_guild_tags", settings_.hide_guild_tags);
+		fn("hide_badges", settings_.hide_badges);
 		fn("visible", visible_);
 		fn("priority_enabled", settings_.priority_enabled);
 		fn("color_filtered", settings_.color_filtered);
@@ -291,6 +293,21 @@ public:
 	void Terminate() override {
 		RemoveAllegianceColorHook();
 		RemoveNameTagCtorHook();
+		{
+			HMODULE mod = GetModuleHandleW(nullptr);
+			if (mod) {
+				for (auto& p : badge_draw_call_patches_) {
+					if (!p.patched) continue;
+					uint8_t* addr = reinterpret_cast<uint8_t*>(mod) + p.rva;
+					DWORD old_protect = 0;
+					if (VirtualProtect(addr, 5, PAGE_EXECUTE_READWRITE, &old_protect)) {
+						memcpy(addr, p.original, 5);
+						VirtualProtect(addr, 5, old_protect, &old_protect);
+						p.patched = false;
+					}
+				}
+			}
+		}
 		GW::UI::RemoveUIMessageCallback(&chat_suppress_hook_entry_);
 		GW::UI::RemoveUIMessageCallback(&preference_hook_entry_);
 		GW::StoC::RemoveCallback<GW::Packet::StoC::AgentUpdateAllegiance>(&allegiance_hook_entry_);
@@ -962,6 +979,45 @@ private:
 		}
 	}
 
+	struct BadgeDrawCallPatch {
+		uintptr_t rva;
+		uint8_t original[5];
+		bool patched = false;
+	};
+	BadgeDrawCallPatch badge_draw_call_patches_[2] = {
+		{0x3fe29c, {0xE8, 0xFF, 0x4B, 0xFB, 0xFF}, false},
+		{0x3fe3ab, {0xE8, 0xF0, 0x4A, 0xFB, 0xFF}, false},
+	};
+
+	void SetBadgeDrawCallsPatched(bool patch) {
+		GW::GameThread::Enqueue([this, patch] {
+			HMODULE mod = GetModuleHandleW(nullptr);
+			if (!mod) return;
+			for (auto& p : badge_draw_call_patches_) {
+				uint8_t* addr = reinterpret_cast<uint8_t*>(mod) + p.rva;
+				if (patch) {
+					if (p.patched) continue;
+					if (memcmp(addr, p.original, 5) != 0) continue;
+					DWORD old_protect = 0;
+					if (VirtualProtect(addr, 5, PAGE_EXECUTE_READWRITE, &old_protect)) {
+						memset(addr, 0x90, 5);
+						VirtualProtect(addr, 5, old_protect, &old_protect);
+						p.patched = true;
+					}
+				}
+				else {
+					if (!p.patched) continue;
+					DWORD old_protect = 0;
+					if (VirtualProtect(addr, 5, PAGE_EXECUTE_READWRITE, &old_protect)) {
+						memcpy(addr, p.original, 5);
+						VirtualProtect(addr, 5, old_protect, &old_protect);
+						p.patched = false;
+					}
+				}
+			}
+		});
+	}
+
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
 		AgentState& state = GetOrCreateAgentState(living->agent_id);
 		const bool is_dead = living->GetIsDeadByTypeMap();
@@ -1163,6 +1219,13 @@ private:
 		if (ImGui::Button("Dump badge list state to chat")) DumpNameTagBadgeListsToChat();
 		ImGui::SameLine();
 		if (ImGui::Button("Clear captures")) nametag_ctor_captures_.clear();
+
+		ImGui::Spacing();
+		if (ImGui::Checkbox("Disable the two badge-icon draw calls", &settings_.hide_badges)) {
+			SetBadgeDrawCallsPatched(settings_.hide_badges);
+		}
+		ShowHelpMarker("NOPs the two exact CALL instructions that draw icons from the nametag's badge list, "
+			"regardless of what data feeds them. Verified before write; restores original bytes when unchecked.");
 	}
 };
 
