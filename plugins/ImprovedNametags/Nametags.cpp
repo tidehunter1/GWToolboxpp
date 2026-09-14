@@ -960,6 +960,45 @@ private:
 		});
 	}
 
+	struct BadgeCallPatch {
+		uintptr_t rva;
+		uint8_t original[5];
+		bool patched = false;
+	};
+	BadgeCallPatch badge_call_patches_[2] = {
+		{0x3fc3ae, {0xE8, 0xBD, 0x15, 0x03, 0x00}, false},
+		{0x3fc478, {0xE8, 0xF3, 0x14, 0x03, 0x00}, false},
+	};
+
+	void SetBadgeCallsPatched(bool patch) {
+		GW::GameThread::Enqueue([this, patch] {
+			HMODULE mod = GetModuleHandleW(nullptr);
+			if (!mod) return;
+			for (auto& p : badge_call_patches_) {
+				uint8_t* addr = reinterpret_cast<uint8_t*>(mod) + p.rva;
+				if (patch) {
+					if (p.patched) continue;
+					if (memcmp(addr, p.original, 5) != 0) continue;
+					DWORD old_protect = 0;
+					if (VirtualProtect(addr, 5, PAGE_EXECUTE_READWRITE, &old_protect)) {
+						memset(addr, 0x90, 5);
+						VirtualProtect(addr, 5, old_protect, &old_protect);
+						p.patched = true;
+					}
+				}
+				else {
+					if (!p.patched) continue;
+					DWORD old_protect = 0;
+					if (VirtualProtect(addr, 5, PAGE_EXECUTE_READWRITE, &old_protect)) {
+						memcpy(addr, p.original, 5);
+						VirtualProtect(addr, 5, old_protect, &old_protect);
+						p.patched = false;
+					}
+				}
+			}
+		});
+	}
+
 	void EvaluateAgent(GW::AgentLiving* living, uint32_t* out_color) {
 		AgentState& state = GetOrCreateAgentState(living->agent_id);
 		const bool is_dead = living->GetIsDeadByTypeMap();
@@ -1155,9 +1194,10 @@ private:
 		ImGui::SeparatorText("Badges");
 		if (ImGui::Checkbox("Hide mode badges (all players)", &settings_.hide_badges)) {
 			SuppressBadgesOnAllPlayers();
+			SetBadgeCallsPatched(settings_.hide_badges);
 		}
 		ShowHelpMarker("Clears the 5 badge-type slots (Reforged, Dhuum's Covenant, Melandru's Accord, and others) "
-			"in the client's shared per-player badge table, for every player at once.");
+			"in the client's shared per-player badge table, and disables the two native call sites that draw them.");
 	}
 };
 
